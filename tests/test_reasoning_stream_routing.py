@@ -7,7 +7,7 @@ import asyncio
 import ai
 import ai.types.events as events
 
-from js import model_client, settings
+from js import model_client
 
 
 def _scripted(monkeypatch):
@@ -64,11 +64,3 @@ def test_stream_without_reasoning_callback_does_not_reach_an_earlier_one(monkeyp
     asyncio.run(drive())
 
     assert seen == ["A0", "A1", "A2"]
-
-
-def test_ui_reasoning_reads_its_canonical_env_var():
-    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_UI_REASONING": "1"})
-    assert settings.get_dotted(overlaid, ("ui", "reasoning")) == 1
-
-    ignored = settings.apply_env_overrides(settings.seed_defaults(), {"JS_UI_REASONING": "9"})
-    assert settings.get_dotted(ignored, ("ui", "reasoning")) == settings.SPEC_BY_KEY["ui.reasoning"].default

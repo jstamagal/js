@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from js.toolkit import ToolContext, build_default_registry, call_tool
-from js.toolkit import fs
+from js.toolkit import ToolContext, call_tool, fs
+from js.toolkit.registry import build_default_registry
 
 
 @pytest.fixture
@@ -17,7 +17,6 @@ def trashless_box(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setenv("PATH", str(empty_bin))
-    assert fs._trash_command() is None
     assert not (home / ".local" / "share" / "Trash").exists()
     return tmp_path
 
@@ -78,4 +77,4 @@ def test_trash_remove_without_trash_refuses_and_leaves_the_file(trashless_box):
 
     assert result.startswith("ERROR")
     assert target.read_bytes() == b"keep me\n"
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)

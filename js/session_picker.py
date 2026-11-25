@@ -12,6 +12,7 @@ to resume a session or branch one at a message, or None when closed.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -21,24 +22,40 @@ from typing import Any
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import messages as msgs
-from . import session_query as Q
-from . import session_store
+from . import (
+    context_budget,
+    fset,
+    keys,
+    memory,
+    messages as msgs,
+    paths,
+    picker,
+    runtime,
+    session_index,
+    session_query as Q,
+    session_store,
+    session_text,
+)
+from .session_catalog import branch_session
+from .session_text import USER
 
 RESUME = "resume"
 BRANCH = "branch"
 # Search hits whose matching row is looked up; the rest show without one.
 _HIT_LINES = 300
+# Session path -> (size, mtime) of the file when it was previewed, and the preview.
+_PREVIEWS: dict[str, tuple[tuple[int, int], tuple[str, str]]] = {}
 _PAGE = 10
 
 
@@ -59,25 +76,45 @@ class _Closed:
 
 CLOSED = _Closed()
 
-_STYLE = Style.from_dict(
-    {
-        "title": "ansicyan bold",
-        "keys": "ansigreen",
-        "query": "bold",
-        "parse": "ansibrightblack",
-        "columns": "ansibrightblack",
-        "group": "ansiblue bold",
-        "selected": "reverse",
-        "hit": "ansibrightblack",
-        "match": "ansiyellow bold",
-        "stamp": "ansibrightblack",
-        "label": "ansibrightblack",
-    }
-)
+def _style() -> Style:
+    """The picker in /fset's colours."""
+    c = {role: fset.hex_for(role) or "" for role in ("COLOR_ACCENT", "COLOR_OK", "COLOR_DIM", "COLOR_WARN")}
+    return Style.from_dict(
+        {
+            "title": f"{c['COLOR_ACCENT']} bold",
+            "keys": c["COLOR_OK"],
+            "query": "bold",
+            "parse": c["COLOR_DIM"],
+            "columns": c["COLOR_DIM"],
+            "group": f"{c['COLOR_ACCENT']} bold",
+            "selected": "reverse",
+            "hit": c["COLOR_DIM"],
+            "match": f"{c['COLOR_WARN']} bold",
+            "stamp": c["COLOR_DIM"],
+            "label": c["COLOR_DIM"],
+            "preview": c["COLOR_DIM"],
+        }
+    )
 
-_MOVES = {"up": -1, "k": -1, "down": 1, "j": 1, "pageup": -_PAGE, "pagedown": _PAGE}
-_FIRST = ("home", "g")
-_LAST = ("end", "G")
+_MOVES = {"up": -1, "down": 1, "page_up": -_PAGE, "page_down": _PAGE}
+_NAVIGATION: keys.Keymap = {
+    "up": (("up",), ("k",)), "down": (("down",), ("j",)),
+    "page_up": (("pageup",),), "page_down": (("pagedown",),),
+    "first": (("home",), ("g",)), "last": (("end",), ("G",)),
+}
+_COMMON: keys.Keymap = {"interrupt": (("c-c",),), "choose": (("enter",),)}
+SESSION_KEYMAPS: dict[str, keys.Keymap] = {
+    "list": {**_COMMON, **_NAVIGATION, "view": (("v",),), "search": (("/",),),
+             "messages": (("b",),), "info": (("i",),), "all": (("a",),),
+             "back": (("escape",),), "quit": (("q",),)},
+    "search": {**_COMMON, "up": (("up",),), "down": (("down",),),
+               "page_up": (("pageup",),), "page_down": (("pagedown",),),
+               "back": (("escape",),), "backspace": (("backspace",),),
+               "clear": (("c-u",),), "delete_word": (("c-w",),)},
+    "messages": {**_COMMON, **_NAVIGATION, "resume": (("r",),),
+                 "back": (("escape",), ("q",), ("b",))},
+    "info": {**_COMMON, "back": (("escape",), ("q",), ("i",))},
+}
 
 
 class SessionPicker:
@@ -96,7 +133,10 @@ class SessionPicker:
         lines: Callable[[str, dict[str, float]], dict[str, Any]] | None = None,
         rows: Callable[[str], list[Any]] | None = None,
         tokens: Callable[[str], int | None] | None = None,
+        messages: Callable[[str], list[dict]] | None = None,
+        keymaps: dict[str, keys.Keymap] | None = None,
     ) -> None:
+        self.keymaps = SESSION_KEYMAPS if keymaps is None else keymaps
         self.sessions = sessions
         self.cwd = str(cwd).rstrip("/") or "/"
         self.home = str(home)
@@ -105,6 +145,7 @@ class SessionPicker:
         self._lines = lines
         self._rows = rows
         self._tokens = tokens
+        self._messages = messages
         self.view = Q.VIEWS[0]
         self.show_all = False
         self.screen = "list"
@@ -118,6 +159,7 @@ class SessionPicker:
         self.message_cursor = 0
         self._message_positions: dict[str, int] = {}
         self.token_count: int | None = None
+        self._previews: dict[str, tuple[str, str]] = {}
         self.refresh()
 
     # -- state -------------------------------------------------------------------
@@ -169,11 +211,45 @@ class SessionPicker:
         return session.path if session is not None else None
 
     def _open_messages(self, session: Q.Session) -> None:
-        self.message_rows = list(self._rows(session.path)) if self._rows is not None else []
+        # The file can vanish (deleted, moved, unmounted) while the picker is
+        # open; an empty list beats killing the full-screen app.
+        try:
+            rows = list(self._rows(session.path)) if self._rows is not None else []
+        except (OSError, ValueError):
+            rows = []
+        self.message_rows = rows
         self.message_lines = Q.message_lines(self.message_rows)
         last = max(0, len(self.message_rows) - 1)
         self.message_cursor = min(self._message_positions.get(session.path, last), last)
         self.screen = "messages"
+
+    def preview(self, session: Q.Session) -> tuple[str, str]:
+        """The session's last user text and agent line. A file is read again
+        only when its size or mtime changed since it was last previewed; a
+        session with no file to stat is read once per picker."""
+        stamp = _file_stamp(session.path)
+        cached = _PREVIEWS.get(session.path)
+        if stamp is None and session.path in self._previews:
+            preview = self._previews[session.path]
+        elif stamp is not None and cached is not None and cached[0] == stamp:
+            preview = cached[1]
+        else:
+            try:
+                messages = list(self._messages(session.path)) if self._messages is not None else []
+            except (OSError, ValueError):
+                messages = []
+            preview = Q.preview(messages)
+            if stamp is not None:
+                _PREVIEWS[session.path] = (stamp, preview)
+        self._previews[session.path] = preview
+        return preview
+
+    def preview_height(self) -> int:
+        """Lines the highlighted session's preview takes under its row."""
+        session = self.current()
+        if self.screen not in ("list", "search") or session is None:
+            return 0
+        return sum(1 for said in self.preview(session) if said)
 
     def _open_info(self, session: Q.Session) -> None:
         self.token_count = self._tokens(session.path) if self._tokens is not None else None
@@ -189,85 +265,89 @@ class SessionPicker:
 
     def press(self, key: str) -> Choice | _Closed | None:
         """Apply one key. A Choice or CLOSED ends the picker; None keeps it open."""
-        if key == "c-c":
+        if keys.action_for(self.keymaps[self.screen], key) == "interrupt":
             return CLOSED
         handler = {"list": self._list_key, "search": self._search_key,
                    "messages": self._messages_key, "info": self._info_key}[self.screen]
         return handler(key)
 
     def _list_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         session = self.current()
-        if key in _MOVES:
-            self.move(_MOVES[key])
-        elif key in _FIRST or key in _LAST:
-            self._jump(key in _LAST)
-        elif key == "enter":
+        if action in _MOVES:
+            self.move(_MOVES[action])
+        elif action in ("first", "last"):
+            self._jump(action == "last")
+        elif action == "choose":
             return Choice(RESUME, session) if session is not None else None
-        elif key == "v":
+        elif action == "view":
             self.view = Q.VIEWS[(Q.VIEWS.index(self.view) + 1) % len(Q.VIEWS)]
             self.refresh(self._keep())
-        elif key == "/":
+        elif action == "search":
             self.screen = "search"
-        elif key == "b" and session is not None:
+        elif action == "messages" and session is not None:
             self._open_messages(session)
-        elif key == "i" and session is not None:
+        elif action == "info" and session is not None:
             self._open_info(session)
-        elif key == "a":
+        elif action == "all":
             self.show_all = not self.show_all
             self.refresh(self._keep())
-        elif key == "escape":
+        elif action == "back":
             if not self.query_text:
                 return CLOSED
             self.query_text = ""
             self.refresh(self._keep())
-        elif key == "q":
+        elif action == "quit":
             return CLOSED
         return None
 
     def _search_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         text = self.query_text
-        if key in ("up", "down", "pageup", "pagedown"):
-            self.move(_MOVES[key])
+        if action in _MOVES:
+            self.move(_MOVES[action])
             return None
-        if key == "enter":
+        if action == "choose":
             self.screen = "list"
             return None
-        if key == "escape":
+        if action == "back":
             self.query_text = ""
             self.screen = "list"
-        elif key == "backspace":
+        elif action == "backspace":
             self.query_text = text[:-1]
-        elif key == "c-u":
+        elif action == "clear":
             self.query_text = ""
-        elif key == "c-w":
+        elif action == "delete_word":
             self.query_text = text.rstrip()[: len(text.rstrip()) - len(text.rstrip().split(" ")[-1])]
-        elif len(key) == 1 and key.isprintable():
+        elif isinstance(key, str) and len(key) == 1 and key.isprintable():
             self.query_text = text + key
         if self.query_text != text:
             self.refresh()
         return None
 
     def _messages_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         session = self.current()
         last = max(0, len(self.message_rows) - 1)
-        if key in _MOVES:
-            self.message_cursor = max(0, min(last, self.message_cursor + _MOVES[key]))
-        elif key in _FIRST or key in _LAST:
-            self.message_cursor = last if key in _LAST else 0
-        elif key == "enter" and session is not None and self.message_rows:
+        if action in _MOVES:
+            self.message_cursor = max(0, min(last, self.message_cursor + _MOVES[action]))
+        elif action in ("first", "last"):
+            self.message_cursor = last if action == "last" else 0
+        elif action == "choose" and session is not None and self.message_rows:
             row = self.message_rows[self.message_cursor]
             return Choice(BRANCH, session, row.number, getattr(row, "id", None))
-        elif key == "r" and session is not None:
+        elif action == "resume" and session is not None:
             return Choice(RESUME, session)
-        elif key in ("escape", "q", "b"):
+        elif action == "back":
             self._back()
         return None
 
     def _info_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         session = self.current()
-        if key == "enter" and session is not None:
+        if action == "choose" and session is not None:
             return Choice(RESUME, session)
-        if key in ("escape", "q", "i"):
+        if action == "back":
             self._back()
         return None
 
@@ -279,18 +359,18 @@ class SessionPicker:
             text = msgs.SESSIONS_MESSAGES_TITLE.text(
                 when=Q.when_text(session.when, self.now), agent=session.agent or "-",
                 dir=Q.short_dir(session.cwd, self.home), turns=msgs.plural(session.turns, "turn"))
-            keys = msgs.SESSIONS_MESSAGES_KEYS.text()
+            keys = msgs.SESSIONS_MESSAGES_KEYS.with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         elif self.screen == "info" and session is not None:
             text = msgs.SESSIONS_INFO_TITLE.text(when=Q.when_text(session.when, self.now),
                                                  agent=session.agent or "-",
                                                  dir=Q.short_dir(session.cwd, self.home))
-            keys = msgs.SESSIONS_INFO_KEYS.text()
+            keys = msgs.SESSIONS_INFO_KEYS.with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         else:
             scope = (msgs.SESSIONS_ALL_KINDS if self.show_all else msgs.SESSIONS_ALL_DIRS).text()
             order = (msgs.SESSIONS_RANKED if self.query.ranked else msgs.SESSIONS_NEWEST).text()
             text = msgs.SESSIONS_TITLE.text(count=len(self.shown()), view=Q.view_name(self.view),
                                             order=order, scope=scope)
-            keys = (msgs.SESSIONS_QUERY_KEYS if self.screen == "search" else msgs.SESSIONS_KEYS).text()
+            keys = (msgs.SESSIONS_QUERY_KEYS if self.screen == "search" else msgs.SESSIONS_KEYS).with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         return [("class:title", text), ("", "    "), ("class:keys", keys)]
 
     def subtitle(self) -> StyleAndTextTuples:
@@ -330,7 +410,7 @@ class SessionPicker:
                 line += 1
                 continue
             session = item.session
-            here = (session.cwd or "").rstrip("/") == self.cwd
+            here = bool(session.cwd) and (session.cwd.rstrip("/") or "/") == self.cwd
             selected = index == self.cursor
             marker = ">" if selected else "•" if here else " "
             text = Q.session_line(item, now=self.now, home=self.home, marker=marker)
@@ -338,6 +418,11 @@ class SessionPicker:
                 cursor_line = line
             out += [("class:selected" if selected else "", text), ("", "\n")]
             line += 1
+            if selected:
+                for who, said in zip((USER, session.agent or "-"), self.preview(session)):
+                    if said:
+                        out += [("class:preview", f"        {who}: {said}"), ("", "\n")]
+                        line += 1
             hit = self.hits.get(session.path)
             if hit is not None and hit.line:
                 out += self._hit_fragments(hit)
@@ -398,8 +483,7 @@ class SessionPicker:
         ]
         if session.parent:
             rows.append((msgs.SESSIONS_INFO_PARENT.text(), session.parent))
-        rows += [(msgs.SESSIONS_INFO_KIND.text(), Q.kind(session)),
-                 (msgs.SESSIONS_INFO_TAGS.text(), " · ".join(session.tags) or "-")]
+        rows.append((msgs.SESSIONS_INFO_KIND.text(), Q.kind(session)))
         return rows
 
     def _info_body(self) -> StyleAndTextTuples:
@@ -423,6 +507,8 @@ class SessionPicker:
                 key = event.data if len(event.data) == 1 and event.data.isprintable() else ""
             if not key:
                 return
+            if len(event.key_sequence) > 1:
+                key = tuple(names.get(press.key, press.key) for press in event.key_sequence)
             result = self.press(key)
             if isinstance(result, Choice):
                 event.app.exit(result=result)
@@ -430,7 +516,15 @@ class SessionPicker:
                 event.app.exit(result=None)
 
         kb.add(Keys.Any)(dispatch)
-        kb.add("escape", eager=True)(dispatch)
+        kb.add("escape", eager=Condition(
+            lambda: keys.action_for(self.keymaps[self.screen], "escape") is not None,
+        ))(dispatch)
+
+        for keymap in self.keymaps.values():
+            for sequences in keymap.values():
+                for sequence in sequences:
+                    if len(sequence) > 1:
+                        kb.add(*sequence)(dispatch)
 
         body = FormattedTextControl(
             lambda: self.body()[0],
@@ -441,26 +535,38 @@ class SessionPicker:
             [
                 Window(FormattedTextControl(self.title), height=1),
                 Window(FormattedTextControl(self.subtitle), height=lambda: Dimension.exact(self.subtitle_height())),
-                Window(body, wrap_lines=False, always_hide_cursor=True),
+                # The highlighted session's preview sits under its row: keep
+                # that many lines below the cursor on the screen.
+                Window(body, wrap_lines=False, always_hide_cursor=True,
+                       scroll_offsets=ScrollOffsets(bottom=self.preview_height)),
             ]
         )
-        return Application(layout=Layout(root), key_bindings=kb, style=_STYLE, full_screen=True,
+        return Application(layout=Layout(root), key_bindings=kb, style=_style(), full_screen=True,
                            input=input, output=output)
 
 
-def _tokens(path: str) -> int | None:
-    from . import context_budget, memory
+def _file_stamp(path: str) -> tuple[int, int] | None:
+    try:
+        info = Path(path).stat()
+    except (OSError, ValueError):
+        return None
+    return info.st_size, info.st_mtime_ns
 
+
+def _tokens(path: str) -> int | None:
     try:
         return context_budget.estimate_messages_tokens(memory.load_replay_messages(Path(path)))
     except (OSError, ValueError):
         return None
 
 
+def _messages(path: str) -> list[dict]:
+    return memory.retained_messages(Path(path))
+
+
 def load(cwd: str | Path, query: str = "") -> SessionPicker:
-    """A picker over every session in the catalog, with search, message rows
-    and token counts read from the index and the session files."""
-    from . import paths, session_index, session_text
+    """A picker over every session in the catalog, with search, message rows,
+    previews and token counts read from the index and the session files."""
 
     sessions = [Q.Session.from_summary(summary) for summary in session_index.catalog()]
     return SessionPicker(
@@ -472,13 +578,52 @@ def load(cwd: str | Path, query: str = "") -> SessionPicker:
         lines=session_index.matching_lines,
         rows=lambda path: session_text.rows(Path(path)),
         tokens=_tokens,
+        messages=_messages,
     )
 
 
-def pick_session(cwd: str | Path, query: str = "") -> Choice | None:
+def pick_session(cwd: str | Path, query: str = "", *, input=None, output=None, load_picker=None) -> Choice | None:
     """Run the picker on the terminal and return the choice, or None when closed."""
-    from . import picker
 
-    state = load(cwd, query)
-    app = state.application(input=create_input(sys.__stdin__), output=create_output(sys.__stdout__))
+    factory = load if load_picker is None else load_picker
+    state = factory(cwd, query)
+    app = state.application(input=create_input(sys.__stdin__) if input is None else input,
+                            output=create_output(sys.__stdout__) if output is None else output)
     return picker.run_modal(app)
+
+
+@dataclass(frozen=True)
+class SessionTarget:
+    """A session the picker chose to continue in: its file, start directory and
+    agent, and whether it started under a -C jail rooted at that directory."""
+
+    path: Path
+    cwd: str | None
+    agent: str | None
+    jailed: bool = False
+
+
+def session_target(choice: Choice) -> SessionTarget:
+    """The session a picker choice continues in. A branch choice creates the
+    branch first, in the parent's folder."""
+    session = choice.session
+    path = Path(session.path)
+    if choice.action == BRANCH and choice.message_id is not None:
+        branch = branch_session(path, choice.message_id, cwd=session.cwd or Path.cwd(),
+                                agent=session.agent, mode="repl")
+        msgs.say(msgs.SESSIONS_BRANCHED, parent=session_store.display_name(path),
+                 point=session_store.point_label(choice.message) if choice.message is not None else "-",
+                 name=session_store.display_name(branch))
+        path = branch
+    return SessionTarget(path, session.cwd, session.agent, session.jailed)
+
+
+def enter_session_dir(target: SessionTarget) -> None:
+    """Move to the directory the session started in, when it still exists."""
+    if not target.cwd:
+        return
+    if not Path(target.cwd).is_dir():
+        msgs.warn(msgs.SESSIONS_DIR_GONE, dir=target.cwd, cwd=Path.cwd())
+        return
+    os.chdir(target.cwd)
+    runtime.T.STOCK_CONTEXT.cwd = Path.cwd()

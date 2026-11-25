@@ -2,68 +2,76 @@
 
 The runtime depends on this module, not on individual tool implementations.
 Tools are small Python objects with an OpenAI-compatible schema and a handler
-that receives a shared ToolContext. The context carries per-session state used
-for read-before-write checks, undo snapshots, and search deduplication.
+that receives a shared ToolContext. The context carries per-session state: the
+read ledger behind read-before-write checks (`reads`), undo snapshots, and
+search deduplication.
 """
 
 from __future__ import annotations
 
-import base64
 import contextvars
-import hashlib
 import inspect
-import itertools
 import json
+import math
 import os
 import secrets
-import stat
-import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from .. import jail as _jail
-from .. import settings as _settings
-from .. import turn_settings as _turn_settings
-from ..paths import state_root
+from .. import jail as _jail, turn_settings as _turn_settings
+from ..media import IMAGE_RESULT_PREFIX
+from . import reads as _reads
+from .presentation import Presentation
+from .reads import ReadLedger
+from .undo import UndoStore, session_directory
+
+if TYPE_CHECKING:
+    from ..config import Config
+    from ..context_budget import TokenState
+    from ..skills import SkillCatalog
+    from .registry import ToolRegistry
 
 
 Handler = Callable[..., Any]
-Snapshot = bytes | None | dict[str, Any]
-
-_SNAPSHOT_FORMAT_VERSION = 1
-_SNAPSHOT_MAX_ENTRIES = 100
-_SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
-# Upper bound on ToolContext.known_content; the oldest entries go first.
-_KNOWN_CONTENT_MAX_BYTES = 64 * 1024 * 1024
 # A tool result that carries an image: prefix, host path, mime, text stub.
-_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
-# The id of the tool call running in this thread or task. Read coverage is
-# recorded per call, so the runtime can narrow one call's coverage after it
-# clips that call's result.
-_CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("js_tool_call_id", default=None)
-# False while the running call's result goes to code (a kernel cell) rather
-# than to the model's history.
-_FOR_MODEL: contextvars.ContextVar[bool] = contextvars.ContextVar("js_tool_call_for_model", default=True)
-_anonymous_calls = itertools.count()
+# What the running call's tool hands the screen beside its result (`view`).
+_VIEW: contextvars.ContextVar[dict | None] = contextvars.ContextVar("js_tool_call_view", default=None)
 
 
 @contextmanager
 def call_scope(call_id: str, *, for_model: bool = True):
     """Run the body as tool call ``call_id``. ``for_model`` is False when the
     result goes to code rather than to the model's history."""
-    token = _CALL_ID.set(call_id)
-    model_token = _FOR_MODEL.set(for_model)
+    token = _reads.CALL_ID.set(call_id)
+    model_token = _reads.FOR_MODEL.set(for_model)
+    view_token = _VIEW.set({})
     try:
         yield
     finally:
-        _FOR_MODEL.reset(model_token)
-        _CALL_ID.reset(token)
+        _VIEW.reset(view_token)
+        _reads.FOR_MODEL.reset(model_token)
+        _reads.CALL_ID.reset(token)
+
+
+def view(**fields: Any) -> None:
+    """Hand the screen structured fields that describe the running call's
+    result (a path, the text before and after, line numbers, an exit code),
+    beside the text the model gets. Outside a `call_scope` it does nothing."""
+    holder = _VIEW.get()
+    if holder is not None:
+        holder.update(fields)
+
+
+def call_view() -> dict | None:
+    """What the running call's tool handed the screen with `view`, or None."""
+    holder = _VIEW.get()
+    return dict(holder) if holder else None
 
 
 # The registry the running tool call was dispatched through. The kernel's tool
@@ -110,140 +118,45 @@ def call_is_read_only(tool: Tool, args: dict[str, Any]) -> bool:
         return False
 
 
-def _merge_line_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(ranges):
-        if not merged or start > merged[-1][1] + 1:
-            merged.append((start, end))
-        else:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-    return merged
-
-
-def _encode_snapshot(path: Path, snapshot: Snapshot) -> bytes:
-    if snapshot is None:
-        payload: dict[str, Any] = {"kind": "missing"}
-    elif isinstance(snapshot, bytes):
-        payload = {"kind": "file", "data": base64.b64encode(snapshot).decode("ascii")}
-    elif snapshot.get("kind") == "file":
-        payload = {**snapshot, "data": base64.b64encode(snapshot["data"]).decode("ascii")}
-    elif snapshot.get("kind") == "symlink":
-        payload = {"kind": "symlink", "target": str(snapshot.get("target", ""))}
-    elif snapshot.get("kind") == "unavailable":
-        payload = {"kind": "unavailable", "reason": str(snapshot["reason"])}
-    elif snapshot.get("kind") == "directory":
-        entries = []
-        for rel, data in snapshot.get("entries", {}).items():
-            encoded = data if data is None or isinstance(data, dict) else base64.b64encode(data).decode("ascii")
-            entries.append([rel, encoded])
-        payload = {"kind": "directory", "entries": entries}
-        if "modes" in snapshot:
-            payload["modes"] = snapshot["modes"]
-    else:
-        raise ValueError("unsupported snapshot kind")
-    envelope = {
-        "version": _SNAPSHOT_FORMAT_VERSION,
-        "path": str(path),
-        "snapshot": payload,
-    }
-    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-
-
-def _decode_snapshot(data: bytes, expected_path: Path) -> Snapshot:
-    envelope = json.loads(data.decode("utf-8"))
-    if not isinstance(envelope, dict) or envelope.get("version") != _SNAPSHOT_FORMAT_VERSION:
-        raise ValueError("unsupported snapshot format")
-    if envelope.get("path") != str(expected_path):
-        raise ValueError("snapshot path does not match its store")
-    payload = envelope.get("snapshot")
-    if not isinstance(payload, dict):
-        raise ValueError("snapshot payload is not an object")
-    kind = payload.get("kind")
-    if kind == "missing":
-        return None
-    if kind == "file":
-        encoded = payload.get("data")
-        if not isinstance(encoded, str):
-            raise ValueError("file snapshot has no data")
-        decoded = base64.b64decode(encoded, validate=True)
-        if "mode" in payload:
-            return {"kind": "file", "data": decoded, "mode": _snapshot_mode(payload["mode"]),
-                    "read_coverage": payload.get("read_coverage")}
-        return decoded
-    if kind == "symlink":
-        target = payload.get("target")
-        if not isinstance(target, str):
-            raise ValueError("symlink snapshot has no target")
-        return {"kind": "symlink", "target": target}
-    if kind == "directory":
-        raw_entries = payload.get("entries")
-        if not isinstance(raw_entries, list):
-            raise ValueError("directory snapshot has no entries")
-        entries: dict[str, Any] = {}
-        for raw_entry in raw_entries:
-            if not isinstance(raw_entry, list) or len(raw_entry) != 2:
-                raise ValueError("invalid directory snapshot entry")
-            rel, encoded = raw_entry
-            rel_path = Path(rel) if isinstance(rel, str) else Path("..")
-            if not isinstance(rel, str) or not rel_path.parts or rel_path.is_absolute() or ".." in rel_path.parts:
-                raise ValueError("unsafe directory snapshot path")
-            if rel_path.as_posix() != rel.rstrip("/"):
-                raise ValueError("noncanonical directory snapshot path")
-            if isinstance(encoded, dict):
-                if rel.endswith("/") or encoded.get("kind") != "symlink" or not isinstance(encoded.get("target"), str):
-                    raise ValueError("invalid directory symlink")
-                entries[rel] = encoded
-                continue
-            if encoded is not None and not isinstance(encoded, str):
-                raise ValueError("invalid directory snapshot data")
-            entries[rel] = None if encoded is None else base64.b64decode(encoded, validate=True)
-        for rel in entries:
-            for parent in Path(rel).parents:
-                ancestor = entries.get(parent.as_posix())
-                if ancestor is not None:
-                    raise ValueError("directory entry has a non-directory ancestor")
-        result = {"kind": "directory", "entries": entries}
-        if "modes" in payload:
-            modes = payload["modes"]
-            if not isinstance(modes, dict):
-                raise ValueError("invalid directory modes")
-            for rel, mode in modes.items():
-                if rel != "." and (rel not in entries or isinstance(entries[rel], dict)):
-                    raise ValueError("mode does not name a file or directory")
-                _snapshot_mode(mode)
-            result["modes"] = modes
-        return result
-    if kind == "unavailable":
-        reason = payload.get("reason")
-        return {"kind": "unavailable", "reason": str(reason or "snapshot was not persisted")}
-    raise ValueError(f"unsupported snapshot kind {kind!r}")
-
-
-def _snapshot_mode(mode: Any) -> int:
-    if type(mode) is not int or not 0 <= mode <= 0o7777:
-        raise ValueError("invalid snapshot mode")
-    return mode
-
-
-def _snapshot_raw_size(snapshot: Snapshot) -> int:
-    if snapshot is None:
-        return 0
-    if isinstance(snapshot, bytes):
-        return len(snapshot)
-    if snapshot.get("kind") == "directory":
-        return sum(
-            len(str(rel).encode("utf-8")) + _snapshot_raw_size(data)
-            for rel, data in snapshot.get("entries", {}).items()
-        )
-    if snapshot.get("kind") == "file":
-        return len(snapshot["data"])
-    return len(str(snapshot.get("target", "")).encode("utf-8"))
-
-
 class Output(str):
     """A tool result that is the content the tool was asked for, such as a
     file's text. A caller that tells a failure by its ERROR prefix treats an
     Output as a value even when the content itself starts with ERROR."""
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    """A tool's result in two parts: ``model``, what the model receives, cut
+    to its limits, and ``whole``, everything the call produced, which is what
+    the operator sees on the screen, on stdout and in the transcript. A tool
+    returns one when it cuts its own result for the model; any other result
+    is both at once (`as_output`)."""
+
+    model: Any
+    whole: Any = None
+
+    def shown(self) -> Any:
+        """What the operator sees: ``whole``, or ``model`` when nothing was cut."""
+        return self.model if self.whole is None else self.whole
+
+    def each(self, change: Callable[[Any], Any]) -> ToolOutput:
+        """``change`` made to both parts, as a jail path rewrite or a notice is."""
+        return ToolOutput(change(self.model), None if self.whole is None else change(self.whole))
+
+
+def as_output(result: Any) -> ToolOutput:
+    """``result`` as a `ToolOutput`."""
+    return result if isinstance(result, ToolOutput) else ToolOutput(result)
+
+
+def each_part(result: Any, change: Callable[[Any], Any]) -> Any:
+    """``change`` made to ``result``, or to both parts of a `ToolOutput`."""
+    return result.each(change) if isinstance(result, ToolOutput) else change(result)
+
+
+def for_model(result: Any) -> Any:
+    """What the model receives of ``result``: a `ToolOutput`'s ``model``."""
+    return result.model if isinstance(result, ToolOutput) else result
 
 
 @dataclass(frozen=True)
@@ -264,19 +177,19 @@ class ToolResult:
             if kind == "text":
                 lines.append(str(block.get("text", "")))
             elif kind in {"image", "audio"}:
-                lines.append(f"[{kind} {block.get('mimeType', 'application/octet-stream')} omitted from history]")
+                lines.append('[{kind} {value_1} omitted from history]'.format(kind=kind, value_1=block.get('mimeType', 'application/octet-stream')))
             elif kind == "resource_link":
-                lines.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+                lines.append('[resource link {block_get_name}: {block_get_uri}]'.format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
             elif kind == "resource":
                 resource = block.get("resource")
                 if isinstance(resource, dict):
                     uri = resource.get("uri", "")
                     text = resource.get("text")
-                    lines.append(f"[embedded resource {uri}]" + (f"\n{text}" if isinstance(text, str) else " [binary omitted]"))
+                    lines.append(f'[embedded resource {uri}]' + (f'\n{text}' if isinstance(text, str) else ' [binary omitted]'))
             elif kind == "structured":
                 lines.append(compact_json(block.get("value")))
             else:
-                lines.append(f"[{kind} content omitted from history]")
+                lines.append(f'[{kind} content omitted from history]')
         value = "\n".join(lines)
         return f"ERROR: {value}" if self.is_error and not value.startswith("ERROR") else value
 
@@ -316,6 +229,12 @@ class Tool:
     read_only_when: Callable[[dict[str, Any]], bool] | None = None
     # Catalog label shown by tool_discovery (fs, shell, search, agent, ...).
     source: str = "native"
+    # Maps the arguments a model sent to the ones the schema declares, before
+    # schema coercion and validation; it returns a new dict and leaves its
+    # input as it was. None when the tool takes its arguments as sent.
+    prepare_args: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # How the screen shows its calls and results.
+    presentation: Presentation = Presentation()
 
     def openai_spec(self) -> dict:
         parameters = self.input_schema if self.input_schema is not None else {
@@ -348,24 +267,22 @@ class TurnStatus:
     tool_extra: int = 0          # parallel siblings of `tool` in the same batch
     tool_started: float = 0.0    # time.monotonic() when the batch started
     compacting: bool = False
-    net_bytes: int = 0           # response bytes of this call before its first token
+    waiting_since: float = 0.0   # time.monotonic() when the request waiting for its first byte was sent; 0 when none
+    retry: int = 0               # the retry being waited for; 0 when none
+    retry_of: int = 0            # the retries the budget allows
+    retry_at: float = 0.0        # time.monotonic() when that retry is sent
     _settled: int = field(default=0, repr=False)     # tokens of the finished calls
     _chars: int = field(default=0, repr=False)       # streamed chars of this call
-    _token_seen: bool = field(default=False, repr=False)
 
-    def call_started(self) -> None:
-        """A model request went out: count its response bytes until a token."""
-        self.net_bytes = 0
-        self._token_seen = False
+    def first_byte_wait(self, since: float) -> None:
+        """A model request went out at `since` and waits for its first byte."""
+        self.waiting_since = since
 
-    def add_bytes(self, n: int) -> None:
-        if not self._token_seen:
-            self.net_bytes += n
+    def first_byte_done(self) -> None:
+        self.waiting_since = 0.0
 
     def stream(self, text: str) -> None:
         """A reasoning or text chunk arrived: estimate at four chars a token."""
-        self._token_seen = True
-        self.net_bytes = 0
         self._chars += len(text)
         self.output_tokens = self._settled + self._chars // 4
 
@@ -385,20 +302,19 @@ class TurnStatus:
         self.tool_extra = 0
         self.tool_started = 0.0
 
+    def retry_wait(self, n: int, of: int, delay: float) -> None:
+        self.retry_at = time.monotonic() + delay
+        self.retry_of = of
+        self.retry = n
+
+    def retry_done(self) -> None:
+        self.retry = 0
+        self.retry_of = 0
+        self.retry_at = 0.0
+
     def reset(self) -> None:
         for name, spec in self.__dataclass_fields__.items():
             setattr(self, name, spec.default)
-
-
-@dataclass
-class _ReadWindow:
-    """One path's read coverage since the runtime last settled reads: the
-    coverage before the first of those reads, and what each read call added."""
-
-    content_hash: str
-    base_ranges: list[tuple[int, int]]
-    base_whole: bool
-    reads: dict[str, tuple[list[tuple[int, int]], bool]] = field(default_factory=dict)
 
 
 @dataclass
@@ -411,22 +327,36 @@ class ToolContext(_turn_settings.ContextSettings):
     vision_enabled: bool = False
     model: str = ""                       # model id, for toolbox revision provenance
     kernel_session: Any = None            # the live IPython kernel, one per process
-    swarm: Any = None                     # js.swarm.Agent when this process runs with --swarm
+    lsp_configuration: Any = field(default=None, repr=False)
+    subagent_assembly: Any = field(default=None, repr=False)
+    skill_catalog: SkillCatalog | None = field(default=None, repr=False)
+    swarm: Any = None                     # js.swarm.Agent of a swarm agent (js.swarm_run)
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.
     tool_call_hooks: Any = field(default=None, repr=False)
-    read_paths: set[Path] = field(default_factory=set)
-    file_hashes: dict[Path, str] = field(default_factory=dict)
-    read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)
-    read_line_totals: dict[Path, int] = field(default_factory=dict)
-    fully_read_paths: set[Path] = field(default_factory=set)
-    # The bytes js last knew a file to hold, with their hash: set by read and
-    # by every tool that writes the file. A later edit that finds the file
-    # changed on disk diffs against this instead of asking for a re-read.
-    known_content: dict[Path, tuple[str, bytes]] = field(default_factory=dict, repr=False)
-    snapshots: dict[Path, list[Snapshot]] = field(default_factory=dict)
-    snapshot_files: dict[Path, list[Path | None]] = field(default_factory=dict, repr=False)
-    snapshot_store: Path | None = field(default=None, repr=False)
+    # The approval (js.events.Approval) that holds the calls of this turn, of
+    # the subagents it starts and of its kernel cells; None runs every call.
+    tool_approval: Any = field(default=None, repr=False)
+    # The turn's Config with the model, provider and effort the turn runs on;
+    # None until a turn sets it. Subagents started here build theirs from it.
+    config: Config | None = field(default=None, repr=False)
+    # The registry the turn dispatches through; None until a turn sets it.
+    tool_registry: ToolRegistry | None = field(default=None, repr=False)
+    agent_id: str = ""
+    task_depth: int = 0                   # subagent nesting: 0 on the main turn, parent's + 1 on a child
+    # The context size the turn last measured, in tokens, and whether that
+    # number came from the provider's usage rather than an estimate.
+    context_tokens: int = 0
+    context_tokens_used_provider_usage: bool = False
+    tokens_until_compaction: int | None = None
+    compacted_during_turn: bool = False
+    # Token accounting kept across the turns of this context; the runtime
+    # creates it on the first turn.
+    context_budget_state: TokenState | None = field(default=None, repr=False)
+    # What the model has seen of each file; a subagent's context has its own.
+    reads: ReadLedger = field(default_factory=ReadLedger, repr=False)
+    # The state of each path before a tool changed it, for undo.
+    undo: UndoStore = field(default_factory=UndoStore, repr=False)
     search_cache: dict[str, str] = field(default_factory=dict)
     terminal_sessions: dict[str, Any] = field(default_factory=dict)
     last_prompt_tokens: int = 0
@@ -442,36 +372,18 @@ class ToolContext(_turn_settings.ContextSettings):
     # after a deliberate history rewrite.
     cache_read_baseline: int | None = None
     cache_read_model: str = ""
-    # Automatic summaries that failed in a row; compact.max_summary_failures
+    # Automatic summaries that failed in a row; COMPACTION_FAILURES_MAX
     # of them pause automatic compaction until a summary succeeds.
     summary_failures: int = 0
     turn_status: TurnStatus = field(default_factory=TurnStatus)
     net_label: str = ""                   # "Subagent N" on a fan-out child; "" on the main turn
     # The sessions above a `task` worker, nearest first: its model calls are
-    # charged to each of them as well as to its own (js.usage).
-    usage_chain: tuple[Path, ...] = ()
+    # charged to each of them as well as to its own (js.usage). An unsaved
+    # session above a worker appears as its in-memory key (usage.session_key).
+    usage_chain: tuple[Path | str, ...] = ()
     # Names this context as the owner of the background tasks it starts; only
     # the owner can poll, wait on or kill them.
     task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)
-    _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
-    _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
-    # Read-only calls run in parallel threads; this lock covers read_paths,
-    # file_hashes, read_ranges, read_line_totals, fully_read_paths,
-    # known_content, _read_windows, _shown_reads and _offered_reads.
-    _coverage_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
-    _read_windows: dict[Path, _ReadWindow] = field(default_factory=dict, init=False, repr=False)
-    # Line reads whose whole text reached the model. Per path, a read key
-    # (content hash, first line, last line, numbered) maps to the read call's
-    # id and the sha256 of the text it returned.
-    _shown_reads: dict[Path, dict[tuple, tuple[str, str]]] = field(
-        default_factory=dict, init=False, repr=False
-    )
-    # Reads of the batch still running, by call id: (path, read key, sha256 of
-    # the text). settle_reads moves the ones the runtime delivered whole into
-    # _shown_reads.
-    _offered_reads: dict[str, tuple[Path, tuple, str]] = field(
-        default_factory=dict, init=False, repr=False
-    )
 
     def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
                      follow: bool = True) -> Path:
@@ -483,248 +395,11 @@ class ToolContext(_turn_settings.ContextSettings):
             path = self.cwd / path
         jail = _jail.active()
         if jail is not None:
-            return jail.confine(path, write=write, follow=follow, setting=self.jail_bind)
+            return jail.confine(path, write=write, follow=follow, setting=self.jail_bind,
+                                hide=self.jail_hide)
         if not follow:
             return Path(os.path.abspath(path))
         return path.resolve()
-
-    def remember_read(
-        self,
-        path: Path,
-        content_hash: str,
-        *,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        total_lines: int | None = None,
-        whole_file: bool | None = None,
-    ) -> None:
-        """Record the content the model actually saw, not merely its path.
-
-        Callers that omit a range retain the historical meaning of a complete
-        read. Text readers pass their rendered window explicitly, including when
-        an implicit max-lines page made a nominal whole-file read partial.
-        """
-        if whole_file is None:
-            whole_file = start_line is None and end_line is None
-        with self._coverage_lock:
-            previous_hash = self.file_hashes.get(path)
-            if previous_hash is not None and previous_hash != content_hash:
-                self.read_ranges.pop(path, None)
-                self.read_line_totals.pop(path, None)
-                self.fully_read_paths.discard(path)
-                self._read_windows.pop(path, None)
-                self._shown_reads.pop(path, None)
-            # The runtime can clip this read's text after the handler returns;
-            # record_delivered_read then narrows this call's share and keeps
-            # what earlier and concurrent reads delivered.
-            window = self._read_windows.get(path)
-            if window is None or window.content_hash != content_hash:
-                window = _ReadWindow(content_hash, list(self.read_ranges.get(path, [])),
-                                     path in self.fully_read_paths)
-                self._read_windows[path] = window
-            call_id = _CALL_ID.get() or f"anonymous-{next(_anonymous_calls)}"
-            self.read_paths.add(path)
-            self.file_hashes[path] = content_hash
-            if total_lines is not None:
-                self.read_line_totals[path] = max(0, total_lines)
-            if whole_file:
-                window.reads[call_id] = ([(1, total_lines)] if total_lines else [], True)
-                self.fully_read_paths.add(path)
-                if total_lines:
-                    self.read_ranges[path] = [(1, total_lines)]
-                return
-            if start_line is None or end_line is None or end_line < start_line:
-                window.reads[call_id] = ([], False)
-                return
-            window.reads[call_id] = ([(start_line, end_line)], False)
-            ranges = [*self.read_ranges.get(path, []), (start_line, end_line)]
-            self.read_ranges[path] = _merge_line_ranges(ranges)
-            total = self.read_line_totals.get(path)
-            if total == 0 or (total is not None and self._ranges_cover(path, 1, total)):
-                self.fully_read_paths.add(path)
-
-    def _ranges_cover(
-        self,
-        path: Path,
-        start: int,
-        end: int,
-        seen_ranges: list[tuple[int, int]] | None = None,
-    ) -> bool:
-        with self._coverage_lock:
-            if seen_ranges is None and path in self.fully_read_paths:
-                return True
-            cursor = start
-            for seen_start, seen_end in seen_ranges if seen_ranges is not None else self.read_ranges.get(path, []):
-                if seen_end < cursor:
-                    continue
-                if seen_start > cursor:
-                    return False
-                cursor = max(cursor, seen_end + 1)
-                if cursor > end:
-                    return True
-            return cursor > end
-
-    def remember_content(self, path: Path, content_hash: str, data: bytes) -> None:
-        """Keep *data* as the content of *path* that *content_hash* names."""
-        with self._coverage_lock:
-            self.known_content.pop(path, None)
-            self.known_content[path] = (content_hash, data)
-            total = sum(len(entry[1]) for entry in self.known_content.values())
-            while total > _KNOWN_CONTENT_MAX_BYTES and len(self.known_content) > 1:
-                oldest = next(iter(self.known_content))
-                total -= len(self.known_content.pop(oldest)[1])
-
-    def require_read(
-        self,
-        path: Path,
-        action: str,
-        *,
-        line_ranges: list[tuple[int, int]] | None = None,
-        content_hash: str | None = None,
-        seen_ranges: list[tuple[int, int]] | None = None,
-    ) -> str | None:
-        with self._coverage_lock:
-            if path not in self.read_paths:
-                return f"ERROR: You must read the file with the read tool before attempting to {action}."
-            known_hash = self.file_hashes.get(path)
-            if content_hash is not None and known_hash != content_hash:
-                return (
-                    f"ERROR: {path} changed since it was read (hash {known_hash} when read, "
-                    f"{content_hash} now); read it again before attempting to {action}."
-                )
-            unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
-        if unseen:
-            rendered = ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in unseen)
-            return (
-                f"ERROR: You must read the target line{'s' if len(unseen) != 1 or unseen[0][0] != unseen[0][1] else ''} "
-                f"({rendered}) before attempting to {action}."
-            )
-        return None
-
-    def replace_read_coverage(
-        self,
-        path: Path,
-        content_hash: str,
-        ranges: list[tuple[int, int]],
-        total_lines: int,
-        *,
-        whole_file: bool,
-    ) -> None:
-        with self._coverage_lock:
-            # Reads recorded before this replacement no longer describe the
-            # coverage, so a later clip of one of them changes nothing, and
-            # none of them is the read a later one repeats.
-            self._read_windows.pop(path, None)
-            self._forget_shown_reads(path)
-            self.read_paths.add(path)
-            self.file_hashes[path] = content_hash
-            self.read_ranges[path] = _merge_line_ranges(ranges)
-            self.read_line_totals[path] = max(0, total_lines)
-            if whole_file:
-                self.fully_read_paths.add(path)
-            else:
-                self.fully_read_paths.discard(path)
-
-    def record_delivered_read(self, path: Path, raw: str, delivered: str,
-                              call_id: str | None = None) -> None:
-        """Reconcile coverage after the runtime clipped a read result.
-
-        The read handler recorded coverage for the whole text it returned, but
-        the runtime clips or spills that text before the model sees it. Keep only
-        the numbered lines fully present in the shared prefix, so a later edit is
-        never authorized against lines the model never received. ``call_id``
-        names the read call; it defaults to the call running in this thread."""
-        limit = 0
-        upper = min(len(raw), len(delivered))
-        while limit < upper and raw[limit] == delivered[limit]:
-            limit += 1
-        # A clip can land mid-line; that line's content was only partly shown.
-        complete = raw[:limit].rsplit("\n", 1)[0]
-        seen: list[tuple[int, int]] = []
-        for line in complete.splitlines():
-            head, separator, _text = line.partition("|")
-            if separator and head.isdigit():
-                number = int(head)
-                seen.append((number, number))
-        call_id = call_id or _CALL_ID.get()
-        with self._coverage_lock:
-            if call_id is not None:
-                self._offered_reads.pop(call_id, None)
-            window = self._read_windows.get(path)
-            if window is None or call_id not in window.reads:
-                return
-            # Restrict only this read's contribution: keep the coverage that
-            # predates the window and every other read's share, so a clip
-            # cannot revoke lines another read delivered in full.
-            window.reads[call_id] = (seen, False)
-            merged = _merge_line_ranges(
-                [*window.base_ranges, *(span for ranges, _whole in window.reads.values() for span in ranges)]
-            )
-            if merged:
-                self.read_ranges[path] = merged
-            else:
-                self.read_ranges.pop(path, None)
-            if window.base_whole or any(whole for _ranges, whole in window.reads.values()):
-                self.fully_read_paths.add(path)
-            else:
-                self.fully_read_paths.discard(path)
-
-    def settle_reads(self) -> None:
-        """Forget which call recorded which read, and record the reads the
-        batch delivered whole as shown. The runtime calls it once a batch's
-        results are final, after the last clip."""
-        with self._coverage_lock:
-            self._read_windows.clear()
-            for call_id, (path, key, digest) in self._offered_reads.items():
-                self._shown_reads.setdefault(path, {})[key] = (call_id, digest)
-            self._offered_reads.clear()
-
-    def shown_read(self, path: Path, key: tuple) -> str | None:
-        """The id of the read call that showed the model the text read key
-        ``key`` of ``path`` renders, when that result is still in its
-        history; None otherwise. A call whose result goes to code gets None:
-        the code needs the lines, not a note about the model's history."""
-        if not _FOR_MODEL.get():
-            return None
-        with self._coverage_lock:
-            entry = self._shown_reads.get(path, {}).get(key)
-        return entry[0] if entry else None
-
-    def offer_read(self, path: Path, key: tuple, text: str) -> None:
-        """Record that the read call running in this thread returned ``text``
-        for read key ``key`` of ``path``. It counts as shown once the runtime
-        settles the batch without clipping it. A read outside a tool call, or
-        one whose result goes to code, records nothing."""
-        call_id = _CALL_ID.get()
-        if call_id is None or not _FOR_MODEL.get():
-            return
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        with self._coverage_lock:
-            self._offered_reads[call_id] = (path, key, digest)
-
-    def keep_shown_reads(self, results: dict[str, str]) -> None:
-        """Keep the shown reads whose text is still in the model's history.
-
-        ``results`` maps tool call ids to the result text the history holds
-        for them. A read whose result was cleared, summarised or dropped is
-        forgotten, so a later read of the same lines returns them in full."""
-        with self._coverage_lock:
-            for path in list(self._shown_reads):
-                kept = {
-                    key: (call_id, digest)
-                    for key, (call_id, digest) in self._shown_reads[path].items()
-                    if call_id in results
-                    and hashlib.sha256(results[call_id].encode("utf-8")).hexdigest() == digest
-                }
-                if kept:
-                    self._shown_reads[path] = kept
-                else:
-                    del self._shown_reads[path]
-
-    def _forget_shown_reads(self, path: Path) -> None:
-        self._shown_reads.pop(path, None)
-        for call_id in [cid for cid, offer in self._offered_reads.items() if offer[0] == path]:
-            del self._offered_reads[call_id]
 
     def configure_snapshot_store(
         self,
@@ -733,184 +408,17 @@ class ToolContext(_turn_settings.ContextSettings):
         *,
         state_dir: Path | None = None,
     ) -> None:
-        """Attach this context to one session's bounded persistent undo store."""
-        session = Path(session_file).expanduser().resolve(strict=False)
-        if session == Path(os.devnull).resolve(strict=False):
-            store = None
-        else:
-            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or _settings.default_value("agent")
-            safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.stem) or "session"
-            session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
-            store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"
-        with self._snapshot_lock:
-            if store is None:
-                self.snapshots.clear()
-                self.snapshot_files.clear()
-                self.snapshot_store = None
-                return
-            if store == self.snapshot_store:
-                return
-            self.snapshots.clear()
-            self.snapshot_files.clear()
-            self.snapshot_store = store
-            if store is not None:
-                self._load_snapshots()
-
-    def _path_snapshot_dir(self, path: Path) -> Path:
-        assert self.snapshot_store is not None
-        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()
-        return self.snapshot_store / digest
-
-    @staticmethod
-    def _atomic_write(path: Path, data: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
-        temporary.write_bytes(data)
-        os.replace(temporary, path)
-
-    def _notice_snapshot(self, message: str) -> None:
-        ident = threading.get_ident()
-        self._snapshot_notices.setdefault(ident, []).append(message)
-
-    def consume_snapshot_notices(self) -> list[str]:
-        with self._snapshot_lock:
-            return self._snapshot_notices.pop(threading.get_ident(), [])
-
-    def _load_snapshots(self) -> None:
-        assert self.snapshot_store is not None
-        try:
-            for temporary in self.snapshot_store.glob("*/.*.tmp"):
-                try:
-                    temporary.unlink()
-                except OSError:
-                    pass
-            path_dirs = sorted(path for path in self.snapshot_store.iterdir() if path.is_dir())
-        except FileNotFoundError:
+        """Attach this context to one session's bounded persistent undo store,
+        and keep the read ledger beside it."""
+        store = session_directory(agent_id, session_file, state_dir=state_dir)
+        previous = self.undo.directory
+        if store == previous:
             return
-        except OSError:
-            return
-        for path_dir in path_dirs:
-            try:
-                metadata = json.loads((path_dir / "path.json").read_text(encoding="utf-8"))
-                target = Path(metadata["path"])
-                if not target.is_absolute():
-                    raise ValueError("snapshot target is not absolute")
-            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-                continue
-            try:
-                entries = sorted(path_dir.glob("*.snapshot"))
-            except OSError:
-                continue
-            for entry in entries:
-                try:
-                    snapshot = _decode_snapshot(entry.read_bytes(), target)
-                except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                    snapshot = {"kind": "corrupt", "reason": f"{type(exc).__name__}: {exc}"}
-                self.snapshots.setdefault(target, []).append(snapshot)
-                self.snapshot_files.setdefault(target, []).append(entry)
-        self._prune_snapshot_store()
-
-    def _persist_snapshot(self, path: Path, snapshot: Snapshot) -> Path | None:
-        if self.snapshot_store is None:
-            return None
-        path_dir = self._path_snapshot_dir(path)
-        try:
-            metadata = json.dumps(
-                {"version": _SNAPSHOT_FORMAT_VERSION, "path": str(path)},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            self._atomic_write(path_dir / "path.json", metadata)
-            too_large = _snapshot_raw_size(snapshot) > _SNAPSHOT_MAX_DISK_BYTES
-            encoded = b"" if too_large else _encode_snapshot(path, snapshot)
-            if too_large or len(encoded) > _SNAPSHOT_MAX_DISK_BYTES:
-                reason = f"snapshot exceeds the {_SNAPSHOT_MAX_DISK_BYTES // (1024 * 1024)} MiB session undo cap"
-                encoded = json.dumps(
-                    {
-                        "version": _SNAPSHOT_FORMAT_VERSION,
-                        "path": str(path),
-                        "snapshot": {"kind": "unavailable", "reason": reason},
-                    },
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                self._notice_snapshot(f"{reason}; this undo is available only until the process exits")
-            stamp = f"{time.time_ns():020d}-{secrets.token_hex(6)}.snapshot"
-            entry = path_dir / stamp
-            self._atomic_write(entry, encoded)
-            self._prune_snapshot_store()
-            return entry if entry.exists() else None
-        except OSError as exc:
-            self._notice_snapshot(f"could not persist undo snapshot for {path}: {exc}")
-            return None
-
-    def _forget_snapshot_file(self, victim: Path) -> None:
-        for files in self.snapshot_files.values():
-            for index, entry in enumerate(files):
-                if entry == victim:
-                    files[index] = None
-
-    @staticmethod
-    def _cleanup_snapshot_dir(path_dir: Path) -> None:
-        try:
-            if not any(path_dir.glob("*.snapshot")):
-                (path_dir / "path.json").unlink(missing_ok=True)
-                path_dir.rmdir()
-        except OSError:
-            pass
-
-    def _prune_snapshot_store(self) -> None:
-        assert self.snapshot_store is not None
-        try:
-            entries = list(self.snapshot_store.glob("*/*.snapshot"))
-            sized = [(entry, entry.stat().st_size) for entry in entries]
-        except OSError:
-            return
-        sized.sort(key=lambda item: item[0].name)
-        total = sum(size for _entry, size in sized)
-        while sized and (len(sized) > _SNAPSHOT_MAX_ENTRIES or total > _SNAPSHOT_MAX_DISK_BYTES):
-            victim, size = sized.pop(0)
-            try:
-                victim.unlink()
-            except OSError:
-                break
-            total -= size
-            self._forget_snapshot_file(victim)
-            self._cleanup_snapshot_dir(victim.parent)
-
-    def record_snapshot(self, path: Path, snapshot: Snapshot) -> None:
-        with self._snapshot_lock:
-            self.snapshots.setdefault(path, []).append(snapshot)
-            entry = self._persist_snapshot(path, snapshot)
-            self.snapshot_files.setdefault(path, []).append(entry)
-
-    def pop_snapshot(self, path: Path) -> tuple[bool, Snapshot]:
-        with self._snapshot_lock:
-            stack = self.snapshots.get(path) or []
-            if not stack:
-                return False, None
-            snapshot = stack.pop()
-            files = self.snapshot_files.get(path) or []
-            entry = files.pop() if files else None
-            if entry is not None:
-                try:
-                    entry.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                self._cleanup_snapshot_dir(entry.parent)
-            return True, snapshot
-
-    def discard_snapshot(self, path: Path) -> None:
-        self.pop_snapshot(path)
-
-    @contextmanager
-    def restoring_snapshot(self, path: Path):
-        """Consume the latest entry only on normal exit; retain it on restore errors."""
-        with self._snapshot_lock:
-            stack = self.snapshots.get(path) or []
-            found = bool(stack)
-            yield found, stack[-1] if found else None
-            if found:
-                self.pop_snapshot(path)
+        # Reads made before the context had a session carry into its first one.
+        if previous is not None:
+            self.reads.clear()
+        self.undo.attach(store)
+        self.reads.persist_to(None if store is None else store / "reads.json")
 
     def invalidate_search_cache(self) -> None:
         """Drop memoized fs_search results after anything may have changed the tree.
@@ -918,8 +426,7 @@ class ToolContext(_turn_settings.ContextSettings):
         A `fs_search` entry is keyed on the search arguments plus the root's
         `(mtime_ns, size, inode)` when the root is a regular file; a directory
         root is not memoized at all, because a directory's own stat does not move
-        when a nested file changes. The `ast_search` memo is keyed on its
-        arguments only. Without invalidation a model that edits a file and
+        when a nested file changes. Without invalidation a model that edits a file and
         re-runs the same search gets the PRE-EDIT hit list back, labelled
         `[deduplicated repeated search]` — it looks like a confirmation that
         nothing changed. Every mutating fs tool funnels through `snapshot()`;
@@ -928,50 +435,25 @@ class ToolContext(_turn_settings.ContextSettings):
         self.search_cache.clear()
 
     def snapshot(self, path: Path) -> None:
+        """Keep ``path``'s current state for undo, with what the model had
+        seen of it; memoized searches go stale."""
         self.invalidate_search_cache()
-        try:
-            if path.is_dir():
-                entries: dict[str, Any] = {}
-                modes = {".": stat.S_IMODE(path.stat().st_mode)}
-                for child in sorted(path.rglob("*")):
-                    rel = child.relative_to(path).as_posix()
-                    if child.is_symlink():
-                        entries[rel] = {"kind": "symlink", "target": os.readlink(child)}
-                    elif child.is_dir():
-                        entries[rel + "/"] = None
-                        modes[rel + "/"] = stat.S_IMODE(child.stat().st_mode)
-                    elif child.is_file():
-                        entries[rel] = child.read_bytes()
-                        modes[rel] = stat.S_IMODE(child.stat().st_mode)
-                content: Snapshot = {"kind": "directory", "entries": entries, "modes": modes}
-            else:
-                content = None
-                if path.exists():
-                    content = {
-                        "kind": "file",
-                        "data": path.read_bytes(),
-                        "mode": stat.S_IMODE(path.stat().st_mode),
-                        "read_coverage": {
-                            "hash": self.file_hashes.get(path),
-                            "ranges": self.read_ranges.get(path, []),
-                            "whole": path in self.fully_read_paths,
-                        },
-                    }
-        except OSError as exc:
-            reason = f"could not capture undo snapshot for {path}: {exc}"
-            content = {"kind": "unavailable", "reason": reason}
-            self._notice_snapshot(reason)
-        self.record_snapshot(path, content)
+        self.undo.capture(path, self.reads.coverage(path))
 
 
 def coerce_value(value: Any, schema_type: str | None) -> Any:
     if schema_type is None or value is None:
         return value
+    numeric = schema_type in ("integer", "number")
+    if numeric and isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{schema_type} argument must be finite")
+    if schema_type == "integer" and isinstance(value, float) and not value.is_integer():
+        raise ValueError("integer argument must be a whole number")
     try:
         if schema_type == "integer" and not isinstance(value, bool) and not isinstance(value, int):
             return int(value)
         if schema_type == "number" and not isinstance(value, (int, float, bool)):
-            return float(value)
+            value = float(value)
         if schema_type == "string" and not isinstance(value, str):
             return str(value)
         if schema_type == "boolean" and not isinstance(value, bool):
@@ -983,6 +465,8 @@ def coerce_value(value: Any, schema_type: str | None) -> Any:
                     return False
     except (TypeError, ValueError):
         pass
+    if numeric and isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{schema_type} argument must be finite")
     return value
 
 
@@ -992,10 +476,13 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     sig = inspect.signature(tool.handler)
     known = set(sig.parameters)
     has_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values())
-    # "context" is the ToolContext injection slot only when the tool does not
-    # declare it in its model-facing schema (remote MCP schemas may require a
-    # real property with that name; its value must reach the server).
-    declares_context = "context" in tool.params
+    # Full-schema **kwargs handlers carry model arguments, including a
+    # "context" key admitted by patternProperties or additionalProperties.
+    # An explicitly named context parameter remains the injection slot unless
+    # it is also a declared model-facing property.
+    declares_context = "context" in tool.params or (
+        tool.input_schema is not None and has_var_kwargs and "context" not in known
+    )
     filtered: dict[str, Any] = {}
     for key, value in args.items():
         if key not in known and not has_var_kwargs:
@@ -1003,40 +490,51 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         if key == "context" and not declares_context:
             continue
         schema_type = tool.params.get(key, {}).get("type")
-        filtered[key] = coerce_value(value, schema_type)
+        try:
+            filtered[key] = coerce_value(value, schema_type)
+        except ValueError as exc:
+            return f"ERROR: invalid argument {key!r}: {exc}"
     if "context" in known and not declares_context:
         filtered["context"] = context
     try:
         result = tool.handler(**filtered)
     except _jail.JailError as exc:
         return _jail.Refusal(f"ERROR: {exc}")
-    output = isinstance(result, Output)
-    notices = context.consume_snapshot_notices()
-    if notices and isinstance(result, str):
-        rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
-        result = f"{result}\n{rendered}"
-    result = _as_jail_shows(result)
-    return Output(result) if output and not isinstance(result, Output) else result
+    notices = context.undo.consume_notices()
+    if notices:
+        rendered = "\n".join(f'WARNING: {notice}' for notice in notices)
+        result = each_part(result, lambda text: _with_notices(text, rendered))
+    return each_part(result, _as_jail_shows)
+
+
+def _with_notices(result: Any, notices: str) -> Any:
+    """A text result with the snapshot notices after it; an `Output` stays one."""
+    if not isinstance(result, str):
+        return result
+    text = f"{result}\n{notices}"
+    return Output(text) if isinstance(result, Output) else text
 
 
 def _as_jail_shows(result: Any) -> Any:
     """``result`` with host paths into the jail's /tmp and ~/.js/tmp named as
     the jail shows them. The path field of an image marker stays the host
-    path: the model client reads the image from it."""
+    path: the model client reads the image from it. An `Output` stays one."""
     if _jail.active() is None or not isinstance(result, str) or isinstance(result, _jail.Refusal):
         return result
-    if result.startswith(_IMAGE_RESULT_PREFIX):
+    if result.startswith(IMAGE_RESULT_PREFIX):
         prefix, host, rest = (result.split("\t", 2) + ["", ""])[:3]
         shown = f"{prefix}\t{host}\t{_jail.shown(rest)}"
     else:
         shown = _jail.shown(result)
-    return result if shown == result else shown
+    if shown == result:
+        return result
+    return Output(shown) if isinstance(result, Output) else shown
 
 
 async def call_tool_async(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     """Invoke either a native sync handler or a cancelable async handler."""
     result = call_tool(tool, args, context)
-    return _as_jail_shows(await result) if inspect.isawaitable(result) else result
+    return each_part(await result, _as_jail_shows) if inspect.isawaitable(result) else result
 
 
 def compact_json(value: Any) -> str:

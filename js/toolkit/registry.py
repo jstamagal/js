@@ -4,19 +4,39 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import threading
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .. import messages as msgs, output, paths, snippets
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
-from .. import messages as msgs
+from . import (
+    browser,
+    bus_tools,
+    discovery,
+    fetch,
+    fs_tools,
+    jev,
+    lsp,
+    notebook,
+    plan,
+    policy,
+    python_kernel,
+    shell,
+    skill,
+    subagents,
+    terminal,
+    tool_suites,
+    toolbox,
+    web_search,
+    wiki,
+)
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
-from . import lsp, notebook
 
 
 def _closest_tool_name(name: str, names: Iterable[str]) -> str:
@@ -30,6 +50,14 @@ def _closest_tool_name(name: str, names: Iterable[str]) -> str:
     return close[0] if close else ""
 
 
+# CLIProxyAPI's Claude OAuth path publishes each tool as
+# `mcp__<word>_<word>__<word>_<tool>` and does not always restore the name it
+# gets back: js receives `promote_shell`, `promote_shell_placeholder` or
+# `mcp__exile_poem__fs_search_placeholder_never_called`.
+_CLOAK_PREFIX = re.compile(r"^mcp__.+?__")
+_CLOAK_SUFFIX = re.compile(r"_placeholder(?:_never_called)?$")
+
+
 @dataclass(frozen=True)
 class ToolRegistry:
     tools: tuple[Tool, ...]
@@ -41,6 +69,7 @@ class ToolRegistry:
     lazy: frozenset[str] = frozenset()
     # tools.yaml `ban:` argument patterns, by lowercased tool name.
     arg_bans: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    public_aliases: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
@@ -49,23 +78,61 @@ class ToolRegistry:
         canonical = self.aliases.get(trimmed.lower(), trimmed)
         return self.by_name.get(canonical)
 
+    def repaired_name(self, name: str) -> str:
+        """The published tool a proxy-cloaked ``name`` stands for, or "".
+
+        The name loses an `mcp__<server>__` prefix and a `_placeholder` or
+        `_placeholder_never_called` suffix; what is left, as it is or without
+        its first `<word>_`, has to resolve to exactly one tool on this
+        registry."""
+        bare = _CLOAK_SUFFIX.sub("", _CLOAK_PREFIX.sub("", str(name).strip()))
+        found = {
+            tool.name
+            for candidate in (bare, bare.partition("_")[2])
+            if candidate and (tool := self.resolve(candidate)) is not None
+        }
+        return found.pop() if len(found) == 1 else ""
+
+    def runnable(self, context: Any) -> tuple[ToolRegistry, dict[str, str]]:
+        """This registry without the tools that cannot run for ``context``,
+        and the ERROR line a call to each of them gets: `kernel` without its
+        packages, a keyed search tool without its API key."""
+        left_out: dict[str, str] = {}
+        for tool in self.tools:
+            if tool.name == "kernel":
+                problem = python_kernel.missing_dependencies()
+                if problem:
+                    left_out[tool.name] = problem
+                continue
+            setting = web_search.missing_api_key(tool.name, context)
+            if setting is not None:
+                left_out[tool.name] = f"ERROR: {tool.name} needs {setting}, which is not set, so it is not on this agent's tools."
+        if not left_out:
+            return self, left_out
+        return replace(
+            self,
+            tools=tuple(tool for tool in self.tools if tool.name not in left_out),
+            unavailable_errors={**self.unavailable_errors, **left_out},
+        ), left_out
+
     def unavailable_error(self, name: str) -> str:
         canonical = self.aliases.get(str(name).strip().lower(), str(name).strip())
         if canonical in self.unavailable_errors:
             return self.unavailable_errors[canonical]
         names = self.by_name
-        has_discovery = discovery.DISCOVERY_TOOL_NAME in names
+        discovery_name = discovery.DISCOVERY_TOOL_NAME
+        has_discovery = discovery_name in names
+        public_discovery_name = self.public_aliases.get(discovery_name, discovery_name)
         if canonical in (self.known_names or ()):
             error = f"ERROR: {canonical} is not allowed by this agent's tool policy."
-            return f"{error} tool_discovery cannot load it here." if has_discovery else error
-        error = f"ERROR: unknown tool {canonical}."
+            return f'{error} {public_discovery_name} cannot load it here.' if has_discovery else error
+        error = f'ERROR: unknown tool {canonical}.'
         closest = _closest_tool_name(canonical, names)
         if closest:
-            error += f" Did you mean {closest}?"
+            error += f' Did you mean {closest}?'
         if has_discovery:
-            return (f"{error} Use tool_discovery to find an allowed tool and load its "
-                    "exact catalog id before calling it.")
-        return f"{error} This agent's tools: {', '.join(names)}."
+            return (f'{error} Use {public_discovery_name} to find an allowed tool and load its exact catalog id before calling it.')
+        return "{error} This agent's tools: {join_names}.".format(error=error, join_names=', '.join(names))
 
     @property
     def by_name(self) -> dict[str, Tool]:
@@ -97,6 +164,7 @@ class ToolRegistry:
         config: policy.ToolsConfig | None = None,
         *,
         warn: bool = True,
+        tool_aliases: Mapping[str, str] | None = None,
     ) -> ToolRegistry:
         """The agent's surface: the tools its `noun:modifier` chain makes
         eager or lazy, with tools.yaml's tags and argument bans applied.
@@ -108,8 +176,33 @@ class ToolRegistry:
         return replace(
             _registry_from_tools(selected, known_names=known_names),
             lazy=chosen.lazy,
+            unavailable_errors=dict(self.unavailable_errors),
             arg_bans=dict(config.bans),
-        )
+        ).with_public_aliases(tool_aliases or {}, strict=True)
+
+    def with_public_aliases(self, profile: Mapping[str, str], *, strict: bool = False) -> ToolRegistry:
+        """Add public names to the selected surface, keeping canonical policy keys."""
+        if not profile:
+            return self
+        names = self.by_name
+        known = self.known_names or frozenset(names)
+        candidates = {
+            canonical: public for canonical, public in profile.items()
+            if canonical not in self.public_aliases
+            and (canonical in names or (strict and canonical not in known))
+        }
+        reserved = set(names) | set(candidates) | {discovery.DISCOVERY_TOOL_NAME}
+        owners = {**self.aliases, **{name.lower(): name for name in reserved}}
+        aliases = dict(self.public_aliases)
+        for canonical, public in candidates.items():
+            owner = owners.get(public.lower())
+            if owner is not None and owner != canonical:
+                if strict:
+                    raise policy.ToolPolicyError(f"tool alias {public!r} for {canonical!r} conflicts with {owner!r}")
+                continue
+            owners[public.lower()] = canonical
+            aliases[canonical] = public
+        return replace(self.aliased(aliases), public_aliases=aliases)
 
     def argument_refusal(self, name: str, args: Any) -> str | None:
         return policy.argument_refusal(name, args, self.arg_bans)
@@ -135,9 +228,15 @@ class ToolRegistry:
                 merged[key] = canonical
         return replace(self, aliases=merged)
 
-    def lazy_surface(self, cwd: Path, mcp_host: object | None = None) -> TurnToolSurface:
-        """Create a fresh view; the runtime restores session visibility within selection."""
-        return TurnToolSurface(self, cwd, mcp_host=mcp_host)
+    def lazy_surface(
+        self, cwd: Path, mcp_host: object | None = None, disabled_skills: Iterable[str] = (),
+        *, skill_catalog: SkillCatalog | None = None,
+    ) -> TurnToolSurface:
+        """Create a fresh view; the runtime restores session visibility within selection.
+        ``skill_catalog`` supplies the discovery policy; otherwise discover with
+        ``disabled_skills`` (SKILLS_DISABLED) left out of the catalog."""
+        return TurnToolSurface(self, cwd, mcp_host=mcp_host, disabled_skills=disabled_skills,
+                               skill_catalog=skill_catalog)
 
 
 def _search_text(tool: Tool, present: set[str]) -> str:
@@ -165,7 +264,11 @@ def _catalog_summary(description: str, present: set[str], tool: str) -> str:
 class TurnToolSurface:
     """A selected registry split into deterministic eager and loaded subsets."""
 
-    def __init__(self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None) -> None:
+    def __init__(
+        self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None,
+        disabled_skills: Iterable[str] = (),
+        *, skill_catalog: SkillCatalog | None = None,
+    ) -> None:
         self.allowed = allowed
         self.on_change: Callable[[dict], None] | None = None
         self.mcp_host = mcp_host
@@ -174,13 +277,17 @@ class TurnToolSurface:
             for alias, canonical in allowed.aliases.items()
             if alias != discovery.DISCOVERY_TOOL_NAME
         }
+        self.public_aliases = allowed.public_aliases
         if self.mcp_host is not None:
             reserved = {tool.name for tool in allowed.tools}
             reserved.update(self.aliases)
+            reserved.update(public for canonical, public in self.public_aliases.items()
+                            if canonical.lower() != public.lower())
             reserved.add(discovery.DISCOVERY_TOOL_NAME)
             self.mcp_host.reserve_public_names(reserved)
         self._skill_catalog = (
-            discover_skills(cwd) if allowed.resolve("skill") is not None else SkillCatalog()
+            (skill_catalog if skill_catalog is not None else discover_skills(cwd, disabled=disabled_skills))
+            if allowed.resolve("skill") is not None else SkillCatalog()
         )
         self._skills = {
             f"skill:{skill.name}": skill for skill in self._skill_catalog.model_skills
@@ -212,12 +319,18 @@ class TurnToolSurface:
 
     def dispatch_registry(self) -> ToolRegistry:
         """Freeze the tools available for one model response's dispatch batch."""
+        tools = self.tools
+        unavailable = self._unavailable_errors()
+        candidates = {tool.name for tool in tools} | set(unavailable)
         return ToolRegistry(
-            tools=self.tools,
-            aliases=self.aliases,
+            tools=tools,
+            aliases={**self.aliases, **{public.lower(): canonical
+                                     for canonical, public in self.public_aliases.items()
+                                     if canonical in candidates}},
             known_names=self.allowed.known_names,
-            unavailable_errors=self._unavailable_errors(),
+            unavailable_errors=unavailable,
             arg_bans=self.allowed.arg_bans,
+            public_aliases=self.public_aliases,
         )
 
     @property
@@ -229,7 +342,12 @@ class TurnToolSurface:
         if trimmed in self.by_name:
             return self.by_name[trimmed]
         canonical = self.aliases.get(trimmed.lower(), trimmed)
-        return self.by_name.get(canonical)
+        return self.by_name.get(canonical) or next(
+            (tool for tool in self.tools if self.public_name(tool.name).lower() == trimmed.lower()), None,
+        )
+
+    def public_name(self, canonical: str) -> str:
+        return self.public_aliases.get(canonical, canonical)
 
     def openai_specs(self) -> list[dict]:
         return _registry_from_tools(self.tools).openai_specs()
@@ -238,24 +356,27 @@ class TurnToolSurface:
         return "/".join(tool.name for tool in self.tools)
 
     def _unavailable_errors(self) -> dict[str, str]:
-        entries = {item.name: item for item in self.catalog() if item.kind != "skill"}
-        errors = {}
-        for item in entries.values():
+        errors = dict(self.allowed.unavailable_errors)
+        discover = self.public_name(discovery.DISCOVERY_TOOL_NAME)
+        for item in self.catalog():
+            if item.kind == "skill":
+                continue
+            canonical = (
+                self._lazy[item.id].name if item.id in self._lazy
+                else item.id.removeprefix("mcp:") if item.loadable
+                else item.name
+            )
             if item.loadable:
-                errors[item.name] = (
-                    f"ERROR: {item.name} is not in the published tool set for this call. "
-                    f'Fix: tool_discovery {{"load":"{item.id}"}} then re-issue on the next model call. '
-                    "Retrying unchanged will fail again."
+                errors[canonical] = (
+                    f'ERROR: {item.name} is not in the published tool set for this call. Fix: {discover} {{"load":"{item.id}"}} then re-issue on the next model call. Retrying unchanged will fail again.'
                 )
             else:
-                errors[item.name] = f"ERROR: {item.name} is a catalog status entry, not a loadable tool."
+                errors[canonical] = f'ERROR: {item.name} is a catalog status entry, not a loadable tool.'
         if self.mcp_host is not None:
             for name in self.mcp_host.remote_tools:
                 if self.mcp_host.load(f"mcp:{name}") is not None:
                     errors[name] = (
-                        f'ERROR: {name} is not in the published tool set for this call. '
-                        f'Fix: tool_discovery {{"load":"mcp:{name}"}} then re-issue on the next model call. '
-                        'Retrying unchanged will fail again.'
+                        f'ERROR: {self.public_name(name)} is not in the published tool set for this call. Fix: {discover} {{"load":"mcp:{name}"}} then re-issue on the next model call. Retrying unchanged will fail again.'
                     )
         return errors
 
@@ -357,11 +478,10 @@ class TurnToolSurface:
                     offers.append((item_id, skill))
             self._state_changed()
         lines = [
-            f"Skill {skill.name} applies to {relative}: {' '.join(skill.description.split())} "
-            f'Load it with tool_discovery {{"load":"{item_id}"}}.'
+            snippets.render('skill-offer', SKILL=skill.name, PATH=relative, DESCRIPTION=' '.join(skill.description.split()), CATALOG_ID=item_id)
             for item_id, skill in offers
         ]
-        return f"<js-reminder>{' '.join(lines)}</js-reminder>" if lines else ""
+        return '<js-reminder>{join_lines}</js-reminder>'.format(join_lines=' '.join(lines)) if lines else ""
 
     def note_skill_loaded(self, name: str) -> None:
         """Record that ``name``'s instructions are in the conversation, so no
@@ -377,7 +497,7 @@ class TurnToolSurface:
         native = (
             CatalogEntry(
                 item_id,
-                tool.name,
+                self.public_name(tool.name),
                 _catalog_summary(tool.description, present, tool.name),
                 "native",
                 tool.source,
@@ -389,36 +509,46 @@ class TurnToolSurface:
             CatalogEntry(item_id, skill.name, skill.description, "skill", skill.source)
             for item_id, skill in self._skills.items()
         )
-        mcp = self.mcp_host.initial_catalog() if self.mcp_host is not None else ()
+        mcp = self._alias_mcp_catalog(self.mcp_host.initial_catalog()) if self.mcp_host is not None else ()
         return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
+
+    def _alias_mcp_catalog(self, entries: Iterable[CatalogEntry]) -> tuple[CatalogEntry, ...]:
+        return tuple(
+            replace(item, name=self.public_name(item.name)) if item.loadable else item
+            for item in entries
+        )
 
     async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
         folded_kind = str(kind).strip().lower()
         folded_source = str(source).strip().casefold()
         if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
-            return "ERROR: kind must be native, skill, or mcp"
+            return 'ERROR: kind must be native, skill, or mcp'
         mcp_source = (
             self.mcp_host is not None
             and bool(folded_source)
             and self.mcp_host.is_server_source(source)
         )
+        if self.mcp_host is not None and not load and not folded_kind and not folded_source:
+            remote = await self.mcp_host.discover(query=query, rank=False)
+            entries = {item.id: item for item in (*self.catalog(), *self._alias_mcp_catalog(remote))}
+            return discovery.catalog_result(entries.values(), query, self._loaded_ids, offset)
         if self.mcp_host is not None and not load and (folded_kind == "mcp" or (not folded_kind and mcp_source)):
             entries = await self.mcp_host.discover(
-                query=query,
+                query=query, rank=False,
                 source="" if folded_source == "mcp" else source,
             )
             # The host has already applied source aliases and MCP query scoping.
-            return discovery.catalog_result(entries, query, self._loaded_ids, offset)
+            return discovery.catalog_result(self._alias_mcp_catalog(entries), query, self._loaded_ids, offset)
         return self.discover(query=query, kind=kind, source=source, load=load, offset=offset)
 
     def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
+        folded_kind = str(kind).strip().lower()
+        folded_source = str(source).strip().casefold()
+        if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
+            return 'ERROR: kind must be native, skill, or mcp'
         load_id = str(load).strip()
         if load_id:
             return self._load(load_id)
-        folded_kind = str(kind).strip().lower()
-        folded_source = str(source).strip().lower()
-        if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
-            return "ERROR: kind must be native, skill, or mcp"
         entries = (
             item for item in self.catalog()
             if (not folded_kind or item.kind == folded_kind)
@@ -433,28 +563,34 @@ class TurnToolSurface:
                 self._mcp_loaded.update(loaded)
                 self._loaded_ids.add(item_id)
                 self._state_changed()
-                return discovery.compact_result({"loaded": loaded, "id": item_id})
+                result: dict[str, object] = {"loaded": [self.public_name(name) for name in loaded], "id": item_id}
+                instructions = self.mcp_host.server_instructions(loaded)
+                if instructions:
+                    result["server_instructions"] = instructions
+                return discovery.compact_result(result)
         tool = self._lazy.get(item_id)
         if tool is not None:
             self._loaded.add(tool.name)
             self._loaded_ids.add(item_id)
             self._state_changed()
-            return discovery.compact_result({"loaded": [tool.name], "id": item_id})
+            return discovery.compact_result({
+                "loaded": [self.public_name(tool.name)], "id": item_id,
+            })
         skill = self._skills.get(item_id)
         if skill is None:
-            return f"ERROR: no allowed catalog entry with id {item_id!r}"
+            return f'ERROR: no allowed catalog entry with id {item_id!r}'
         try:
             loaded = load_skill(self._skill_catalog, skill.name, tool_registry=self)
-        except OSError:
-            return f"ERROR: skill {skill.name!r} instructions could not be read"
+        except (OSError, ValueError):
+            return f'ERROR: skill {skill.name!r} instructions could not be read'
         if loaded is None:
-            return f"ERROR: skill {skill.name!r} instructions could not be read"
+            return f'ERROR: skill {skill.name!r} instructions could not be read'
         self._loaded_ids.add(item_id)
         self._state_changed()
         result: dict[str, object] = {
             "id": item_id,
             "instructions": loaded.instructions,
-            "loaded": list(loaded.activation.activated),
+            "loaded": [self.public_name(name) for name in loaded.activation.activated],
         }
         if loaded.activation.denied:
             result["denied_tools"] = list(loaded.activation.denied)
@@ -475,13 +611,13 @@ def _registry_from_tools(
 
 
 def _default_prompts_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "prompts"
+    return paths.defaults_dir() / "agents"
 
 
 def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tuple[Tool, ...]:
     """Build direct agent tools from roots ordered least- to most-specific.
 
-    ``from_env`` passes repo ``prompts/``, then ``~/.js/agents/``,
+    ``from_env`` passes stock ``defaults/agents/``, then ``~/.js/agents/``,
     then project ``.js/agents/``. Later roots shadow earlier roots for the same
     agent id, matching prompt loading for main agents and subagents.
     """
@@ -496,26 +632,23 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
                 # A symlinked agent is trusted by name and checked when called:
                 # following it at startup wakes (or waits on) whatever host it
                 # points at, for an agent this run may never touch.
-                if not agent_dir.is_symlink() and (
-                    not agent_dir.is_dir()
-                    or not (any(agent_dir.glob("*.md")) or (agent_dir / "agent.yaml").is_file())
-                ):
+                if not agent_dir.is_symlink() and not agent_dir.is_dir():
                     continue
             except OSError as exc:
                 # A symlinked agent on a sleeping NFS/automount host stats as
                 # ENODEV or ETIMEDOUT. One unreachable agent must not kill every run.
-                msgs.warn(msgs.AGENT_DIR_UNREADABLE, path=agent_dir, error=exc.strerror)
+                output.notice(msgs.AGENT_DIR_UNREADABLE, path=agent_dir, error=exc.strerror)
                 continue
             if agent_id in reserved:
                 # A builtin tool owns this name, so the agent can never be selected.
                 # Silently skipping looked identical to "the directory isn't there",
                 # which is a long afternoon of debugging for whoever named an agent
                 # `read` or `task`.
-                msgs.warn(msgs.AGENT_NAME_IS_TOOL, agent=agent_id, root=root)
+                output.notice(msgs.AGENT_NAME_IS_TOOL, agent=agent_id, root=root)
                 continue
             # Later roots are more specific and shadow earlier prompt dirs.
             by_id[agent_id] = agent_dir
-    return tuple(replace(meta.named_agent_tool(agent_id), source="agent") for agent_id in sorted(by_id))
+    return tuple(replace(subagents.named_agent_tool(agent_id), source="agent") for agent_id in sorted(by_id))
 
 
 @cache
@@ -530,7 +663,7 @@ def registry_for_roots(
     """Registry for one config's prompt roots, built once per distinct root set.
 
     Every caller must go through here rather than through a module-level singleton.
-    A registry built with no roots falls back to the js REPO's own prompts/ dir, which
+    A registry built with no roots falls back to the stock defaults/agents/ dir, which
     holds two agents; the operator's agents live in ~/.js/agents and .js/agents,
     which only reach the registry via cfg.prompt_roots. The singleton in cli.py meant
     every one of those agents was invisible as a tool, and selecting one printed
@@ -543,38 +676,49 @@ def registry_for_roots(
 
 
 def _swarm_tools() -> tuple[Tool, ...]:
-    # send and who: on every agent's surface under --swarm, selectable by
-    # agent.yaml like any tool otherwise. js.swarm imports the toolkit lazily.
-    from .. import swarm
-
-    return swarm.tools()
+    # The bus tools: on every swarm agent's surface (js.swarm_run), selectable by
+    # agent.yaml like any tool otherwise.
+    return bus_tools.tools()
 
 
 def build_default_registry(
     prompts_root: Path | Sequence[Path] | None = None,
     flags: tuple[str, ...] = ("model_override",),
+    *,
+    suites: Sequence[tuple[str, Sequence[Tool]]] | None = None,
 ) -> ToolRegistry:
-    """Assemble every builtin tool plus the agent tools under ``prompts_root``."""
-    suites = (
-        ("fs", fs.tools()),
-        ("shell", process_net.tools()),
-        ("search", search.tools()),
-        ("terminal", terminal.tools()),
-        ("browser", browser.tools()),
-        ("meta", meta.tools(flags)),
-        ("wiki", wiki.tools()),
-        ("kernel", kernel.tools()),
-        ("toolbox", toolbox.tools()),
-        ("lsp", lsp.tools()),
-        ("notebook", notebook.tools()),
-        ("swarm", _swarm_tools()),
-    )
+    """Assemble the supplied suites and agent roots, using the stock surface by default."""
+    if suites is None:
+        suites = (
+            *((suite.name, suite.tools()) for suite in tool_suites.COMPATIBILITY_SUITES),
+            ("fs", fs_tools.tools()),
+            ("shell", shell.tools() + fetch.tools()),
+            ("search", web_search.tools()),
+            ("jev", jev.tools()),
+            ("terminal", terminal.tools()),
+            ("browser", browser.tools()),
+            ("meta", plan.tools() + skill.tools() + subagents.tools(flags)),
+            ("wiki", wiki.tools()),
+            ("kernel", python_kernel.tools()),
+            ("toolbox", toolbox.tools()),
+            ("lsp", lsp.tools()),
+            ("notebook", notebook.tools()),
+            ("swarm", _swarm_tools()),
+        )
     base_tools = tuple(replace(tool, source=source) for source, tools in suites for tool in tools)
     reserved = {tool.name for tool in base_tools}
     reserved.add(discovery.DISCOVERY_TOOL_NAME)
-    all_tools = base_tools + _agent_tools(prompts_root or _default_prompts_root(), reserved)
+    roots = _default_prompts_root() if prompts_root is None else prompts_root
+    all_tools = base_tools + _agent_tools(roots, reserved)
     return _registry_from_tools(all_tools)
 
 
 def select(entries: Iterable[str] | None, prompts_root: Path | Sequence[Path] | None = None) -> ToolRegistry:
     return build_default_registry(prompts_root=prompts_root).select(entries)
+
+
+def stock_registry() -> ToolRegistry:
+    """Resolve the fallback tool surface after the invocation selects its home."""
+    registry = registry_for_roots(paths.agent_roots())
+    tools = tuple(tool for tool in registry.tools if tool.name not in tool_suites.COMPATIBILITY_TOOL_NAMES)
+    return _registry_from_tools(tools)

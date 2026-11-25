@@ -12,10 +12,15 @@ import time
 import types
 
 import pytest
+from repl_driver import record_turns, run_async as run_repl
+from test_runtime_offline_integration import offline_config
+from turn_driver import run_async as run_turn_async
 
-from js import attach, cli, runtime, supervisor
-from js.toolkit import ToolContext
-from js.toolkit import meta, task_jobs
+from js import (
+    runtime,
+    supervisor,
+)
+from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
 
 
@@ -47,7 +52,7 @@ class Workers:
 @pytest.fixture
 def workers(monkeypatch):
     fake = Workers()
-    monkeypatch.setattr(meta, "_run_one_task_async", fake.run)
+    monkeypatch.setattr(subagents, "_run_one_task_async", fake.run)
     monkeypatch.setattr(task_jobs, "_JOBS", {})
     yield fake
     fake.release.set()
@@ -91,12 +96,15 @@ def _notes(ctx: ToolContext) -> list[str]:
     return task_jobs.completion_notes(ctx.task_owner)
 
 
-def _sent(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
-    return cli._with_notes(bundle, cli._take_pending_notes(state))
-
-
-def _bundle() -> attach.UserMessageBundle:
-    return attach.UserMessageBundle({"role": "user", "content": "next"}, {"role": "user", "content": "next"})
+def _sent(monkeypatch, tmp_path, *lines: str) -> list[str]:
+    """The user message each prompt among `lines` starts its turn with, typed
+    into a REPL session."""
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+    run_repl(monkeypatch, cfg, list(lines), wait=True)
+    return [str(turn.messages[-1]["content"]) for turn in turns]
 
 
 def _subagent_ctx() -> ToolContext:
@@ -107,7 +115,7 @@ def _subagent_ctx() -> ToolContext:
 
 def test_background_returns_a_handle_while_the_worker_still_runs(workers, ctx):
     began = time.monotonic()
-    started = meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+    started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     assert time.monotonic() - began < 5
     handle = _handle(started)
     assert workers.started.wait(5)
@@ -115,40 +123,40 @@ def test_background_returns_a_handle_while_the_worker_still_runs(workers, ctx):
 
 
 def test_poll_reports_running_then_the_result(workers, ctx):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
-    polled = meta.task(action="poll", handle=handle, context=ctx)
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+    polled = subagents.task(action="poll", handle=handle, context=ctx)
     assert f"HANDLE {handle} RUNNING" in polled
 
     workers.release.set()
     _job(handle, ctx).future.result(timeout=5)
-    done = meta.task(action="poll", handle=handle, context=ctx)
+    done = subagents.task(action="poll", handle=handle, context=ctx)
     assert "RUNNING" not in done
     assert "result of alpha" in done
 
 
 def test_wait_blocks_for_the_result_and_a_timeout_returns_running(workers, ctx):
-    handle = _handle(meta.task(tasks=["alpha", "beta"], agent_id="worker", background=True, context=ctx))
-    assert "RUNNING" in meta.task(action="wait", handle=handle, timeout=1, context=ctx)
+    handle = _handle(subagents.task(tasks=["alpha", "beta"], agent_id="worker", background=True, context=ctx))
+    assert "RUNNING" in subagents.task(action="wait", handle=handle, timeout=1, context=ctx)
 
     threading.Timer(0.2, workers.release.set).start()
-    finished = meta.task(action="wait", handle=handle, context=ctx)
+    finished = subagents.task(action="wait", handle=handle, context=ctx)
     assert "TASK_RESULTS agent=worker" in finished
     assert "1. result of alpha" in finished and "2. result of beta" in finished
 
 
 def test_the_result_is_saved_where_the_handle_says(workers, ctx):
-    started = meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+    started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     job = _job(_handle(started), ctx)
     assert str(job.result_path) in started
     workers.release.set()
-    meta.task(action="wait", handle=job.id, timeout=5, context=ctx)
+    subagents.task(action="wait", handle=job.id, timeout=5, context=ctx)
     assert job.result_path.read_text(encoding="utf-8") == "result of alpha"
 
 
 def test_kill_cancels_the_workers(workers, ctx):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     assert workers.started.wait(5)
-    killed = meta.task(action="kill", handle=handle, context=ctx)
+    killed = subagents.task(action="kill", handle=handle, context=ctx)
     assert handle in killed and "RUNNING" not in killed
     assert workers.cancelled.wait(5)
     assert _job(handle, ctx).cancelled()
@@ -156,38 +164,36 @@ def test_kill_cancels_the_workers(workers, ctx):
 
 
 def test_handle_defaults_to_the_newest_running_task_and_unknown_is_an_error(workers, ctx):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
-    assert f"HANDLE {handle} RUNNING" in meta.task(action="poll", context=ctx)
-    assert meta.task(action="poll", handle="nope", context=ctx).startswith("ERROR")
-    assert meta.task(action="dance", context=ctx).startswith("ERROR")
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+    assert f"HANDLE {handle} RUNNING" in subagents.task(action="poll", context=ctx)
+    assert subagents.task(action="poll", handle="nope", context=ctx).startswith("ERROR")
+    assert subagents.task(action="dance", context=ctx).startswith("ERROR")
 
 
-def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx):
-    started = meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx, monkeypatch, tmp_path):
+    started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     job = _job(_handle(started), ctx)
     workers.release.set()
     job.future.result(timeout=5)
 
-    sent = _sent({}, _bundle())
-    text = sent.runtime_message["content"]
+    text, again = _sent(monkeypatch, tmp_path, "next", "again")
     assert text.startswith("next")
     note = re.search(r"<js-reminder>(.*?)</js-reminder>", text, re.S).group(1)
     assert job.id in note and str(job.result_path) in note
     # Only once.
-    again = _sent({}, _bundle())
-    assert "<js-reminder>" not in again.runtime_message["content"]
+    assert "<js-reminder>" not in again
 
 
 def test_a_result_already_read_gets_no_reminder(workers, ctx):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     workers.release.set()
-    meta.task(action="wait", handle=handle, timeout=5, context=ctx)
+    subagents.task(action="wait", handle=handle, timeout=5, context=ctx)
     assert _notes(ctx) == []
 
 
 def test_a_subagents_own_background_task_is_not_reminded_to_the_operator(workers, ctx):
     child = _subagent_ctx()
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=child))
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=child))
     workers.release.set()
     _job(handle, child).future.result(timeout=5)
     assert _notes(ctx) == []
@@ -195,15 +201,15 @@ def test_a_subagents_own_background_task_is_not_reminded_to_the_operator(workers
 
 
 def test_each_context_sees_only_its_own_tasks(workers, ctx):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     child = _subagent_ctx()
     # The subagent cannot reach the main agent's task, by handle or by default.
-    assert meta.task(action="poll", handle=handle, context=child).startswith("ERROR")
-    assert meta.task(action="poll", context=child).startswith("ERROR")
-    assert meta.task(action="kill", handle=handle, context=child).startswith("ERROR")
-    own = _handle(meta.task(tasks=["beta"], agent_id="worker", background=True, context=child))
+    assert subagents.task(action="poll", handle=handle, context=child).startswith("ERROR")
+    assert subagents.task(action="poll", context=child).startswith("ERROR")
+    assert subagents.task(action="kill", handle=handle, context=child).startswith("ERROR")
+    own = _handle(subagents.task(tasks=["beta"], agent_id="worker", background=True, context=child))
     # Without a handle the main agent gets its own task, not the newer one.
-    assert f"HANDLE {handle} RUNNING" in meta.task(action="poll", context=ctx)
+    assert f"HANDLE {handle} RUNNING" in subagents.task(action="poll", context=ctx)
     assert task_jobs.find(own, ctx.task_owner) is None
 
     workers.release.set()
@@ -213,20 +219,19 @@ def test_each_context_sees_only_its_own_tasks(workers, ctx):
     assert len(notes) == 1 and handle in notes[0]
 
 
-def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx, tmp_path):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx, monkeypatch, tmp_path):
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     workers.release.set()
     _job(handle, ctx).future.result(timeout=5)
-    cfg = types.SimpleNamespace(session_file=tmp_path / "session.jsonl")
-    cli._cmd_reset("", {"messages": []}, cfg)
-    assert "<js-reminder>" not in _sent({}, _bundle()).runtime_message["content"]
+    [sent] = _sent(monkeypatch, tmp_path, "/reset", "next")
+    assert "<js-reminder>" not in sent
 
 
 def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):
     workers.release.set()
     child = _subagent_ctx()
     for _ in range(task_jobs.KEEP_FINISHED_JOBS + 4):
-        handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=child))
+        handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=child))
         _job(handle, child).future.result(timeout=5)
     time.sleep(0.05)
     assert len(task_jobs._JOBS) <= task_jobs.KEEP_FINISHED_JOBS + 1
@@ -234,14 +239,14 @@ def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):
 
 def test_foreground_task_still_returns_the_result(workers, ctx):
     workers.release.set()
-    assert meta.task(tasks=["alpha"], agent_id="worker", context=ctx) == "result of alpha"
+    assert subagents.task(tasks=["alpha"], agent_id="worker", context=ctx) == "result of alpha"
 
 
 def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers, ctx, loop_sup):
     loop, sup = loop_sup
 
     async def turn() -> str:
-        return await meta.task_async(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+        return await subagents.task_async(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
 
     started = asyncio.run_coroutine_threadsafe(turn(), loop).result(timeout=5)
     handle = _handle(started)
@@ -249,7 +254,7 @@ def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers
     assert [job.kind for job in sup.jobs()] == ["subagent"]
 
     async def wait() -> str:
-        return await meta.task_async(action="wait", handle=handle, timeout=10, context=ctx)
+        return await subagents.task_async(action="wait", handle=handle, timeout=10, context=ctx)
 
     threading.Timer(0.2, workers.release.set).start()
     finished = asyncio.run_coroutine_threadsafe(wait(), loop).result(timeout=15)
@@ -259,39 +264,33 @@ def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers
 def test_a_sync_call_under_the_supervisor_runs_the_task_on_the_repl_loop(workers, ctx, loop_sup):
     _loop, sup = loop_sup
     # A dispatch thread calls the sync tool while the REPL loop is live.
-    started = meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+    started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     handle = _handle(started)
     assert workers.started.wait(5)
     deadline = time.monotonic() + 5
     while not sup.jobs() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert [job.kind for job in sup.jobs()] == ["subagent"]
-    assert "RUNNING" in meta.task(action="poll", handle=handle, context=ctx)
+    assert "RUNNING" in subagents.task(action="poll", handle=handle, context=ctx)
     threading.Timer(0.2, workers.release.set).start()
-    assert "result of alpha" in meta.task(action="wait", handle=handle, timeout=10, context=ctx)
+    assert "result of alpha" in subagents.task(action="wait", handle=handle, timeout=10, context=ctx)
 
 
 def test_kill_of_a_sync_started_task_under_the_supervisor_cancels_it(workers, ctx, loop_sup):
-    handle = _handle(meta.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
+    handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     assert workers.started.wait(5)
-    meta.task(action="kill", handle=handle, context=ctx)
+    subagents.task(action="kill", handle=handle, context=ctx)
     assert workers.cancelled.wait(5)
     assert _job(handle, ctx).cancelled()
 
 
-def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx, loop_sup):
+def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx, loop_sup, tmp_path, monkeypatch):
     loop, _sup = loop_sup
-    registry = ToolRegistry(meta.tools(), {})
+    registry = ToolRegistry(subagents.tools(), {})
 
     def dispatch(call_id: str, args: str) -> str:
-        pc = runtime._PendingToolCall(call_id, "task", [args])
-
-        async def go():
-            return await runtime._dispatch_fan_out_async(
-                pc, runtime.Telemetry(None), 256 * 1024, False,
-                runtime.ToolErrorTracker(), registry, ctx)
-
-        return asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=10)[2]
+        turn = run_turn_async(tmp_path, monkeypatch, registry, [[(call_id, "task", args)]], context=ctx)
+        return asyncio.run_coroutine_threadsafe(turn, loop).result(timeout=10).results()[call_id]
 
     started = dispatch("c1", '{"tasks": ["alpha"], "agent_id": "worker", "background": true}')
     handle = _handle(started)
@@ -306,7 +305,7 @@ def test_kill_under_the_supervisor_does_not_block_the_loop(workers, ctx, loop_su
     loop, _sup = loop_sup
 
     async def call(**kwargs) -> str:
-        return await meta.task_async(context=ctx, **kwargs)
+        return await subagents.task_async(context=ctx, **kwargs)
 
     started = asyncio.run_coroutine_threadsafe(
         call(tasks=["alpha"], agent_id="worker", background=True), loop).result(timeout=5)
@@ -317,3 +316,23 @@ def test_kill_under_the_supervisor_does_not_block_the_loop(workers, ctx, loop_su
     assert handle in killed and "RUNNING" not in killed
     assert time.monotonic() - began < task_jobs.KILL_GRACE_S
     assert workers.cancelled.wait(5)
+
+
+def test_background_task_accepts_its_scheduler(monkeypatch):
+    from concurrent.futures import Future
+
+    monkeypatch.setattr(task_jobs, "_JOBS", {})
+    scheduled = []
+    def schedule(coro, label, settle):
+        scheduled.append(label)
+        outcome = Future()
+        outcome.set_result(asyncio.run(coro))
+        settle(outcome)
+        return outcome.cancel
+    async def worker(idx, item):
+        return item.upper()
+    job = task_jobs.start([(1, "work")], worker, lambda results: results[0],
+                          agent_id="worker", depth=1, owner="caller", schedule=schedule)
+    assert len(scheduled) == 1
+    assert job.result() == "WORK"
+    assert job.result_path.read_text() == "WORK"

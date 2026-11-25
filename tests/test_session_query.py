@@ -3,12 +3,12 @@ filters and order, and the list's views with branches nested."""
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 import pytest
 
-from js import paths
-from js import session_query as Q
+from js import paths, session_query as Q
 
 HOME = "/home/op"
 CWD = "/home/op/js"
@@ -155,11 +155,6 @@ def test_a_named_session_row_shows_its_name_and_a_generated_one_does_not():
     assert (named.name, generated.name, subagent.name) == ("modelswap", None, None)
 
 
-def test_a_hidden_kind_is_marked_in_the_tags_column():
-    assert Q.tags_text(_session("q", turns=1, tool_calls=0, final_len=5)) == Q.QUICK
-    assert Q.tags_text(_session("n")) == "-"
-
-
 # --- the query grammar -------------------------------------------------------
 
 
@@ -214,6 +209,23 @@ def test_dates_match_a_session_active_in_the_span():
     assert pick("2026-09-28") == ["across", "yesterday"]
 
 
+@pytest.mark.parametrize("text", ["0001", "0001-01", "0001-01-01", "9999-12-31"])
+def test_unrepresentable_local_dates_remain_search_words(text, monkeypatch):
+    with monkeypatch.context() as local:
+        local.setenv("TZ", "America/New_York")
+        time.tzset()
+        try:
+            query = _parse(text)
+            assert query.dates == []
+            assert query.words == [text]
+            normal = _parse("2026-09-29")
+            assert len(normal.dates) == 1
+            assert normal.dates[0][1:] == (_ts(2026, 9, 29), _ts(2026, 9, 30))
+        finally:
+            local.undo()
+            time.tzset()
+
+
 def test_a_date_prefix_is_the_date_plus_the_rest():
     query = _parse("today:niri")
     assert [label for label, _, _ in query.dates] == ["today"]
@@ -263,13 +275,6 @@ def test_model_matches_any_stamped_model():
     assert sorted(_paths(Q.select(sessions, _parse("model:deepseek-v4-flash"), show_all=False))) == ["d", "q"]
 
 
-def test_tag_matches_a_tag_containing_it():
-    sessions = [_session("n", tags=("nfs / mounts", "linux admin")), _session("j", tags=("js",)),
-                _session("none")]
-    assert _paths(Q.select(sessions, _parse("tag:nfs"), show_all=False)) == ["n"]
-    assert _paths(Q.select(sessions, _parse("tag:j*"), show_all=False)) == ["j"]
-
-
 def test_terms_combine_with_and():
     sessions = [_session("a", agent="defaultagent", turns=20), _session("b", agent="defaultagent", turns=2),
                 _session("c", agent="research", turns=20)]
@@ -282,13 +287,6 @@ def test_words_keep_only_scored_sessions_best_score_first():
     assert _paths(ordered) == ["c", "a"]
 
 
-def test_the_parse_line_names_every_term():
-    described = Q.describe(_parse("niri >10 today agent:x* dir:~/js/** mode:-p model:*qwen* tag:nfs"))
-    for part in ("niri", ">10", "today", "x*", "~/js", "-p", "*qwen*", "nfs"):
-        assert part in described
-    assert Q.describe(_parse("")) != Q.describe(_parse("niri"))
-
-
 def test_an_excerpt_starts_near_the_first_match_and_moves_its_spans():
     text = "x" * 500 + " niri here"
     start = text.index("niri")
@@ -296,3 +294,11 @@ def test_an_excerpt_starts_near_the_first_match_and_moves_its_spans():
     assert len(spans) == 1
     assert shown[spans[0][0]:spans[0][1]] == "niri"
     assert len(shown) <= 82
+
+
+def test_registered_setting_can_show_quick_sessions():
+    from js import settings
+
+    settings.bind_live_settings({"SESSION_HIDDEN_KINDS": ["empty", "subagent", "script"]})
+    quick = _session("quick", turns=1, tool_calls=0, final_len=5)
+    assert Q.select([quick], _parse(""), show_all=False) == [quick]

@@ -1,0 +1,75 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": null,
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "the first half"
+    }
+   ],
+   "provider_metadata": null,
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "completion_tokens": 5,
+     "prompt_tokens": 5,
+     "total_tokens": 10
+    },
+    "reasoning_tokens": null
+   }
+  }
+ ],
+ "live_body": [
+  {
+   "content": "the first half",
+   "reasoning_content": "weigh it",
+   "role": "assistant"
+  }
+ ],
+ "records": [
+  {
+   "content": "the first half",
+   "incomplete_reason": "max_output_tokens",
+   "reasoning_content": "weigh it",
+   "role": "assistant"
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": null,
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "the first half"
+    }
+   ],
+   "provider_metadata": null,
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "content": "the first half",
+   "reasoning_content": "weigh it",
+   "role": "assistant"
+  }
+ ]
+}

@@ -10,10 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from js import memory as M
-from js import session_index, session_store, session_text
-from js import session_query as Q
-from js.session_catalog import append_title, record_session_start
+from js import memory as M, session_index, session_query as Q, session_store, session_text
+from js.session_catalog import append_title, record_model_switch, record_session_start
 
 STAMP = M.stamp_for("deepseek-v4-flash", "deepseek", "high")
 
@@ -67,6 +65,37 @@ def test_every_write_keeps_the_catalog_entry_current_without_a_reparse(tmp_path,
     assert entry["models"] == ["deepseek-v4-flash"]
 
 
+def test_the_picker_model_tracks_a_switch_before_the_next_reply(tmp_path):
+    path = _session(tmp_path / "proj")
+    _say(path, "hello", "reply")
+    switched = M.stamp_for("other-model", "other-provider", "low")
+    record_model_switch(path, stamp=switched, previous=STAMP)
+
+    entry = _by_path(session_index.catalog())[_key(path)]
+    assert entry["last_stamp"] == switched
+    assert Q.Session.from_summary(entry).model == "other-model"
+
+
+def test_picker_rebuilds_model_state_cached_before_switches_were_parsed(tmp_path):
+    path = _session(tmp_path / "proj")
+    _say(path, "hello", "reply")
+    switched = M.stamp_for("other-model", "other-provider", "low")
+    record_model_switch(path, stamp=switched, previous=STAMP)
+    transcript = session_text.parse(path)
+    old_summary = transcript.summary()
+    old_summary["last_stamp"] = STAMP
+    info = path.stat()
+    session_index.store(path, old_summary, transcript.search_lines(),
+                        size=info.st_size, mtime_ns=info.st_mtime_ns)
+    with sqlite3.connect(session_index.db_path()) as connection:
+        connection.execute("PRAGMA user_version = 1")
+    session_index.close()
+
+    entry = _by_path(session_index.catalog())[_key(path)]
+    assert entry["last_stamp"] == switched
+    assert Q.Session.from_summary(entry).model == "other-model"
+
+
 def test_a_file_written_behind_the_index_is_caught_up_on_open(tmp_path):
     path = _session(tmp_path / "proj")
     _say(path, "first", "one")
@@ -94,14 +123,25 @@ def test_an_unreadable_index_is_rebuilt(tmp_path):
     assert set(_by_path(session_index.catalog())) == {_key(path)}
 
 
-def test_a_wiped_or_deleted_session_leaves_the_catalog(tmp_path):
+def test_rebuilding_the_index_keeps_sessions_with_lone_surrogates_searchable(tmp_path):
+    path = _session(tmp_path / "proj")
+    _say(path, "question", "needle\udcff")
+    source = path.read_bytes()
+    session_index.reset()
+
+    assert set(_by_path(session_index.catalog())) == {_key(path)}
+    assert set(_search("needle")) == {_key(path)}
+    assert path.read_bytes() == source
+
+
+def test_a_wiped_session_is_catalogued_where_it_moved_and_a_deleted_one_leaves(tmp_path):
     wiped = _session(tmp_path / "a")
     _say(wiped, "hello", "hi")
     deleted = _session(tmp_path / "b")
     _say(deleted, "bye", "ok")
-    M.wipe(wiped)
+    moved = M.wipe(wiped)
     deleted.unlink()
-    assert _by_path(session_index.catalog()) == {}
+    assert set(_by_path(session_index.catalog())) == {_key(moved)}
 
 
 def test_subagent_runs_and_titles_are_catalogued(tmp_path):
@@ -172,3 +212,159 @@ def test_rolled_back_rows_leave_the_search_text(tmp_path):
     M.persist_messages(path, [{"role": "user", "content": "giraffe question"}], STAMP)
     assert set(_search("giraffe")) == {_key(path)}
     assert _search("zebra") == {}
+
+
+# --- recovery must always re-probe --------
+
+import fcntl  # noqa: E402
+import sqlite3  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+
+def test_recover_keeps_a_healthy_file_even_when_its_identity_matches_the_failed_one(tmp_path):
+    # A freed inode number is reused, so (dev, ino) equality does not prove
+    # this is the file that failed. Under the lock the file is probed again.
+    path = tmp_path / "index.sqlite"
+    session_index._open(path).close()
+    seen = session_index._identity(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO sessions(path,size,mtime_ns,info) VALUES ('SURVIVOR',0,0,'{}')")
+    recovered = session_index._recover(path, seen)
+    assert recovered.execute("SELECT count(*) FROM sessions").fetchone()[0] == 1
+    recovered.close()
+
+
+def test_recover_still_rebuilds_a_file_that_is_corrupt_under_the_lock(tmp_path):
+    path = tmp_path / "index.sqlite"
+    path.write_bytes(b"not a database" * 64)
+    recovered = session_index._recover(path)
+    assert recovered.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+    recovered.close()
+
+
+def test_recover_rebuilds_a_file_whose_table_pages_are_damaged(tmp_path):
+    # `_open` counts rows through the small UNIQUE(path) index, so a damaged
+    # page of the sessions table passes it while every catalog walk fails.
+    path = tmp_path / "index.sqlite"
+    session_index._open(path).close()
+    connection = sqlite3.connect(path)
+    connection.executemany("INSERT INTO sessions(path,size,mtime_ns,info) VALUES (?,0,0,?)",
+                           [(f"s{i}", "x" * 1500) for i in range(300)])
+    connection.commit()
+    connection.execute("PRAGMA journal_mode = DELETE").fetchall()
+    page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+    leaves = [row[0] for row in connection.execute(
+        "SELECT pageno FROM dbstat WHERE name = 'sessions' AND pagetype = 'leaf' ORDER BY pageno")]
+    connection.close()
+    data = bytearray(path.read_bytes())
+    page = leaves[len(leaves) // 2]
+    data[(page - 1) * page_size:page * page_size] = b"\xff" * page_size
+    path.write_bytes(bytes(data))
+    session_index._open(path).close()
+    recovered = session_index._recover(path)
+    try:
+        assert recovered.execute("SELECT path FROM sessions").fetchall() == []
+    finally:
+        recovered.close()
+
+
+def test_recover_rebuilds_a_file_whose_search_index_is_damaged(tmp_path):
+    # Damage inside the FTS5 shadow tables is reported by quick_check as a
+    # row, not raised, and `_open`'s probe never reads those tables.
+    path = tmp_path / "index.sqlite"
+    session_index._open(path).close()
+    connection = sqlite3.connect(path)
+    for number in range(1, 51):
+        connection.execute("INSERT INTO sessions(path,size,mtime_ns,info) VALUES (?,0,0,'{}')", (f"s{number}",))
+        connection.execute("INSERT INTO docs(rowid,text,lines) VALUES (?,?,'[]')", (number, f"hello word{number}"))
+    connection.execute("UPDATE docs_data SET block = zeroblob(length(block)) WHERE id > 10")
+    connection.commit()
+    connection.close()
+    recovered = session_index._recover(path)
+    try:
+        assert recovered.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+    finally:
+        recovered.close()
+
+
+def test_a_catalog_walk_that_hits_a_damaged_search_index_rebuilds_it(tmp_path):
+    # A write into damaged FTS5 pages can fail at COMMIT, after SQLite has
+    # already rolled the transaction back itself.
+    first = _session(tmp_path / "a")
+    _say(first, "alpha", "beta")
+    session_index.catalog()
+    connection = sqlite3.connect(session_index.db_path())
+    connection.execute("UPDATE docs_data SET block = zeroblob(length(block)) WHERE id > 10")
+    connection.commit()
+    connection.close()
+    session_index.close()
+    second = _session(tmp_path / "b")
+    _say(second, "gamma", "delta")
+    for number in range(40):
+        _say(second, f"line{number} words", f"reply{number} words")
+    assert set(_by_path(session_index.catalog())) == {_key(first), _key(second)}
+    assert set(_search("gamma")) == {_key(second)}
+
+
+def test_a_failed_rebuild_lock_closes_its_stream(tmp_path):
+    lock = session_index._RebuildLock(tmp_path / "index.sqlite")
+    opened = []
+    real_open = open
+
+    def spy(*args, **kwargs):
+        stream = real_open(*args, **kwargs)
+        opened.append(stream)
+        return stream
+
+    with patch("builtins.open", spy), patch.object(fcntl, "flock", side_effect=PermissionError("no")):
+        with pytest.raises(PermissionError):
+            lock.__enter__()
+    assert opened and all(stream.closed for stream in opened)
+
+
+class _Corrupt(sqlite3.DatabaseError):
+    sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+
+
+class _Busy(sqlite3.OperationalError):
+    sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+
+def test_corrupt_mid_walk_after_a_cached_connection_recovers_once(tmp_path):
+    path = tmp_path / "sessions.sqlite"
+    calls = []
+
+    def fail_once(root):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _Corrupt("injected corrupt mid-walk")
+        return []
+
+    with patch.object(session_index, "db_path", return_value=path), \
+            patch.object(session_index, "_catalog", side_effect=fail_once):
+        session_index._connection()
+        assert session_index.catalog(tmp_path) == []
+        session_index.close()
+    assert len(calls) == 2
+
+
+def test_a_busy_catalog_is_retried_and_deletes_nothing(tmp_path):
+    calls = []
+
+    def busy_twice(root):
+        calls.append(1)
+        if len(calls) < 3:
+            raise _Busy("database is locked")
+        return ["ok"]
+
+    with patch.object(session_index, "_catalog", side_effect=busy_twice), \
+            patch.object(session_index, "_remove", side_effect=AssertionError("deleted")):
+        assert session_index.catalog(tmp_path) == ["ok"]
+    assert len(calls) == 3
+
+
+def test_a_catalog_busy_three_times_raises_and_deletes_nothing(tmp_path):
+    with patch.object(session_index, "_catalog", side_effect=_Busy("database is locked")), \
+            patch.object(session_index, "_remove", side_effect=AssertionError("deleted")):
+        with pytest.raises(sqlite3.OperationalError):
+            session_index.catalog(tmp_path)

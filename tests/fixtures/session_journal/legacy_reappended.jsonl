@@ -1,0 +1,18 @@
+{"kind":"message","message":{"role":"user","content":"yo"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"yo KING"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"user","content":"read it"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"assistant","content":"yo KING"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"message","message":{"role":"user","content":"read it"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_X","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"call_X","content":"file text"},"ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"message","message":{"role":"assistant","content":"read it all"},"ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"message","message":{"role":"user","content":"count"},"ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}
+{"kind":"message","message":{"role":"assistant","content":"yo KING"},"ts":1790000010.0,"version":1,"id":"r010","parent":"r009"}
+{"kind":"message","message":{"role":"user","content":"read it"},"ts":1790000011.0,"version":1,"id":"r011","parent":"r010"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_X","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000012.0,"version":1,"id":"r012","parent":"r011"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"call_X","content":"file text"},"ts":1790000013.0,"version":1,"id":"r013","parent":"r012"}
+{"kind":"message","message":{"role":"assistant","content":"read it all"},"ts":1790000014.0,"version":1,"id":"r014","parent":"r013"}
+{"kind":"message","message":{"role":"user","content":"count"},"ts":1790000015.0,"version":1,"id":"r015","parent":"r014"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_Y","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000016.0,"version":1,"id":"r016","parent":"r015"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"call_Y","content":"42"},"ts":1790000017.0,"version":1,"id":"r017","parent":"r016"}
+{"kind":"message","message":{"role":"assistant","content":"counted"},"ts":1790000018.0,"version":1,"id":"r018","parent":"r017"}

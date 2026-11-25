@@ -2,16 +2,26 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import ai
+from repl_driver import run_async, turn_stub
+from turn_driver import js
 
-from js import attach, cli, model_client, runtime
+from js import (
+    attach,
+    cli,
+    history_record,
+    media,
+    prompt_run,
+    run_assembly,
+    runtime,
+)
 from js.config import Config
-from js.memory import load_messages
+from js.memory import append_message, load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import run_blocking
-
 
 _TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -70,10 +80,10 @@ def test_prompt_file_text_attachment_inlines_content(monkeypatch, tmp_path, caps
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("TEXT_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("summarize", files=[str(note)])
+    actual = js(monkeypatch, "--file", str(note), "-p", "summarize")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "TEXT_OK"
@@ -82,6 +92,23 @@ def test_prompt_file_text_attachment_inlines_content(monkeypatch, tmp_path, caps
     assert "alpha\nbeta" in seen[0]
     persisted = load_messages(cfg.session_file)
     assert persisted[0] == {"role": "user", "content": seen[0]}
+
+
+def test_prompt_at_path_attaches_the_file(monkeypatch, tmp_path, capsys):
+    note = tmp_path / "prompt.txt"
+    note.write_text("review these commits\n", encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    seen: list[str] = []
+
+    def stream_model_stub(**kwargs):
+        seen.append(kwargs["messages"][-1].parts[0].text)
+        return _fake_stream_result("AT_OK")
+
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
+
+    assert js(monkeypatch, "-p", f"@{note}") == 0
+    assert "review these commits" in seen[0]
 
 
 def test_prompt_dash_file_reads_stdin_bytes_as_attachment(monkeypatch):
@@ -96,7 +123,7 @@ def test_prompt_dash_file_reads_stdin_bytes_as_attachment(monkeypatch):
         def read(self):  # pragma: no cover - -f - must consume buffer bytes instead
             raise AssertionError("text stdin reader should not be used for -f -")
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     assert cli.main(["-f", "-", "-p", "summarize paste"]) == 0
@@ -112,10 +139,17 @@ def test_prompt_stdin_attachment_reaches_the_model(monkeypatch, tmp_path, capsys
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("STDIN_FILE_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
+    class PipedStdin:
+        buffer = io.BytesIO(b"pasted attachment\n")
 
-    actual = cli._run_prompt("summarize paste", files=["-"], stdin_attachment=b"pasted attachment\n")
+        def isatty(self):
+            return False
+
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
+    monkeypatch.setattr(cli.sys, "stdin", PipedStdin())
+
+    actual = cli.main(["--file", "-", "-p", "summarize paste"])
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "STDIN_FILE_OK"
@@ -129,7 +163,7 @@ def test_history_to_ai_messages_preserves_user_file_part():
         ai.types.messages.FilePart(data=_TINY_PNG, media_type="image/png"),
     ]
 
-    messages = model_client.history_to_ai_messages("", [{"role": "user", "content": content}])
+    messages = history_record.history_to_ai_messages("", [{"role": "user", "content": content}])
 
     assert len(messages) == 1
     assert messages[0].role == "user"
@@ -149,10 +183,10 @@ def test_prompt_file_image_attachment_sends_file_part_and_persists_stub(monkeypa
         seen.append(kwargs["messages"][-1])
         return _fake_stream_result("IMAGE_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("what is this?", files=[str(image)])
+    actual = js(monkeypatch, "--file", str(image), "-p", "what is this?")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "IMAGE_OK"
@@ -183,10 +217,10 @@ def test_prompt_file_image_vision_off_falls_back_to_text(monkeypatch, tmp_path, 
         seen.append(kwargs["messages"][-1])
         return _fake_stream_result("NO_VISION_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("what is this?", files=[str(image)])
+    actual = js(monkeypatch, "--file", str(image), "-p", "what is this?")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "NO_VISION_OK"
@@ -205,9 +239,9 @@ def test_repl_at_file_attaches_text_file(monkeypatch, tmp_path, capsys):
     def run_turn_stub(_cfg, _system, messages, _telemetry, **kwargs):
         seen.append(messages[-1]["content"])
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, [f"summarize @{note}", "exit"])
+    run_async(monkeypatch, cfg, [f"summarize @{note}", "exit"], wait=True)
 
     # Position-aware @token removal leaves the separator space that preceded the
     # token untouched (byte-for-byte outside the removed span) — unlike the old
@@ -227,10 +261,10 @@ def test_prompt_file_binary_attachment_uses_descriptor(monkeypatch, tmp_path, ca
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("BINARY_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("inspect", files=[str(binary)])
+    actual = js(monkeypatch, "--file", str(binary), "-p", "inspect")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "BINARY_OK"
@@ -246,10 +280,10 @@ def test_missing_attachment_fails_without_model_call(monkeypatch, tmp_path):
     def stream_model_stub(**kwargs):  # pragma: no cover - must not be called
         raise AssertionError("model should not be called for a missing attachment")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("summarize", files=[str(tmp_path / "missing.txt")])
+    actual = js(monkeypatch, "--file", str(tmp_path / "missing.txt"), "-p", "summarize")
 
     assert actual == 2
     assert load_messages(cfg.session_file) == []
@@ -266,6 +300,12 @@ def test_split_repl_attachments_apostrophe_does_not_drop_attachment(tmp_path):
     assert f"@{note}" not in prompt
     assert "isn't it great" in prompt
     assert "summarize" in prompt
+
+
+def test_split_repl_attachments_uses_supplied_prefix():
+    assert attach.split_repl_attachments('isn\'t %"a b.png" @prose', prefix="%") == (
+        "isn't  @prose", ["a b.png"],
+    )
 
 
 def test_split_repl_attachments_preserves_prose_byte_for_byte():
@@ -292,15 +332,174 @@ def test_split_repl_attachments_quoted_path_with_spaces_still_works():
     assert "my file.png" not in prompt
 
 
-def test_looks_text_accepts_utf8_split_at_read_boundary():
+def _inlined(tmp_path, data: bytes, cap: int, marker: str) -> bool:
+    """Whether ``marker`` is inlined when a file of ``data`` is attached under
+    a text cap of ``cap`` bytes."""
+    path = tmp_path / "sample.dat"
+    path.write_bytes(data)
+    return marker in attach.build_user_message("read", [str(path)], _cfg(tmp_path), room_bytes=cap)["content"]
+
+
+def test_looks_text_accepts_utf8_split_at_read_boundary(tmp_path):
     """A valid-UTF8 sample whose trailing multibyte char is cut by the byte cap must
     still classify as text; only genuinely invalid bytes should read as binary."""
-    full = ("x" * 8 + "€").encode("utf-8")   # € is 3 bytes: \xe2\x82\xac
-    assert attach._looks_text(full[:-1]) is True   # last byte of € dropped
-    assert attach._looks_text(full[:-2]) is True   # two bytes of € dropped
-    assert attach._looks_text(b"ab\xffcd") is False  # invalid byte mid-content
+    full = ("x" * 16 + "€").encode("utf-8")   # € is 3 bytes: \xe2\x82\xac
+    assert _inlined(tmp_path, full, 17, "x" * 16) is True   # the sample drops the last byte of €
+    assert _inlined(tmp_path, full, 16, "x" * 16) is True   # the sample drops two bytes of €
+    assert _inlined(tmp_path, b"qq\xffzz", 100, "qq") is False  # invalid byte mid-content
 
 
 def test_split_repl_attachments_bare_at_signs_are_prose():
     line = "WTF IS THAT @ ERROR, and @@ too"
     assert attach.split_repl_attachments(line) == (line, [])
+
+
+def test_split_repl_attachments_backslash_escaped_space():
+    r"""`@a\ b.png` (tab-completed / drag-dropped) names `a b.png`, like shlex."""
+    prompt, attachments = attach.split_repl_attachments(r"look @a\ b.png now")
+    assert attachments == ["a b.png"]
+    assert prompt == "look  now"
+
+
+def test_split_repl_attachments_quoted_path_beside_prose_apostrophe():
+    """A prose apostrophe must not mangle a quoted @path elsewhere on the line."""
+    prompt, attachments = attach.split_repl_attachments('isn\'t @"a b.png" great')
+    assert attachments == ["a b.png"]
+    assert prompt == "isn't  great"
+
+
+def test_split_repl_attachments_apostrophe_keeps_escaped_and_plain_paths():
+    prompt, attachments = attach.split_repl_attachments(r"don't @x\ y.txt or @z.md")
+    assert attachments == ["x y.txt", "z.md"]
+    assert prompt == "don't  or "
+
+
+def test_split_repl_attachments_open_quote_in_at_token_is_literal():
+    """An @token whose own quote never closes stays literal text, not a run to EOL."""
+    prompt, attachments = attach.split_repl_attachments("see @it's.txt here")
+    assert attachments == ["it's.txt"]
+    assert prompt == "see  here"
+
+
+def test_looks_text_rejects_nul_past_first_4k(tmp_path):
+    """The NUL check must cover the whole sample, not only its first 4096 bytes."""
+    assert _inlined(tmp_path, b"a" * 5000 + b"\x00", 65536, "aaaa") is False
+
+
+def test_split_repl_attachments_same_path_twice_attaches_once():
+    prompt, attachments = attach.split_repl_attachments("diff @a.png and @a.png")
+    assert attachments == ["a.png"]
+    assert "@a.png" not in prompt
+
+
+def test_image_suffix_without_image_bytes_is_text(tmp_path):
+    """A `.png` holding text is not sent as image/png; it is inlined as text."""
+    fake = tmp_path / "fake.png"
+    fake.write_text("hello", encoding="utf-8")
+    message = attach.build_user_message("look", [str(fake)], _cfg(tmp_path, vision=True))
+    assert "media" not in message
+    assert "Attached file:" in message["content"]
+    assert "hello" in message["content"]
+
+
+def test_real_png_still_attaches_as_image(tmp_path):
+    png = tmp_path / "shot.png"
+    png.write_bytes(_TINY_PNG)
+    message = attach.build_user_message("look", [str(png)], _cfg(tmp_path, vision=True))
+    [part] = message["media"]
+    assert part["mime"] == "image/png"
+    assert media.load(part) == _TINY_PNG
+    # The session keeps the reference; the model gets the bytes, every turn.
+    [user] = history_record.history_to_ai_messages("", [message], vision=True)
+    assert user.parts[-1].media_type == "image/png"
+    assert user.parts[-1].data == _TINY_PNG
+    assert _TINY_PNG not in json.dumps(message).encode()
+
+
+def test_oversized_image_is_sent_fitted_and_says_so(tmp_path):
+    """An image over 2000 px is attached scaled to fit 2000 x 2000, its aspect
+    kept; the text says so, and the file on disk is unchanged."""
+    from PIL import Image
+
+    png = tmp_path / "wide.png"
+    Image.new("RGB", (4000, 500), (200, 30, 30)).save(png)
+    original = png.read_bytes()
+    message = attach.build_user_message("look", [str(png)], _cfg(tmp_path, vision=True))
+    [part] = message["media"]
+    with Image.open(io.BytesIO(media.load(part))) as sent:
+        assert sent.size == (2000, 250)
+    assert "4000x500" in message["content"] and "2000x250" in message["content"]
+    assert png.read_bytes() == original
+
+
+def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):
+    note = tmp_path / "long.txt"
+    note.write_bytes(b"x" + ("é" * 50000).encode("utf-8"))  # odd offset: the cap lands mid-character
+    text = attach.build_user_message("read", [str(note)], _cfg(tmp_path), room_bytes=65536)["content"]
+    assert "[truncated to" in text
+    assert "\ufffd" not in text
+
+
+def test_split_repl_attachments_keeps_bare_mention_as_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "notes").write_text("x")
+    prompt, attachments = attach.split_repl_attachments("tell @all hi, see @notes and @a.png")
+    assert "@all" in prompt
+    assert attachments == ["notes", "a.png"]
+
+
+def test_repl_missing_attachment_becomes_note(tmp_path):
+    message = attach.build_user_message("look", ["gone.png"], _cfg(tmp_path), cwd=tmp_path, missing_ok=True)
+    assert message["content"].startswith("look")
+    assert "gone.png" in message["content"]
+
+
+def test_at_directory_becomes_a_reference_not_an_error(tmp_path):
+    (tmp_path / "proj").mkdir()
+    message = attach.build_user_message("look in please", ["proj"], _cfg(tmp_path), cwd=tmp_path)
+    assert message["content"] == f"look in please\n\n[User referred to directory {tmp_path / 'proj'}]"
+
+
+def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch, tmp_path):
+    cfg = _cfg(tmp_path)
+    for message in ({"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
+                    {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}):
+        append_message(cfg.session_file, message)
+    clipboard = tmp_path / "clipboard"
+    copy = tmp_path / "copy.sh"
+    copy.write_text(f"cat >> {clipboard}\nprintf '<end>' >> {clipboard}\n", encoding="utf-8")
+
+    run_async(monkeypatch, cfg, [f"/set COPY_COMMAND sh {copy}", "/copy", "/copy 2"])
+
+    assert clipboard.read_bytes() == b"a long line\nsecond\n<end>first answer\n<end>"
+
+def test_the_files_of_one_message_share_its_room(tmp_path):
+    (tmp_path / "a.txt").write_text("A" * 60)
+    (tmp_path / "b.txt").write_text("B" * 60)
+    content = attach.build_user_message(
+        "read", ["a.txt", "b.txt"], _cfg(tmp_path), cwd=tmp_path, room_bytes=100)["content"]
+    assert "A" * 60 in content
+    assert "B" * 40 in content
+    assert "B" * 41 not in content
+
+
+def test_the_room_is_a_share_of_the_context_left_before_compaction(tmp_path):
+    from js import context_window
+
+    cfg = replace(_cfg(tmp_path), max_output_tokens=0, settings={
+        "CONTEXT_SIZE": 100_000, "COMPACTION_START_AT": 0.8, "COMPACTION_HEADROOM_TOKENS": 0,
+        "ATTACHMENT_CONTEXT_MAX": 0.5, "COMPACTION_CHARS_PER_TOKEN": 4.0,
+    })
+    fresh = context_window.attachment_room_bytes(cfg)
+    assert fresh == 40_000 * 4
+    history = [{"role": "user", "content": "h" * 100_000}]
+    assert context_window.attachment_room_bytes(cfg, "", history) < fresh
+    full = [{"role": "user", "content": "h" * 400_000}]
+    assert context_window.attachment_room_bytes(cfg, "", full) == 0
+
+
+def test_a_cut_attachment_is_named_to_the_operator(tmp_path, monkeypatch):
+    warned = []
+    monkeypatch.setattr(attach.msgs, "warn", lambda message, **fields: warned.append((message, fields)))
+    _inlined(tmp_path, b"a" * 50, 10, "a")
+    assert warned == [(attach.msgs.ATTACHMENT_TRUNCATED, {"path": str(tmp_path / "sample.dat"), "size": 50, "cap": 10})]

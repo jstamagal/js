@@ -1,0 +1,15 @@
+# claude: Claude Code's default dark theme.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
+
+fset PALETTE_00 #ffffff
+fset PALETTE_02 #373737
+fset PALETTE_03 #4eba65
+fset PALETTE_04 #ff6b80
+fset PALETTE_06 #b1b9f9
+fset PALETTE_07 #ffc107
+fset PALETTE_10 #ffffff
+fset PALETTE_12 #b1b9f9
+fset PALETTE_13 #d77757
+fset PALETTE_14 #999999
+fset PALETTE_93 #505050
+fset PALETTE_94 #999999

@@ -11,9 +11,20 @@ from typing import Any
 
 import yaml
 
+from . import (
+    messages as msgs,
+    model_profiles,
+    paths,
+    secret_patterns,
+    settings,
+    snippets,
+)
+from .cli_options import current
+from .config import apply_route
 from .promptexpand import expand_prompt, session_variables
+from .routing import resolve_model_route
 from .toolkit import policy
-from . import settings
+from .toolkit.registry import registry_for_roots
 
 
 @dataclass(frozen=True)
@@ -30,6 +41,11 @@ class PromptSpec:
     # model is sent; for a spec that was never expanded the two are equal.
     source: str = ""
     exchanges: tuple[AgentExchange, ...] = ()
+    models: tuple[model_profiles.ModelProfile, ...] = ()  # agent.yaml `models:` entries
+    # The profile matched for the model and provider the spec was built for,
+    # whether or not it was applied; `for_model` compares against it.
+    model_profile: model_profiles.ModelProfile | None = None
+    tool_aliases: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.source:
@@ -75,7 +91,7 @@ def _load_exchanges(md_files: list[Path]) -> tuple[AgentExchange, ...]:
         role = match[2]
         exchange = numbered.setdefault(number, {})
         if role in exchange:
-            raise ValueError(f"duplicate {role} file for exchange {number}: {path}")
+            raise ValueError(msgs.AGENT_MANIFEST_DUPLICATE_FILE_FOR_EXCHANGE.format(role=role, number=number, path=path))
         with path.open(encoding="utf-8", newline="") as stream:
             exchange[role] = stream.read()
     return tuple(AgentExchange(number, **numbered[number]) for number in sorted(numbered))
@@ -86,22 +102,41 @@ def _is_zero_file(path: Path) -> bool:
     return stem == "00" or stem.startswith("00-") or stem.startswith("00_")
 
 
+def _ends_in_keyword(path: Path, keyword: str) -> bool:
+    stem = path.stem
+    return stem == keyword or stem.endswith(f"-{keyword}") or stem.endswith(f"_{keyword}")
+
+
 def _is_benchmark_file(path: Path) -> bool:
     """A NN-benchmark.md (or bare benchmark.md) file: a --bench turn, never part
-    of the system prompt. Excluded universally so `--agent` does not suck
-    benchmark bodies into the persona."""
-    stem = path.stem
-    return stem == "benchmark" or stem.endswith("-benchmark") or stem.endswith("_benchmark")
+    of the system prompt."""
+    return _ends_in_keyword(path, "benchmark")
+
+
+# The kinds of .md file an agent directory holds, named by the stem's last
+# word: NN-prompt.md, NN-env.md, NN-benchmark.md, NN-user.md, NN-agent.md.
+# A .md file of any other name is not read.
+PROMPT_KIND = "prompt"
+ENV_KIND = "env"
+
+
+def _system_kind(path: Path) -> str | None:
+    """`prompt` or `env` for a file that is system-prompt text, else None."""
+    if _is_message_file(path):
+        return None
+    for kind in (PROMPT_KIND, ENV_KIND):
+        if _ends_in_keyword(path, kind):
+            return kind
+    return None
 
 
 AGENT_MANIFEST = "agent.yaml"
-_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills")
-_MIGRATE_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
+_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills", "models", "aliases")
+_MIGRATE_HINT = msgs.AGENT_MANIFEST_MIGRATION_HINT.format()
 
 
 def _find_yaml_zero_file(prompts_dir: Path) -> Path | None:
-    """A pre-agent.yaml manifest (00-tools.yaml and kin). It is refused, never read."""
-    candidates = sorted(p for p in prompts_dir.glob("00*.yaml") if _is_zero_file(p))
+    candidates = sorted(path for path in prompts_dir.glob("00*.yaml") if _is_zero_file(path))
     return candidates[0] if candidates else None
 
 
@@ -110,93 +145,86 @@ def _load_yaml_manifest(path: Path) -> dict[str, Any]:
     try:
         data = yaml.safe_load(text) if text.strip() else {}
     except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML manifest in {path}: {exc}") from exc
+        raise ValueError(msgs.AGENT_MANIFEST_INVALID_YAML_MANIFEST_IN.format(path=path, exc=exc)) from exc
     if data is None:
         data = {}
     if not isinstance(data, dict):
-        raise ValueError(f"YAML manifest in {path} must be a mapping")
+        raise ValueError(msgs.AGENT_MANIFEST_YAML_MANIFEST_IN_MUST_BE_A_MAPPING.format(path=path))
     return data
 
 
-def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
-    legacy = _find_yaml_zero_file(prompts_dir)
-    if legacy is not None:
-        raise ValueError(f"{legacy} is no longer read; {_MIGRATE_HINT}")
+def _refuse_legacy_manifest(md_files: list[Path]) -> None:
     for path in md_files:
-        if _is_zero_file(path) and not _is_message_file(path) and path.read_text(encoding="utf-8").startswith("---"):
-            raise ValueError(f"frontmatter in {path} is no longer read; {_MIGRATE_HINT}")
+        if (
+            _is_zero_file(path)
+            and not _is_message_file(path)
+            and not _is_benchmark_file(path)  # load_benchmarks reads its frontmatter
+            and path.read_text(encoding="utf-8").startswith("---")
+        ):
+            raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_NO_LONGER_READ.format(path=path, _MIGRATE_HINT=_MIGRATE_HINT))
 
 
 def _coerce_skills(path: Path, raw: Any) -> tuple[str, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ValueError(f"skills in {path} must be a list of family:name entries")
+        raise ValueError(msgs.AGENT_MANIFEST_SKILLS_IN_MUST_BE_A_LIST_OF.format(path=path))
     out: list[str] = []
     for item in raw:
         family, sep, name = str(item).strip().partition(":") if isinstance(item, str) else ("", "", "")
         if not sep or not family.strip() or not name.strip():
-            raise ValueError(f"skills entry {item!r} in {path} is not family:name or family:*")
+            raise ValueError(msgs.AGENT_MANIFEST_SKILLS_ENTRY_IN_IS_NOT_FAMILY_NAME.format(item=item, path=path))
         out.append(item.strip())
     return tuple(out)
 
 
-def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
+def _frontmatter_source(path: Path, text: str) -> tuple[str, str]:
+    """The source YAML and body separated by an exact closing delimiter line."""
+    first_line_end = text.find("\n")
+    close = None if first_line_end == -1 else re.compile(r"(?m)^---(?:\r?\n|$)").search(text, first_line_end + 1)
+    if close is None:
+        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING.format(path=path))
+    return text[first_line_end + 1:close.start()], text[close.end():]
+
+
+def split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
+    """The YAML mapping and right-stripped body of an agent prompt file; the
+    mapping is None when ``text`` has no frontmatter. Malformed frontmatter
+    raises ValueError naming ``path``."""
     if not text.startswith("---"):
         return None, text.rstrip()
-    first_line_end = text.find("\n")
-    if first_line_end == -1:
-        raise ValueError(f"frontmatter in {path} is missing a closing ---")
-    close = text.find("\n---", first_line_end + 1)
-    if close == -1:
-        raise ValueError(f"frontmatter in {path} is missing a closing ---")
-    yaml_text = text[first_line_end + 1:close]
-    body_start = close + len("\n---")
-    if body_start < len(text) and text[body_start:body_start + 1] == "\r":
-        body_start += 1
-    if body_start < len(text) and text[body_start:body_start + 1] == "\n":
-        body_start += 1
+    yaml_text, body = _frontmatter_source(path, text)
     try:
         data = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML frontmatter in {path}: {exc}") from exc
+        raise ValueError(msgs.AGENT_MANIFEST_INVALID_YAML_FRONTMATTER_IN.format(path=path, exc=exc)) from exc
     if data is None:
         data = {}
     if not isinstance(data, dict):
-        raise ValueError(f"frontmatter in {path} must be a mapping")
-    return data, text[body_start:].rstrip()
+        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_MUST_BE_A_MAPPING.format(path=path))
+    return data, body.rstrip()
 
 
 def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return policy.parse_entries(raw, str(path))
 
 
-# Sampling params an agent may set in its YAML manifest. Transport-specific
-# filtering happens later from the typed Sampling object; loading a prompt spec
-# must never mutate process environment.
-_SAMPLING_KEYS = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "repetition_penalty",
-    "presence_penalty",
-)
-
-
-def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
+def _coerce_tool_aliases(path: Path, raw: Any) -> dict[str, str]:
     if raw is None:
-        return None
-    # PyYAML's YAML 1.1 resolver parses an unquoted `off` as False.
-    if raw is False:
-        return "none"
-    if not isinstance(raw, str):
-        raise ValueError(f"reasoning in {path} must be a string")
-    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
-    value, error = settings.coerce_value(spec, raw)
-    if error:
-        raise ValueError(f"reasoning in {path}: {error}")
-    return value
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: aliases must be a mapping of tool names to public names")
+    for canonical, public in raw.items():
+        if not isinstance(canonical, str) or not canonical.strip() or canonical.strip() != canonical:
+            raise ValueError(f"{path}: invalid canonical tool name in aliases: {canonical!r}")
+        if not isinstance(public, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", public):
+            raise ValueError(f"{path}: invalid public name for tool {canonical!r}: {public!r}")
+    return raw
 
+
+def _coerce_model(raw: Any) -> str:
+    model = str(raw or "").strip()
+    return "" if model.lower() == model_profiles.INHERIT else model
 
 
 def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
@@ -205,25 +233,8 @@ def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
     if raw is None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(f"max_tokens in {path} must be an integer")
+        raise ValueError(msgs.AGENT_MANIFEST_MAX_TOKENS_IN_MUST_BE_AN_INTEGER.format(path=path))
     return raw if raw > 0 else None
-
-
-def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"sampling frontmatter in {path} must be a mapping")
-    out: dict[str, Any] = {}
-    for key, val in raw.items():
-        if key not in _SAMPLING_KEYS:
-            raise ValueError(
-                f"unknown sampling key '{key}' in {path}; allowed: {', '.join(_SAMPLING_KEYS)}"
-            )
-        if isinstance(val, bool) or not isinstance(val, (int, float)):
-            raise ValueError(f"sampling.{key} in {path} must be a number")
-        out[key] = val
-    return out
 
 
 
@@ -238,58 +249,50 @@ def _existing_text_parts(paths: list[Path]) -> list[str]:
     return parts
 
 
-def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_agents_root: Path, project_agents_root: Path) -> Path:
-    """Resolve project > global > repo prompt roots for one agent id."""
-    for root in (project_agents_root, global_agents_root, repo_prompts_root):
-        candidate = root / agent_id
-        if not candidate.is_dir():
-            continue
-        if _has_manifest(candidate) or any(candidate.glob("*.md")):
-            return candidate
-    return repo_prompts_root / agent_id
-
-
-def _has_manifest(prompts_dir: Path) -> bool:
-    """Whether a prompt dir carries a manifest of its own: agent.yaml, or a
-    refused 00-tools.yaml that must fail the load rather than be skipped."""
-    return (prompts_dir / AGENT_MANIFEST).is_file() or _find_yaml_zero_file(prompts_dir) is not None
-
-
-def _find_manifest_dir(agent_id: str, *roots: Path) -> Path | None:
-    """Highest-priority root (in the order given) whose agent_id dir actually
-    carries a manifest. Used to fall back past a winning prompt dir that
-    supplies prompt text but no agent.yaml, so it doesn't silently shadow a
-    lower layer's tool selection."""
-    for root in roots:
-        candidate = root / agent_id
-        if candidate.is_dir() and _has_manifest(candidate):
-            return candidate
-    return None
+def _prompt_files(sources: Path | tuple[Path, ...] | list[Path]) -> list[Path]:
+    """Assemble source directories or files by filename, highest layer winning."""
+    entries = (sources,) if isinstance(sources, Path) else sources
+    selected: dict[str, Path] = {}
+    for source in entries:
+        try:
+            candidates = source.iterdir() if source.is_dir() else (source,)
+            for path in candidates:
+                if path.is_file():
+                    selected[path.name] = path
+        except OSError as exc:
+            raise ValueError(f"agent source {source} is unreadable: {exc}") from exc
+    return [selected[name] for name in sorted(selected)]
 
 
 def load_agent_prompt_spec(
     agent_id: str,
+    roots: tuple[Path, ...],
     *,
-    repo_prompts_root: Path,
-    global_agents_root: Path,
-    project_agents_root: Path,
     agents_files: list[Path] | tuple[Path, ...] = (),
+    env: bool = True,
+    prompt: str | None = None,
 ) -> PromptSpec:
-    prompt_dir = _most_specific_prompt_dir(agent_id, repo_prompts_root, global_agents_root, project_agents_root)
-    spec = load_prompt_spec(prompt_dir)
-    if not _has_manifest(prompt_dir):
-        # This dir won on prompt text alone (e.g. a project override that only
-        # tweaks wording) and carries no manifest of its own — fall back to the
-        # nearest lower layer's agent.yaml rather than silently booting with
-        # zero tools and default model/sampling.
-        manifest_dir = _find_manifest_dir(agent_id, project_agents_root, global_agents_root, repo_prompts_root)
-        if manifest_dir is not None and manifest_dir != prompt_dir:
-            spec = replace(_with_system(load_prompt_spec(manifest_dir), spec.system), exchanges=spec.exchanges)
+    """Assemble every agent filename from its directories in ``roots``,
+    lowest layer first, with ``agents_files`` ahead of the system prompt."""
+    spec = load_prompt_spec(paths.agent_dirs(agent_id, roots), env=env, prompt=prompt)
+    return _with_agents_files(spec, agents_files)
+
+
+def _with_agents_files(spec: PromptSpec, agents_files) -> PromptSpec:
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
-    system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return _with_system(spec, system)
+    return _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
+
+
+def config_roots(cfg) -> tuple[Path, ...]:
+    """The roots ``cfg`` finds agents in: its ``prompt_roots``, or for a Config
+    built in code with none, the directory holding its ``prompts_dir``."""
+    roots = tuple(getattr(cfg, "prompt_roots", ()) or ())
+    if roots:
+        return roots
+    first = cfg.prompts_dir if isinstance(cfg.prompts_dir, Path) else cfg.prompts_dir[0]
+    return (first.parent,)
 
 def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     """One agent.yaml as a PromptSpec with an empty system prompt."""
@@ -297,99 +300,190 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     unknown = sorted(str(key) for key in manifest if key not in _MANIFEST_KEYS)
     if unknown:
         raise ValueError(
-            f"unknown key(s) {', '.join(unknown)} in {manifest_path}; allowed: {', '.join(_MANIFEST_KEYS)}"
+            msgs.AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED.format(value=', '.join(unknown), manifest_path=manifest_path, value2=', '.join(_MANIFEST_KEYS))
         )
     return PromptSpec(
         system="",
         tool_selectors=_coerce_tool_selectors(manifest_path, manifest.get("tools")),
-        sampling=_coerce_sampling(manifest_path, manifest.get("sampling")),
-        model=str(manifest.get("model") or "").strip(),
+        tool_aliases=_coerce_tool_aliases(manifest_path, manifest.get("aliases")),
+        sampling=model_profiles.coerce_sampling(manifest_path, manifest.get("sampling")),
+        model=_coerce_model(manifest.get("model")),
         secondary_model=str(manifest.get("secondary_model") or "").strip(),
-        reasoning_effort=_coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
+        reasoning_effort=model_profiles.coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
         max_output_tokens=_coerce_max_tokens(manifest_path, manifest.get("max_tokens")),
         skills=_coerce_skills(manifest_path, manifest.get("skills")),
+        models=model_profiles.parse_profiles(manifest.get("models"), f"{manifest_path} models"),
     )
 
 
-def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
-    if not prompts_dir.is_dir():
-        raise FileNotFoundError(
-            f"prompts directory missing at {prompts_dir}. "
-            f"Drop .md prompt files and an optional {AGENT_MANIFEST} manifest in there."
-        )
-
-    md_files = sorted(prompts_dir.glob("*.md"))
-    _refuse_legacy_manifest(prompts_dir, md_files)
-    manifest_path = prompts_dir / AGENT_MANIFEST
-    has_manifest = manifest_path.is_file()
-    if not md_files and not has_manifest:
-        raise FileNotFoundError(
-            f"prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
-        )
-
-    spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
+def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: bool = True, prompt: str | None = None) -> PromptSpec:
+    """Load assembled files or directories, with each higher filename replacing
+    its lower copy. ``env=False`` skips env files; ``prompt`` replaces prompt files."""
+    sources = (prompts_dir,) if isinstance(prompts_dir, Path) else tuple(prompts_dir)
+    if not any(source.is_dir() or source.is_file() for source in sources):
+        raise FileNotFoundError(f"unknown agent {sources[0].name!r}; searched " + paths.searched(roots=sources))
+    files = _prompt_files(sources)
+    md_files = [path for path in files if path.suffix == ".md"]
+    legacy = next((path for path in files if path.suffix == ".yaml" and _is_zero_file(path)), None)
+    if legacy is not None:
+        raise ValueError(msgs.AGENT_MANIFEST_IS_NO_LONGER_READ.format(legacy=legacy, _MIGRATE_HINT=_MIGRATE_HINT))
+    _refuse_legacy_manifest(md_files)
+    manifest_path = next((path for path in files if path.name == AGENT_MANIFEST), None)
+    spec = load_agent_manifest(manifest_path) if manifest_path is not None else PromptSpec(system="", tool_selectors=())
     parts: list[str] = []
+    prompt_placed = False
     for path in md_files:
-        if _is_benchmark_file(path) or _is_message_file(path):
-            continue  # --bench turns, never persona text (see load_benchmarks)
+        kind = _system_kind(path)
+        if kind == ENV_KIND and not env:
+            continue
+        if kind == PROMPT_KIND and prompt is not None:
+            if not prompt_placed and prompt.rstrip():
+                parts.append(prompt.rstrip())
+            prompt_placed = True
+            continue
+        if kind is None:
+            continue
         body = path.read_text(encoding="utf-8").rstrip()
         if body:
             parts.append(body)
+    if prompt is not None and not prompt_placed and prompt.rstrip():
+        parts.insert(0, prompt.rstrip())
     return replace(_with_system(spec, "\n\n".join(parts) + "\n"), exchanges=_load_exchanges(md_files))
 
 
 
-def apply_agent_max_tokens(cfg, prompt_spec):
-    """Apply the persona default only when config/env/CLI did not set a cap."""
-    agent_max = getattr(prompt_spec, "max_output_tokens", None)
-    if agent_max is None or cfg.max_output_tokens is not None:
+def agent_model_applies(cfg, prompt_spec, model: str | None, *, config_pins: bool = True) -> bool:
+    """Whether the agent's agent.yaml `model:` picks the model: it names one,
+    no ``model`` was given for this run, and the operator pinned none."""
+    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
+    pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
+    return bool(agent_model) and model is None and not pinned
+
+
+def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool = True):
+    """``cfg`` routed to the agent's agent.yaml `model:`, unless the operator
+    pinned a model. -m, a JS_* env var and --extra always pin; a jsrc `MODEL`
+    pins only when ``config_pins``."""
+    if not agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
         return cfg
-    return replace(cfg, max_output_tokens=agent_max)
+
+    route = resolve_model_route(
+        prompt_spec.model,
+        configured_provider_id=cfg.provider_id,
+        configured_base_url=cfg.provider_base_url,
+        configured_api_key=cfg.provider_api_key,
+        configured_headers=getattr(cfg, "provider_headers", {}),
+        explicit_model=True,
+        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
+    )
+    return apply_route(cfg, route)
 
 
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
-    if len(roots) >= 3:
-        spec = load_agent_prompt_spec(
-            cfg.agent_id,
-            repo_prompts_root=roots[0],
-            global_agents_root=roots[1],
-            project_agents_root=roots[2],
-            agents_files=getattr(cfg, "agents_files", ()),
-        )
-    else:
-        spec = load_prompt_spec(cfg.prompts_dir)
-        agents_parts = _existing_text_parts(list(getattr(cfg, "agents_files", ())))
-        if agents_parts:
-            spec = _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
+    """The run's prompt spec, with the model profile that matches ``cfg``'s
+    model and provider applied."""
+    options = current()
+    if options.you_are is not None:
+        # _expand_spec writes the whole system prompt.
+        spec = PromptSpec(system="", tool_selectors=())
+        return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
+    if options.chat:
+        if options.system_prompt_file is not None or options.system_prompt is not None:
+            system = options.prompt_text()
+        elif options.agent is not None:
+            system = load_prompt_spec(cfg.prompts_dir, env=False).system
+        else:
+            system = ""
+        spec = PromptSpec(system=system, tool_selectors=())
+        return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
+    if options.system_prompt_file is not None:
+        base = load_agent_prompt_spec('defaultagent', getattr(cfg, "prompt_roots", ()) or paths.agent_roots()[:2], env=False)
+        spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models,
+                          tool_aliases=base.tool_aliases)
+        return _finish_configured_spec(_with_model_profile(spec, cfg, None), cfg, expand)
+    env = not options.skips_env
+    agents_files = () if options.skips_agents_md else tuple(getattr(cfg, "agents_files", ()))
+
+    spec = _with_agents_files(load_prompt_spec(cfg.prompts_dir, env=env, prompt=options.system_prompt), agents_files)
+    spec = _with_model_profile(spec, cfg, lambda agent_id: load_agent_prompt_spec(
+        agent_id, config_roots(cfg), agents_files=agents_files, env=env, prompt=options.system_prompt).system)
+    return _finish_configured_spec(spec, cfg, expand)
+
+
+def _profile_for(spec: PromptSpec, cfg) -> model_profiles.ModelProfile | None:
+    return model_profiles.choose(
+        spec.models, getattr(cfg, "settings", None), getattr(cfg, "model", "") or "", getattr(cfg, "provider_id", None))
+
+
+def _with_model_profile(spec: PromptSpec, cfg, persona_text) -> PromptSpec:
+    """``spec`` with the profile matched for ``cfg``'s model and provider
+    applied: its tool chain unless --tools or a zero-tool run sets the tools,
+    its `prompt:` agent's prompt text through ``persona_text`` when given, its
+    sampling over the agent's and its reasoning in place of the agent's. A
+    profile whose chain selects no tool is not applied."""
+    options = current()
+    profile = _profile_for(spec, cfg)
+    spec = replace(spec, model_profile=profile)
+    if profile is None:
+        return spec
+    chain = spec.tool_selectors
+    if options.tools is None and not options.zero_tools:
+        config = policy.load_tools_config()
+        chain = profile.chain(spec.tool_selectors, config)
+        registry = registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
+        chosen = policy.select(registry.tools, options.selectors(chain), config, warn=False)
+        if not (chosen.eager or chosen.lazy):
+            model_profiles.warn_empty(profile)
+            return spec
+    if profile.prompt and persona_text is not None:
+        spec = _with_system(spec, persona_text(profile.prompt))
+    return replace(
+        spec,
+        tool_selectors=chain,
+        sampling={**spec.sampling, **profile.sampling},
+        reasoning_effort=profile.reasoning if profile.reasoning is not None else spec.reasoning_effort,
+    )
+
+
+def for_model(spec: PromptSpec, cfg) -> PromptSpec:
+    """``spec`` as `load_configured_prompt_spec` builds it for ``cfg``'s model
+    and provider. A run loads its spec before agent.yaml `model:`, --model or a
+    resumed stamp settle the model; once they have, a model that matches a
+    different profile reloads the spec."""
+    if _profile_for(spec, cfg) == spec.model_profile:
+        return spec
+    return load_configured_prompt_spec(cfg, expand=False)
+
+
+def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
+    options = current()
+    if options.append_system_prompt:
+        spec = _with_system(spec, '\n\n'.join((spec.system.rstrip(), *options.append_system_prompt)))
+    spec = replace(spec, tool_selectors=options.selectors(spec.tool_selectors),
+                   tool_aliases=options.aliases(spec.tool_aliases))
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
+    if options.tools is not None:
+        # The registry the run's surface is selected from; tool entries never
+        # select MCP tools, which come only through tool_discovery.
+        registry = registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
+        unmatched = options.unmatched_tools(registry.tools)
+        if unmatched:
+            raise ValueError(msgs.TOOLS_ENTRY_MATCHES_NOTHING.text(entry=unmatched[0]))
     if expand:
         spec = _expand_spec(spec, cfg)
     return spec
 
 
-def resolve_agent_prompt_dir(cfg) -> Path:
-    """The prompt directory `load_configured_prompt_spec` would load for this
-    agent (project > global > repo). --bench reads its NN-benchmark.md files from
-    the same resolved dir as the persona."""
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
-    if len(roots) >= 3:
-        return _most_specific_prompt_dir(cfg.agent_id, roots[0], roots[1], roots[2])
-    return cfg.prompts_dir
-
-
-def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
+def load_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> list[Benchmark]:
     """Ordered NN-benchmark.md turns from a prompt dir. Each is a clean-slate
     one-shot user turn with an optional `max_tokens` frontmatter override."""
-    if not prompts_dir.is_dir():
-        return []
     out: list[Benchmark] = []
-    for path in sorted(prompts_dir.glob("*.md")):
-        if not _is_benchmark_file(path):
+    for path in _prompt_files(prompts_dir):
+        if path.suffix != ".md" or not _is_benchmark_file(path):
             continue
-        frontmatter, body = _split_frontmatter(path, path.read_text(encoding="utf-8"))
+        frontmatter, body = split_frontmatter(path, path.read_text(encoding="utf-8"))
         body = body.strip()
         if not body:
             continue
@@ -401,27 +495,32 @@ def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
     return out
 
 
-def has_benchmarks(prompts_dir: Path) -> bool:
+def has_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> bool:
     """Whether this agent selects benchmark mode, including empty benchmark files."""
-    return any(_is_benchmark_file(path) for path in prompts_dir.glob("*.md"))
+    return any(path.suffix == ".md" and _is_benchmark_file(path) for path in _prompt_files(prompts_dir))
 
 
 def expand_agent_text(text: str, cfg) -> str:
     """Expand trusted agent text with this session's built-ins and code policy."""
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
-    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
-    max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
+    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "INLINE_CODE_TIMEOUT"))
+    max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
     # The prompt's commands (envctx) report the shell the shell tool runs
-    # commands in, which is shell.program, not the operator's $SHELL.
-    program = str(settings.knob(getattr(cfg, "settings", None), "shell.program"))
-    os.environ["JS_SHELL"] = shutil.which(program) or program
+    # commands in, which is SHELL_PROGRAM, not the operator's $SHELL.
+    program = str(settings.knob(getattr(cfg, "settings", None), "SHELL_PROGRAM"))
+    environ = dict(os.environ)
+    environ["JS_SHELL"] = shutil.which(program) or program
+    environ["JS_HOME"] = str(paths.home())
     # JS_ROOT is where js itself is: the directory holding the js package,
-    # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
+    # defaults/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
     # wherever js is installed.
-    os.environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
+    environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
+    environ[secret_patterns.ENV_VAR] = str(secret_patterns.patterns_file())
     return expand_prompt(
         text,
         allow_code=allow_code,
+        env=environ,
+        code_env=environ,
         timeout_s=timeout_s,
         max_output_bytes=max_output_bytes,
         **({"variables": session_variables(cfg)} if "%%" in text else {}),
@@ -430,10 +529,30 @@ def expand_agent_text(text: str, cfg) -> str:
 
 def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     """Expand directives in the assembled system prompt, retaining its source."""
-    system = expand_agent_text(spec.system, cfg)
+    options = current()
+    text = spec.system
+    if options.you_are is not None:
+        text = snippets.render("model-identity", MODEL=cfg.model.rsplit("/", 1)[-1])
+        if options.you_are:
+            text += '\n' + options.you_are
+        if options.append_system_prompt:
+            text += '\n\n' + '\n\n'.join(options.append_system_prompt)
+    system = expand_agent_text(text, cfg)
     if system == spec.system:
         return spec
     return replace(spec, system=system, source=spec.source)
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system
+
+
+def format_prompt_load_error(cfg, exc: Exception) -> str:
+    """Turn a persona-load failure into an operator-legible line. A missing prompt
+    directory means the named agent doesn't exist anywhere on the search path —
+    say so plainly and point at the global agents dir where one is created,
+    instead of leaking the raw 'prompts directory missing at <path>'."""
+    if isinstance(exc, FileNotFoundError) and isinstance(cfg.prompts_dir, Path) and not cfg.prompts_dir.is_dir():
+        agents_dir = paths.global_agents_dir()
+        agent_id = getattr(cfg, "agent_id", "?")
+        return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
+    return msgs.of_error(exc)

@@ -6,12 +6,11 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ... import jail
-from ... import paths
+from ... import jail, paths
 from ...capped_process import truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
-from .helpers import run, read_text, resolve_vault, find_vault, copy_to_assets
+from .helpers import copy_to_assets, find_vault, read_text, resolve_vault, run
 
 TEXT_EXT = {".md", ".markdown", ".txt", ".rst", ".org", ".tex", ".srt", ".vtt", ".log", ".toml", ".ini", ".cfg"}
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".sh", ".bash", ".c", ".h", ".cpp", ".hpp", ".java", ".rb", ".php", ".lua", ".sql", ".css"}
@@ -60,13 +59,21 @@ def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
     if not sheets:
         return "ERROR soffice: wrote no sheet"
     blocks = []
+    length = 0
     for name, path in sheets:
         try:
-            text = path.read_text("utf-8", errors="replace")
+            with path.open(encoding="utf-8", errors="replace") as stream:
+                text = stream.read(max(0, cap - length) + 1)
         except OSError as exc:
             return f"ERROR: {exc}"
-        blocks.append(f"--- sheet {name} ---\n{text}" if len(sheets) > 1 else text)
-    return cap_text("\n".join(blocks), cap, truncation_marker(cap, "limits.max_tool_result_bytes"))
+        block = f"--- sheet {name} ---\n{text}" if len(sheets) > 1 else text
+        if blocks:
+            length += 1
+        blocks.append(block)
+        length += len(block)
+        if length > cap:
+            break
+    return cap_text("\n".join(blocks), cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 
 def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:
@@ -137,7 +144,7 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
     if ext in IMG_EXT:
         embed = "(pass vault= to copy into assets/)"
         if vault_path:
-            copied = copy_to_assets(p, vault_path)
+            copied = copy_to_assets(p, vault_path, context)
             if isinstance(copied, str):
                 return copied
             embed = f"![[{copied.name}]]"
@@ -154,7 +161,7 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
     if ext in AV_EXT:
         embed = "(pass vault= to copy into assets/)"
         if vault_path:
-            copied = copy_to_assets(p, vault_path)
+            copied = copy_to_assets(p, vault_path, context)
             if isinstance(copied, str):
                 return copied
             embed = f"![[{copied.name}]]"
@@ -163,10 +170,10 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
                 f"NOTE transcribe: whisper '{p}' --model small --output_format txt --output_dir '{paths.tmp_dir()}'")
 
     # fallback
-    rc, out, err = run(["file", str(p)], context)
-    # `file` prints "<path>: <description>" — test only the description, else a
-    # binary living under a path containing "text" (e.g. .../context/...) reads as text.
-    desc = out.split(":", 1)[1] if ":" in out else out
+    rc, out, err = run(["file", "-r", str(p)], context)
+    # Raw filenames let us remove the complete path, including any colons or
+    # unprintable characters, before classifying the description.
+    desc = out.removeprefix(f"{p}:")
     if "text" in desc.lower():
         return read_text(p, cap)
     return f"UNREADABLE/binary: {out.strip()}  (quarantine to inbox/_skipped/ if nothing reads it)"

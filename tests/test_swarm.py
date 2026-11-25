@@ -1,13 +1,12 @@
-"""The swarm bus (js.swarm): inboxes, delivery at tool boundaries, sleep and wake.
-
-  js -p --json --swarm ROOT/NAME "opener"
-"""
+"""The swarm bus (js.swarm): inboxes, delivery at tool boundaries, sleep and
+wake; and the runner (js.swarm_run) that runs every agent in one process."""
 
 from __future__ import annotations
 
 import asyncio
 import io
 import json
+import os
 import sys
 import threading
 import time
@@ -17,18 +16,25 @@ import ai
 import ai.types.usage
 import pytest
 from ai.providers import history_utils
+from turn_driver import one_turn
 
-from js import cli, headless, memory, runtime, swarm, swarm_run
+from js import memory, runtime, swarm, swarm_run
 from js.config import Config
+from js.conversation import Conversation
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext
-from js.toolkit.core import Tool
+from js.toolkit import ToolContext, bus_tools
+from js.toolkit.core import Tool, call_tool
 from js.toolkit.registry import ToolRegistry
-
 
 # --------------------------------------------------------------------------
 # the bus
 # --------------------------------------------------------------------------
+
+def _bus(name: str, context, **args):
+    """What the bus tool ``name`` answers a call with ``args``."""
+    tool = {tool.name: tool for tool in bus_tools.tools()}[name]
+    return call_tool(tool, args, context)
+
 
 def test_send_lands_in_each_target_inbox_and_the_log(tmp_path):
     room = swarm.Room(tmp_path / "bus")
@@ -47,6 +53,31 @@ def test_a_message_waits_for_an_agent_that_has_not_joined_yet(tmp_path):
     room = swarm.Room(tmp_path / "bus")
     room.send("runner", "late", "opener")
     assert [m.body for m in room.join("late").drain()] == ["opener"]
+
+
+def test_a_rollcall_is_answered_by_the_process_and_touches_no_inbox_or_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    answers = agent.room.rollcall(wait=5)
+    assert answers["a"]["pid"] == os.getpid() and answers["a"]["state"] == "working"
+    assert not agent.inbox.pending() and not agent.room.log.exists()
+
+
+def test_a_member_with_no_process_is_silent_at_rollcall_and_who_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    monkeypatch.setattr(swarm, "ROLLCALL_WAIT_S", 0.0)
+    here = swarm.Agent(tmp_path / "bus" / "here")
+    here.room.join("gone")
+    assert here.room.rollcall(wait=0.5)["gone"] is None
+    lines = dict(line.split(" ", 1) for line in swarm.roster(here.room).splitlines())
+    assert "no answer" in lines["gone"] and "no answer" not in lines["here"]
+
+
+def test_a_retired_agent_is_not_called_at_rollcall(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm, "PULSE_S", 0.01)
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    agent.retire("done")
+    assert agent.room.rollcall(wait=0.1) == {}
 
 
 def test_drain_hands_each_message_over_once_in_seq_order(tmp_path):
@@ -117,7 +148,7 @@ def test_inbox_messages_reach_the_model_at_the_tool_boundary(monkeypatch, tmp_pa
     registry = ToolRegistry(tools=(Tool("probe", "Probe.", probe, {}),), aliases={})
     messages = [{"role": "user", "content": "go"}]
 
-    runtime.run_turn(_cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
+    one_turn(_cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
                      steer=agent.steer)
 
@@ -133,7 +164,7 @@ def test_inbox_messages_reach_the_model_at_the_tool_boundary(monkeypatch, tmp_pa
 def test_send_tool_posts_from_the_agent_on_the_context(tmp_path):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     agent.room.join("b")
-    registry = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={}))
+    registry = bus_tools.with_bus_tools(ToolRegistry(tools=(), aliases={}))
     send, who = registry.resolve("send"), registry.resolve("who")
     on_bus = ToolContext(cwd=tmp_path, swarm=agent)
 
@@ -182,14 +213,39 @@ def test_a_burst_is_one_wake(tmp_path):
         agent.room.send("b", "a", "two")
 
     threading.Timer(0.1, burst).start()
-    assert [m.body for m in agent.sleep()] == ["one", "two"]
+    assert [m.body for m in asyncio.run(agent.sleep_async())] == ["one", "two"]
+
+
+def test_on_a_bus_with_a_hold_broadcasts_pile_up_into_one_wake_and_a_message_by_name_wakes_at_once(tmp_path):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    agent.room.set_hold(1.0)
+    agent.room.send("b", "*", "one")
+    threading.Timer(0.4, agent.room.send, ("b", "*", "two")).start()
+    started = time.monotonic()
+    assert [m.body for m in asyncio.run(agent.sleep_async())] == ["one", "two"]
+    assert time.monotonic() - started >= 1.0
+    agent.room.send("b", "*", "three")
+    agent.room.send("b", "a", "for you")
+    started = time.monotonic()
+    assert [m.body for m in asyncio.run(agent.sleep_async())] == ["three", "for you"]
+    assert time.monotonic() - started < 0.9
+
+
+def test_a_second_wake_me_leaves_the_pending_alarm_where_it_was(tmp_path):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    context = ToolContext(cwd=tmp_path)
+    context.swarm = agent
+    _bus("wake_me", context, seconds=300)
+    alarm = agent.alarm
+    _bus("wake_me", context, seconds=600)
+    assert agent.alarm == alarm
 
 
 def test_wake_me_wakes_the_agent_with_a_tick_when_nothing_lands(tmp_path):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     agent.wake_me(0.3)
     started = time.monotonic()
-    landed = agent.sleep()
+    landed = asyncio.run(agent.sleep_async())
     assert [(m.sender, m.kind) for m in landed] == [(swarm.CLOCK, swarm.TICK)]
     assert 0.2 < time.monotonic() - started < 3
     assert agent.alarm is None
@@ -200,7 +256,7 @@ def test_quiet_means_every_member_asleep_with_an_empty_inbox(tmp_path):
     assert room.quiet() is False  # nobody on the bus
     a, b = swarm.Agent(tmp_path / "bus" / "a"), swarm.Agent(tmp_path / "bus" / "b")
     assert room.quiet() is False  # both working
-    sleepers = [threading.Thread(target=x.sleep, daemon=True) for x in (a, b)]
+    sleepers = [threading.Thread(target=lambda x=x: asyncio.run(x.sleep_async()), daemon=True) for x in (a, b)]
     for t in sleepers:
         t.start()
     deadline = time.monotonic() + 3
@@ -218,7 +274,7 @@ def test_quiet_means_every_member_asleep_with_an_empty_inbox(tmp_path):
 def test_retire_posts_the_handoff_and_leaves_the_bus(tmp_path):
     a = swarm.Agent(tmp_path / "bus" / "a")
     a.room.join("b")
-    retire = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={})).resolve("retire")
+    retire = bus_tools.with_bus_tools(ToolRegistry(tools=(), aliases={})).resolve("retire")
     out = retire.handler(handoff="parser done; lexer left; branch feat/x", context=ToolContext(cwd=tmp_path, swarm=a))
     assert not out.startswith("ERROR")
     assert a.stop_seen is True
@@ -264,9 +320,66 @@ def test_finishing_a_cell_frees_it_tells_everyone_and_sinks_it_to_the_bottom(tmp
     assert [(c.id, c.status) for c in room.cells()] == [(2, "open"), (1, "done")]
 
 
+def test_concurrent_subscriptions_preserve_all_kinds(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    room = swarm.Room(tmp_path / "bus")
+    start = threading.Barrier(16)
+
+    def subscribe(index):
+        start.wait(timeout=5)
+        for number in range(10):
+            room.subscribe("a", f"kind-{index}-{number}")
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(subscribe, range(16)))
+    assert room.subs_of("a") == {f"kind-{i}-{n}" for i in range(16) for n in range(10)}
+
+
+def test_subscription_readers_see_complete_snapshot(tmp_path, monkeypatch):
+    room = swarm.Room(tmp_path / "bus")
+    room.subscribe("a", "original")
+    write_text = Path.write_text
+    observations = []
+
+    def interrupted_write(path, text, *args, **kwargs):
+        write_text(path, text[:1], *args, **kwargs)
+        observations.append(room.subs_of("a"))
+        return write_text(path, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", interrupted_write)
+    room.subscribe("a", "second")
+    assert observations == [{"original"}]
+    assert room.subs_of("a") == {"original", "second"}
+    room.subscribe("a", "original", on=False)
+    assert room.subs_of("a") == {"second"}
+
+
+@pytest.mark.parametrize("case", ["other_holder", "expired", "untaken", "done"])
+def test_finish_requires_live_holder_and_unfinished_task(tmp_path, monkeypatch, case):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    room = agent.room
+    cell = room.post_cell("a", "work")
+    if case != "untaken":
+        room.take_cell(cell.id, "b" if case == "other_holder" else "a", ttl=1)
+    if case == "expired":
+        now = time.time()
+        monkeypatch.setattr(swarm.time, "time", lambda: now + 2)
+    if case == "done":
+        room.finish_cell(cell.id, "a", "original")
+    before_cells = (room.root / "cells.json").read_bytes()
+    before_claims = room.claims()
+    before_log = room.log.read_bytes()
+    response = _bus("finish_task", ToolContext(cwd=tmp_path, swarm=agent), id=cell.id, result="replacement")
+    assert response.startswith("ERROR")
+    assert (room.root / "cells.json").read_bytes() == before_cells
+    assert room.claims() == before_claims
+    assert room.log.read_bytes() == before_log
+
+
 def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
     a = swarm.Agent(tmp_path / "bus" / "a")
-    registry = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={}))
+    registry = bus_tools.with_bus_tools(ToolRegistry(tools=(), aliases={}))
     post, take, finish, tasks = (registry.resolve(n) for n in ("post_task", "take_task", "finish_task", "tasks"))
     on_bus = ToolContext(cwd=tmp_path, swarm=a)
     assert post.handler(title="write the parser", body="in src", context=on_bus).startswith("posted task #1")
@@ -276,31 +389,6 @@ def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
     assert "done by a" in tasks.handler(context=on_bus)
 
 
-def test_spawn_runs_the_parents_command_under_a_new_name(tmp_path, monkeypatch):
-    a = swarm.Agent(tmp_path / "bus" / "a")
-
-    class FakeProc:
-        def __init__(self, cmd, **_kw):
-            self.cmd, self.pid, self.stdin = cmd, 4242, io.BytesIO()
-            self.stdin.close = lambda: None  # keep the opener readable
-
-    monkeypatch.setattr(swarm.subprocess, "Popen", FakeProc)
-    monkeypatch.setattr(swarm.sys, "argv", ["/x/bin/js", "-a", "troop", "-q", "--json", "-s", "troop-1-a",
-                                            "--swarm", str(tmp_path / "bus" / "a"), "--extra", "k=v", "-p", "-"])
-    proc = a.spawn("twig", "You are twig.")
-    assert proc.cmd == [sys.executable, "-m", "js", "-a", "troop", "-q", "--json", "-s", "troop-1-a-twig",
-                        "--swarm", str(tmp_path / "bus" / "twig"), "--extra", "k=v", "-p", "-"]
-    assert proc.stdin.getvalue() == b"You are twig."
-    assert json.loads((tmp_path / "bus" / "twig" / "spawned").read_text())["by"] == "a"
-    assert swarm.sibling_argv(["js", "-p", "hello"], "/r/twig", "twig") == [sys.executable, "-m", "js", "-p", "-",
-                                                                            "--swarm", "/r/twig"]
-    with pytest.raises(ValueError):
-        a.spawn("twig", "again")  # already on the bus
-    monkeypatch.setattr(swarm, "SPAWN_CAP", 1)
-    with pytest.raises(ValueError):
-        a.spawn("moss", "one over the cap")
-
-
 # --------------------------------------------------------------------------
 # headless: a turn ends, the agent sleeps, a message wakes it
 # --------------------------------------------------------------------------
@@ -308,46 +396,12 @@ def test_spawn_runs_the_parents_command_under_a_new_name(tmp_path, monkeypatch):
 def _agent_dir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("JS_AGENT", "voice")
+    monkeypatch.setenv("JS_DEFAULT_AGENT", "voice")
     monkeypatch.setenv("JS_MODEL", "offline-test-model")
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
     directory = tmp_path / ".js" / "agents" / "voice"
     directory.mkdir(parents=True)
     (directory / "00-role.md").write_text("SYSTEM", encoding="utf-8")
-
-
-def test_a_swarm_agent_sleeps_after_its_turn_and_wakes_on_a_message(tmp_path, monkeypatch):
-    _agent_dir(tmp_path, monkeypatch)
-    room = swarm.Room(tmp_path / "bus")
-    turns: list[list[str]] = []
-
-    def stream(**kwargs):
-        turns.append(["".join(p.text for p in m.parts if p.kind == "text")
-                      for m in kwargs["messages"] if m.role == "user"])
-        if len(turns) == 1:
-            threading.Timer(0.3, lambda: room.send("b", "a", "ping")).start()
-            answer = "first"
-        else:
-            room.send("steer", "a", "enough", kind="stop")  # lands during the turn; honored after it
-            answer = "second"
-        kwargs["on_text"](answer)
-        return ModelStreamResult(text=answer, tool_calls=[], reasoning="",
-                                 usage=ai.types.usage.Usage(input_tokens=0, output_tokens=1),
-                                 finish_reason="stop", assistant_message=ai.assistant_message(answer))
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    out = io.StringIO()
-
-    code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"), events=headless.JsonEvents(out))
-
-    assert code == 0
-    assert len(turns) == 2
-    assert "ping" in turns[1][-1] and "[#1 b -> you" in turns[1][-1]
-    kinds = [json.loads(line)["type"] for line in out.getvalue().splitlines()]
-    assert kinds.count("turn_start") == 2
-    second_turn = kinds.index("turn_start", kinds.index("turn_start") + 1)
-    assert kinds.index("sleep") < kinds.index("wake") < second_turn
-    assert kinds[-1] == "wake"  # the stop was the last thing it woke to; no turn ran on it
 
 
 # --------------------------------------------------------------------------
@@ -405,6 +459,20 @@ def test_run_spec_runs_every_agent_in_one_process_until_each_stops(tmp_path, mon
 
 def _user_texts_of(messages: list[dict]) -> list[str]:
     return [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
+
+
+def test_swarm_runner_fails_when_an_agent_cannot_be_configured(tmp_path, monkeypatch):
+    def configure(spec):
+        raise ValueError("invalid agent configuration")
+
+    monkeypatch.setattr(swarm_run, "_configure", configure)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 1
+    events = _events(out)
+    assert [(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"] == [("a", "error")]
+    assert events[-1]["exit_code"] == 1
 
 
 def test_recruit_in_process_adds_an_agent_to_the_same_loop(tmp_path, monkeypatch):
@@ -487,12 +555,315 @@ def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
         kwargs["on_text"]("ok")
         return _text("ok")
 
+    async def compact(self, **_kwargs):
+        timeline.append("compact")
+        return False
+
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda cfg, state: timeline.append("compact"))
+    monkeypatch.setattr(Conversation, "maybe_compact", compact)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
 
-    code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"),
-                           events=headless.JsonEvents(io.StringIO()))
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+    assert timeline == ["turn", "compact", "turn", "compact"]  # the trigger ran before each sleep
 
-    assert code == 0
-    assert timeline.count("turn") == 2
-    assert timeline[:4] == ["turn", "compact", "turn", "compact"]  # the trigger ran before each sleep
+
+def test_recruit_past_the_spawn_cap_starts_no_agent(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    monkeypatch.setenv("JS_SWARM_SPAWN_MAX", "0")
+    room = swarm.Room(tmp_path / "bus")
+    calls = 0
+
+    def stream(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            args = json.dumps({"name": "twig", "opener": "twig-opener"})
+            message = ai.types.messages.Message(role="assistant", parts=[
+                ai.types.messages.ToolCallPart(tool_call_id="c1", tool_name="recruit", tool_args=args)])
+            return ModelStreamResult(text="", tool_calls=[ModelToolCall(id="c1", name="recruit", arguments=args)],
+                                     reasoning="", usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1),
+                                     finish_reason="tool_calls", assistant_message=message)
+        room.send("steer", "*", "enough", kind="stop")
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+    assert calls == 2
+    assert {e["agent"] for e in _events(out) if e["type"] == "agent_start"} == {"a"}
+    assert not (tmp_path / "bus" / "twig").exists()
+
+
+def test_swarm_agent_turn_is_on_disk_before_it_ends(tmp_path, monkeypatch):
+    from js.memory import load_messages
+
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    on_disk: list[list[str]] = []
+
+    async def turn(cfg, system, messages, telemetry, *, checkpoint, **kwargs):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": "read-1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+        messages.append({"role": "tool", "tool_call_id": "read-1", "name": "read", "content": "found"})
+        checkpoint()
+        # What a kill here would leave behind.
+        on_disk.append([m["role"] for m in load_messages(cfg.session_file)])
+        messages.append({"role": "assistant", "content": "done"})
+        room.send("steer", "*", "enough", kind="stop")
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+    assert on_disk == [["user", "assistant", "tool"]]
+
+
+def test_swarm_runner_accepts_agent_configuration_service(tmp_path):
+    configured = []
+    def configure(spec):
+        configured.append(spec.name)
+        raise ValueError("configuration refused")
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+    assert swarm_run.run(spec, out=io.StringIO(), configure=configure) == 1
+    assert configured == ["a"]
+
+
+def test_bus_send_hands_its_message_to_the_result_event(tmp_path, capsys):
+    from js.toolkit.core import call_scope, call_view
+
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    context = ToolContext(cwd=tmp_path, swarm=agent)
+    with call_scope("send-1"):
+        _bus("send", context, to="b", text="inspect the parser")
+        message = call_view()["message"]
+
+    assert message["from"] == "a"
+    assert message["to"] == "b"
+    assert message["body"] == "inspect the parser"
+    assert message["seq"] == 1
+    assert capsys.readouterr() == ("", "")
+
+
+def test_cancel_ends_the_turn_of_an_agent_that_ignores_stop(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    calls: list[str] = []
+
+    async def stream(**kwargs):
+        calls.append(_user_texts(kwargs)[-1])
+        # A turn that never reaches a tool boundary never reads the stop.
+        room.send("steer", "a", "wrap up", kind=swarm.STOP)
+        room.send("steer", "a", "", kind=swarm.CANCEL)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    assert len(calls) == 1
+    assert [e["type"] for e in events if e["type"] in ("turn_cancelled", "agent_end")] == ["turn_cancelled", "agent_end"]
+    assert [e["reason"] for e in events if e["type"] == "agent_end"] == ["stopped"]
+    session = next(e["session"] for e in events if e["type"] == "agent_start")
+    assert "a-opener" in _user_texts_of(memory.load_replay_messages(Path(session)))[0]
+
+
+def test_restart_runs_an_ended_agent_again_on_its_session(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    seen: list[str] = []
+
+    def ended(name: str) -> bool:
+        return any(e["type"] == "agent_end" and e["agent"] == name for e in _events(out))
+
+    async def stream(**kwargs):
+        texts = _user_texts(kwargs)
+        seen.append(texts[-1])
+        if "a-opener" in texts[-1]:
+            room.send("steer", "a", "done", kind=swarm.STOP)
+        elif "b-opener" in texts[-1]:
+            # b stays on the bus until a has ended, then brings it back.
+            while not ended("a"):
+                await asyncio.sleep(0.05)
+            room.send("steer", "a", "come back", kind=swarm.RESTART)
+        elif "come back" in texts[-1]:
+            room.send("steer", "*", "enough", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "cwd": str(tmp_path)},
+                            {"name": "b", "agent": "voice", "opener": "b-opener", "session": "s-b", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    starts = [e for e in events if e["type"] == "agent_start" and e["agent"] == "a"]
+    assert len(starts) == 2
+    assert starts[0]["session"] == starts[1]["session"]
+    assert any(e["type"] == "restart" and e["agent"] == "a" for e in events)
+    texts = _user_texts_of(memory.load_replay_messages(Path(starts[1]["session"])))
+    assert "a-opener" in texts[0] and "come back" in texts[-1]
+
+
+def test_a_runner_message_for_an_agent_not_in_that_state_is_dropped(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+
+    async def stream(**kwargs):
+        room.send("steer", "a", "", kind=swarm.RESTART)   # a is running, not ended
+        while not any(e["type"] == "dropped" for e in _events(out)):
+            await asyncio.sleep(0.05)
+        room.send("steer", "a", "enough", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    assert [(e["agent"], e["message_kind"]) for e in events if e["type"] == "dropped"] == [("a", "restart")]
+    assert len([e for e in events if e["type"] == "agent_start"]) == 1
+
+
+class _Kernel:
+    def __init__(self):
+        self.shut = 0
+
+    def shutdown(self):
+        self.shut += 1
+
+
+def test_an_ended_swarm_agent_shuts_its_kernel_down(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    kernel = _Kernel()
+    real_turn = runtime.run_turn_async
+
+    async def turn_with_kernel(*args, **kwargs):
+        kwargs["tool_context"].kernel_session = kernel
+        return await real_turn(*args, **kwargs)
+
+    def stream(**kwargs):
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn_with_kernel)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+    assert kernel.shut == 1
+
+
+def _project_jsrc(tmp_path, text: str) -> None:
+    (tmp_path / ".js").mkdir(exist_ok=True)
+    (tmp_path / ".js" / "jsrc").write_text(text, encoding="utf-8")
+
+
+def test_a_jsrc_tool_call_guard_vets_a_swarm_agents_calls(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    _project_jsrc(tmp_path, "on tool_call exec sh -c 'echo off limits >&2; exit 2'\n")
+    room = swarm.Room(tmp_path / "bus")
+    calls = iter([_call("who", "c1")])
+
+    def stream(**kwargs):
+        reply = next(calls, None)
+        if reply is not None:
+            return reply
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    session = next(e["session"] for e in _events(out) if e["type"] == "agent_start")
+    results = [m for m in memory.load_replay_messages(Path(session)) if m.get("role") == "tool"]
+    assert results and str(results[0]["content"]).startswith("ERROR: off limits")
+
+
+def test_a_jsrc_handler_that_needs_the_repl_is_reported_once_and_not_run(tmp_path, monkeypatch, capsys):
+    _agent_dir(tmp_path, monkeypatch)
+    _project_jsrc(tmp_path, "on turn_start set READ_LINES_MAX 5\n")
+    room = swarm.Room(tmp_path / "bus")
+
+    def stream(**kwargs):
+        room.send("steer", "*", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": n, "agent": "voice", "opener": "go", "session": f"s-{n}", "cwd": str(tmp_path)}
+                            for n in ("a", "b")])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    assert capsys.readouterr().err.count(f"{tmp_path / '.js' / 'jsrc'}:1") == 1
+    assert all(json.loads(line) for line in out.getvalue().splitlines())
+
+
+def test_a_second_agent_on_a_running_agents_session_fails_without_writing(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    turns: list[str] = []
+
+    async def stream(**kwargs):
+        turns.append(_user_texts(kwargs)[-1])
+        # The first agent keeps its session until the second has ended.
+        for _ in range(100):
+            if any(e["type"] == "agent_end" for e in _events(out)):
+                break
+            await asyncio.sleep(0.05)
+        room.send("steer", "*", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": n, "agent": "voice", "opener": f"{n}-opener", "session": "shared", "cwd": str(tmp_path)}
+                            for n in ("a", "b")])
+
+    assert swarm_run.run(spec, out=out) == 1
+
+    events = _events(out)
+    ends = {e["agent"]: e["reason"] for e in events if e["type"] == "agent_end"}
+    assert sorted(ends.values()) == ["error", "stopped"]
+    assert len(turns) == 1
+
+
+def test_what_an_agent_writes_to_stderr_is_tagged_and_kept_in_its_own_file(tmp_path, monkeypatch, capsys):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+
+    def stream(**kwargs):
+        me = "a" if "a-opener" in _user_texts(kwargs)[0] else "b"
+        print(f"trouble in {me}", file=sys.stderr)
+        room.send("steer", me, "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": n, "agent": "voice", "opener": f"{n}-opener", "session": f"s-{n}",
+                             "cwd": str(tmp_path)} for n in ("a", "b")])
+
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+
+    err = capsys.readouterr().err.splitlines()
+    assert "[a] trouble in a" in err and "[b] trouble in b" in err
+    for name in ("a", "b"):
+        assert (tmp_path / "bus" / name / "stderr").read_text(encoding="utf-8") == f"trouble in {name}\n"

@@ -17,7 +17,7 @@ from ai.models.core import params as ai_params
 from ai.providers.anthropic.protocol import _apply_anthropic_params
 from ai.providers.openai.protocol import _apply_common_openai_params
 
-from js.model_client import _build_inference_params
+from js.request_params import _build_inference_params
 from js.sampling import Sampling
 
 
@@ -52,7 +52,7 @@ def test_an_openai_endpoint_receives_the_conversation_cache_key():
     assert wire["prompt_cache_key"] == "js-defaultagent-session01"
 
 
-def test_the_codex_responses_path_receives_the_same_key():
+def test_the_responses_path_receives_the_same_key():
     wire = _openai_wire(ai_params.CacheParams(key="js-defaultagent-session01"), responses=True)
 
     assert wire["prompt_cache_key"] == "js-defaultagent-session01"

@@ -9,12 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import one_turn
 
 from js import memory, runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 from js.turn_surface import SurfaceJournal
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.mark.parametrize("field", ["agent_id", "cwd"])
@@ -30,7 +31,7 @@ def test_a_surface_saved_under_another_scope_is_not_restored(tmp_path, monkeypat
         return _result(text="ready")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    runtime.run_turn(cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
+    one_turn(cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(["shell:lazy"]),
                      tool_context=ToolContext(cwd=tmp_path))
     assert seen == [["tool_discovery"]]
@@ -48,7 +49,7 @@ def test_a_surface_saved_under_this_scope_is_restored(tmp_path, monkeypatch):
         return _result(text="ready")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    runtime.run_turn(replace(cfg), "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
+    one_turn(replace(cfg), "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(["shell:lazy"]),
                      tool_context=ToolContext(cwd=tmp_path))
     assert seen == [["shell", "tool_discovery"]]
@@ -95,6 +96,25 @@ def test_restore_skips_a_surface_saved_under_another_scope(tmp_path):
     path = tmp_path / "session.jsonl"
     memory.append_tool_surface(path, {**_scope(tmp_path), "agent_id": "other",
                                       "ids": ["native:shell"], "mcp_sources": []})
+    registry = _Registry({"ids": [], "mcp_sources": []})
+    asyncio.run(_journal(path, registry, tmp_path).restore())
+    assert registry.restored == []
+
+
+def test_returning_to_a_directory_restores_its_latest_surface(tmp_path):
+    path = tmp_path / "session.jsonl"
+    saved = {**_scope(tmp_path), "ids": ["native:shell"], "mcp_sources": []}
+    memory.append_tool_surface(path, {**saved, "ids": ["native:read"]})
+    memory.append_tool_surface(path, saved)
+    memory.append_tool_surface(path, {**saved, "cwd": str(tmp_path / "other"),
+                                      "ids": ["native:write"]})
+    registry = _Registry({"ids": [], "mcp_sources": []})
+
+    asyncio.run(_journal(path, registry, tmp_path).restore())
+
+    assert registry.restored == [saved]
+    memory.append_mark(path, "session_reset")
+    memory.append_tool_surface(path, {**saved, "cwd": str(tmp_path / "other")})
     registry = _Registry({"ids": [], "mcp_sources": []})
     asyncio.run(_journal(path, registry, tmp_path).restore())
     assert registry.restored == []

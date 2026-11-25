@@ -1,0 +1,1 @@
+List prompts from an MCP server. Before using this control, run tool_discovery with kind="mcp" (and optionally source) to connect servers, then pass the exact server name from a mcp:server:* status result.

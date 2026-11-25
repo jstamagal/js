@@ -1,0 +1,692 @@
+"""Web search, library docs, and rendered-page tools.
+
+Four search backends and one reader, kept as separate tools so each agent's
+agent.yaml can name exactly the surface it needs. Every backend
+reads its API key from a setting or the environment at call time and fails with a plain
+ERROR string when the key is missing, so a surface can carry a tool the
+current shell cannot use without breaking registry assembly.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import re
+import subprocess
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+from .. import settings as _settings
+from ..capped_process import CappedProcessResult, run_capped
+from ..tool_binaries import resolve_binary
+from .core import Tool, ToolContext
+from .descriptions import load_description, load_parameter_description
+from .presentation import Presentation
+from .results import truncate
+from .sanitize import int_or_default, text_or_default
+
+
+def _http_body(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    secrets: tuple[str, ...] = (),
+    retry_without_auth_on: tuple[int, ...] = (),
+    timeout: float,
+    user_agent: str,
+) -> bytes | str:
+    """Fetch a response body, optionally retrying once without Authorization."""
+    data = None
+    all_headers = {"User-Agent": user_agent, **(headers or {})}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        all_headers.setdefault("Content-Type", "application/json")
+
+    retried_without_auth = False
+    while True:
+        req = urllib.request.Request(url, data=data, headers=all_headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            has_authorization = any(name.lower() == "authorization" for name in all_headers)
+            if not retried_without_auth and exc.code in retry_without_auth_on and has_authorization:
+                all_headers = {
+                    name: value
+                    for name, value in all_headers.items()
+                    if name.lower() != "authorization"
+                }
+                retried_without_auth = True
+                continue
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
+            for secret in secrets:
+                if secret:
+                    detail = detail.replace(secret, "[REDACTED]")
+            return f"ERROR: HTTP {exc.code} from {urllib.parse.urlparse(url).netloc}: {detail[:200]}"
+        except Exception as exc:  # noqa: BLE001
+            detail = str(exc)
+            for secret in secrets:
+                if secret:
+                    detail = detail.replace(secret, "[REDACTED]")
+            return f"ERROR: {type(exc).__name__}: {detail}"
+
+
+def _http_json(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    secrets: tuple[str, ...] = (),
+    retry_without_auth_on: tuple[int, ...] = (),
+    timeout: float,
+    user_agent: str,
+) -> dict[str, Any] | str:
+    """One JSON-object round-trip. Returns a mapping, or an ERROR string."""
+    body = _http_body(
+        url,
+        method=method,
+        headers=headers,
+        payload=payload,
+        secrets=secrets,
+        retry_without_auth_on=retry_without_auth_on,
+        timeout=timeout,
+        user_agent=user_agent,
+    )
+    if isinstance(body, str):
+        return body
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return f"ERROR: non-JSON response from {urllib.parse.urlparse(url).netloc}"
+    if not isinstance(parsed, dict):
+        host = urllib.parse.urlparse(url).netloc
+        return f"ERROR: expected a JSON object from {host}, got {_json_kind(parsed)}"
+    return parsed
+
+
+def _json_kind(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
+
+
+def _key(name: str, context: ToolContext) -> str | None:
+    value = (getattr(context, name.lower()) or "").strip()
+    return value or None
+
+
+# The setting each keyed search tool reads its API key from.
+API_KEY_SETTINGS = {
+    "serper_search": "SERPER_API_KEY",
+    "tavily_search": "TAVILY_API_KEY",
+    "exa_search": "EXA_API_KEY",
+}
+
+
+def missing_api_key(tool_name: str, context: ToolContext) -> str | None:
+    """The API key setting ``tool_name`` needs and ``context`` and the
+    environment leave unset, or None."""
+    setting = API_KEY_SETTINGS.get(tool_name)
+    if setting is None or _key(setting, context) is not None:
+        return None
+    return setting
+
+
+def _hidden(context: ToolContext, *keys: str | None) -> tuple[str, ...]:
+    """The keys an error to the model shows as [REDACTED]."""
+    return tuple(key for key in keys if key)
+
+
+def _bounded_int(raw: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
+    if isinstance(raw, float) and not raw.is_integer():
+        value = default
+    else:
+        value = int_or_default(raw, default)
+    value = max(minimum, value)
+    return min(maximum, value) if maximum is not None else value
+
+
+def _numbered(results: Any, *, url_key: str, body_key: str) -> str:
+    if not isinstance(results, list):
+        return f"ERROR: expected search results to be an array, got {_json_kind(results)}"
+    lines: list[str] = []
+    for i, hit in enumerate(results, 1):
+        if not isinstance(hit, dict):
+            return f"ERROR: expected search result {i} to be an object, got {_json_kind(hit)}"
+        title = str(hit.get("title") or "").strip()
+        url = str(hit.get(url_key) or "").strip()
+        body = str(hit.get(body_key) or "").strip()
+        lines.append(f"{i}. {title}\n{url}" + (f"\n{body}" if body else ""))
+    return "\n\n".join(lines) if lines else "no results"
+
+
+def serper_search(
+    query: str,
+    num: int | None = 8,
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    query = text_or_default(query).strip()
+    if not query:
+        return "ERROR: query is required"
+    key = _key("SERPER_API_KEY", context)
+    if key is None:
+        return "ERROR: SERPER_API_KEY is not set"
+    reply = _http_json(
+        "https://google.serper.dev/search",
+        method="POST",
+        headers={"X-API-KEY": key},
+        payload={"q": query, "num": _bounded_int(num, 8, minimum=1, maximum=100)},
+        secrets=_hidden(context, key),
+        timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
+    )
+    if isinstance(reply, str):
+        return reply
+    organic = reply.get("organic")
+    if organic is None:
+        organic = []
+    numbered = _numbered(organic, url_key="link", body_key="snippet")
+    if numbered.startswith("ERROR: "):
+        return numbered
+    box = reply.get("answerBox")
+    if box is None:
+        box = {}
+    if not isinstance(box, dict):
+        return f"ERROR: expected answerBox to be an object, got {_json_kind(box)}"
+    parts: list[str] = []
+    answer = str(box.get("answer") or box.get("snippet") or "").strip()
+    if answer:
+        parts.append(f"answer box: {answer}")
+    parts.append(numbered)
+    return truncate("\n\n".join(parts), context)
+
+
+def tavily_search(
+    query: str,
+    max_results: int | None = 8,
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    query = text_or_default(query).strip()
+    if not query:
+        return "ERROR: query is required"
+    key = _key("TAVILY_API_KEY", context)
+    if key is None:
+        return "ERROR: TAVILY_API_KEY is not set"
+    reply = _http_json(
+        "https://api.tavily.com/search",
+        method="POST",
+        headers={"Authorization": f"Bearer {key}"},
+        payload={
+            "query": query,
+            "max_results": _bounded_int(max_results, 8, minimum=1, maximum=20),
+            "include_answer": True,
+        },
+        secrets=_hidden(context, key),
+        timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
+    )
+    if isinstance(reply, str):
+        return reply
+    results = reply.get("results")
+    if results is None:
+        results = []
+    numbered = _numbered(results, url_key="url", body_key="content")
+    if numbered.startswith("ERROR: "):
+        return numbered
+    parts: list[str] = []
+    answer = str(reply.get("answer") or "").strip()
+    if answer:
+        parts.append(f"answer: {answer}")
+    parts.append(numbered)
+    return truncate("\n\n".join(parts), context)
+
+
+def exa_search(
+    query: str,
+    num: int | None = 8,
+    text_chars: int | None = 1500,
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    query = text_or_default(query).strip()
+    if not query:
+        return "ERROR: query is required"
+    key = _key("EXA_API_KEY", context)
+    if key is None:
+        return "ERROR: EXA_API_KEY is not set"
+    reply = _http_json(
+        "https://api.exa.ai/search",
+        method="POST",
+        headers={"x-api-key": key},
+        payload={
+            "query": query,
+            "numResults": _bounded_int(num, 8, minimum=1, maximum=100),
+            "type": "auto",
+            "contents": {"text": {"maxCharacters": _bounded_int(text_chars, 1500, minimum=100)}},
+        },
+        secrets=_hidden(context, key),
+        timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
+    )
+    if isinstance(reply, str):
+        return reply
+    results = reply.get("results")
+    if results is None:
+        results = []
+    return truncate(_numbered(results, url_key="url", body_key="text"), context)
+
+
+# Context7's search is best-effort keyword matching: a query that is not a real
+# library still comes back with a real but unrelated project. Its `score` is an
+# unbounded relevance number (live payloads run from hundreds to thousands), so
+# it cannot say whether a hit is the requested library. The name can: a hit is
+# only presented when the whole requested name matches the hit's own project
+# name — an id path segment or its title — as a whole word.
+_CONTEXT7_SEPARATORS = re.compile(r"[^a-z0-9]+")
+
+
+def _context7_words(text: str) -> list[str]:
+    """The lowercased alphanumeric words of a name, separators and punctuation gone."""
+    return [word for word in _CONTEXT7_SEPARATORS.split(text.lower()) if word]
+
+
+def _context7_names(result: dict[str, Any]) -> set[str]:
+    """Every whole word a hit goes by: its id path segments and its title."""
+    library_id = str(result.get("id") or "").strip().strip("/")
+    names: set[str] = set()
+    for form in (*library_id.split("/"), str(result.get("title") or "")):
+        words = _context7_words(form)
+        names.add("".join(words))
+        names.update(words)
+    return names
+
+
+def _context7_plausible(library: str, result: dict[str, Any]) -> bool:
+    words = _context7_words(library)
+    if not words:
+        return False
+    return "".join(words) in _context7_names(result)
+
+
+def _context7_rank(result: dict[str, Any]) -> tuple[float, int, float]:
+    score = result.get("score")
+    trust = result.get("trustScore")
+    return (
+        float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 0.0,
+        1 if result.get("verified") else 0,
+        float(trust) if isinstance(trust, (int, float)) and not isinstance(trust, bool) else 0.0,
+    )
+
+
+def docs_search(
+    library: str,
+    topic: str | None = "",
+    tokens: int | None = 4000,
+    context: ToolContext | None = None,
+    *,
+    retry_without_auth_on: tuple[int, ...] = (401, 403),
+) -> str:
+    assert context is not None
+    library = text_or_default(library).strip()
+    if not library:
+        return "ERROR: library is required"
+    headers: dict[str, str] = {}
+    key = _key("CONTEXT7_API_KEY", context)
+    if key is not None:
+        headers["Authorization"] = f"Bearer {key}"
+
+    found = _http_json(
+        "https://context7.com/api/v1/search?query=" + urllib.parse.quote(library),
+        headers=headers,
+        secrets=_hidden(context, key),
+        retry_without_auth_on=retry_without_auth_on if key is not None else (),
+        timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
+    )
+    if isinstance(found, str):
+        return found
+    results = found.get("results")
+    if results is None:
+        results = []
+    if not isinstance(results, list):
+        return f"ERROR: expected search results to be an array, got {_json_kind(results)}"
+    if not results:
+        return f"no library on context7 matches {library!r}"
+    first = results[0]
+    if not isinstance(first, dict):
+        return f"ERROR: expected search result 1 to be an object, got {_json_kind(first)}"
+    matches = [
+        result
+        for result in results
+        if isinstance(result, dict) and _context7_plausible(library, result)
+    ]
+    if not matches:
+        return f"no library on context7 matches {library!r}"
+    best = max(matches, key=_context7_rank)
+    library_id = str(best.get("id") or "").strip()
+    if not library_id:
+        return f"no library on context7 matches {library!r}"
+
+    params = {"type": "txt", "tokens": str(_bounded_int(tokens, 4000, minimum=500))}
+    topic = text_or_default(topic).strip()
+    if topic:
+        params["topic"] = topic
+    doc_url = f"https://context7.com/api/v1{library_id}?" + urllib.parse.urlencode(params)
+    body = _http_body(
+        doc_url,
+        headers=headers,
+        secrets=_hidden(context, key),
+        retry_without_auth_on=retry_without_auth_on if key is not None else (),
+        timeout=context.fetch_timeout_s,
+        user_agent=context.user_agent,
+    )
+    if isinstance(body, str):
+        return body
+    text = body.decode("utf-8", errors="replace")
+    if not text.strip():
+        suffix = f", topic: {topic}" if topic else ""
+        return f"ERROR: context7 returned empty docs for {library_id}{suffix}"
+    header = f"[context7 {library_id}" + (f", topic: {topic}" if topic else "") + "]\n"
+    return truncate(header + text, context)
+
+
+def _is_private_ip_literal(url: str) -> bool:
+    host = urllib.parse.urlsplit(url).hostname
+    if host is None:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def _redacted_url(url: str) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        return "[invalid URL]"
+    if ":" in host:
+        host = f"[{host}]"
+    if port is not None:
+        host = f"{host}:{port}"
+    return urllib.parse.urlunsplit(parsed._replace(netloc=host, query="", fragment=""))
+
+
+_BROWSE_DUMPS = ("markdown", "text", "html", "links", "original", "assets", "cookies")
+_BROWSE_SETTLE_SECONDS = 5
+
+# obscura emits hrefs exactly as the page authored them, so `[Login](/login)` reaches
+# the model with nothing to resolve against. Rewriting them against the fetched URL is
+# what makes the link list actionable instead of decorative. In-page anchors are left
+# alone on purpose — they carry a "same page" signal that a full URL destroys.
+_MD_LINK = re.compile(r"(!?\[[^\]]*\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
+_MD_LINKED_IMAGE = re.compile(r"(\[!\[[^\]]*\]\([^\n)]*\)\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
+
+
+def absolutize(markdown: str, base_url: str) -> str:
+    def _fix(match: re.Match[str]) -> str:
+        label, target, title = match.group(1), match.group(2), match.group(3)
+        if target.startswith("#") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
+            return match.group(0)
+        return f"{label}({urllib.parse.urljoin(base_url, target)}{title})"
+
+    return _MD_LINKED_IMAGE.sub(_fix, _MD_LINK.sub(_fix, markdown))
+
+
+def _obscura_status(binary: str, url: str, timeout: float, context: ToolContext | None = None) -> int | None:
+    """The HTTP status browse is about to render, asked with the same identity
+    that will render it.
+
+    obscura reports no status on the render path -- it exits 0 on a 404 and
+    hands back the error page's body as ordinary content, so a model asking
+    browse to read a page got "404 page / error body" and no signal. Its batch
+    mode does report it: `fetch --file -` prints one JSON line per URL carrying
+    the real status.
+
+    Asking obscura rather than urllib is the whole point of this function. The
+    pinned build is the `stealth` release asset, which does TLS impersonation on
+    top of a browser fingerprint. A urllib probe presented a Python TLS
+    handshake and a js-agent user agent while Chromium rendered the page -- two
+    identities, and a bot-detection edge (Cloudflare, Datadome, PerimeterX)
+    answers them differently. That is how a page that rendered perfectly got
+    stamped ERROR: HTTP 403. Same binary and same flags means both requests
+    carry obscura's fingerprint, never js's.
+
+    The two obscura paths are still not byte-identical: measured against a local
+    server, the raw batch fetch sends an X11/Linux Chrome UA and the render
+    sends a Windows Chrome UA of the same major version. Both are real browser
+    identities with the stealth TLS profile behind them, which is the property
+    that decides the verdict.
+
+    Non-fatal by construction: any failure returns None, the render still
+    happens, and the caller reports the status as unknown.
+    """
+    argv = [binary]
+    if _settings.knob_attr(context, "browse_stealth", "BROWSE_STEALTH"):
+        argv.append("--stealth")
+    if _settings.knob_attr(context, "browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK") and _is_private_ip_literal(url):
+        argv.append("--allow-private-network")
+    argv += ["fetch", "--file", "-", "--timeout", str(max(1, int(timeout)))]
+    try:
+        proc = subprocess.run(
+            argv, input=f"{url}\n", capture_output=True, text=True, timeout=timeout + 5
+        )
+    except Exception:  # noqa: BLE001 -- missing binary, timeout, anything
+        return None
+    for line in reversed(proc.stdout.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and isinstance(record.get("status"), int):
+            return int(record["status"])
+    return None
+
+
+def browse(
+    url: str,
+    dump: str | None = "markdown",
+    screenshot: str | None = None,
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    url = text_or_default(url).strip()
+    if not url:
+        return "ERROR: url is required"
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme == "file":
+        # A local page is a file read; under `js -C` the jail decides it.
+        context.resolve_path(urllib.request.url2pathname(parsed_url.path))
+    binary = resolve_binary("obscura")
+    if binary is None:
+        return "ERROR: obscura is not installed (expected in tools/bin or on PATH)"
+    dump = text_or_default(dump, "markdown").strip().lower() or "markdown"
+    if dump not in _BROWSE_DUMPS:
+        return f"ERROR: dump must be one of {', '.join(_BROWSE_DUMPS)}"
+    process_timeout = int(context.browse_timeout_s)
+    obscura_timeout = max(1, process_timeout - 1)
+    # --stealth is global, so it goes before the subcommand. js never names
+    # itself to a site: obscura owns the identity, and on the stealth build that
+    # is a coherent browser fingerprint plus TLS impersonation. Overriding its
+    # user agent from here would contradict the TLS handshake it presents, which
+    # is precisely the mismatch bot detection looks for.
+    argv = [binary]
+    if context.browse_stealth:
+        argv.append("--stealth")
+    argv += ["fetch", "--dump", dump, "--timeout", str(obscura_timeout)]
+    if dump != "original":
+        # obscura's adaptive default can call a page quiescent while a timer is
+        # still pending. A fixed window captures common delayed SPA updates and
+        # gives browse a concrete, documented readiness boundary.
+        argv += ["--wait", str(_BROWSE_SETTLE_SECONDS)]
+    shot_path: Path | None = None
+    screenshot = text_or_default(screenshot, "").strip()
+    if screenshot:
+        # No extension check: obscura always writes PNG whatever the file is
+        # called, and js detects images by magic bytes, not by suffix. Rejecting
+        # `shot.jpg` would cost a turn and buy nothing.
+        shot_path = context.resolve_path(screenshot, write=True)
+        shot_path.parent.mkdir(parents=True, exist_ok=True)
+        argv += ["--screenshot", str(shot_path)]
+    if _settings.knob_attr(context, "browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK") and _is_private_ip_literal(url):
+        argv.append("--allow-private-network")
+    argv.append(url)
+    # Learn the status before rendering. Skipped for a screenshot-only call,
+    # which returns no page text for a status to qualify.
+    status = (
+        None
+        if shot_path is not None
+        else _obscura_status(binary, url, min(10.0, float(process_timeout)), context)
+    )
+    try:
+        if shot_path is not None:
+            context.snapshot(shot_path)
+        result = run_capped(
+            argv,
+            timeout=process_timeout,
+            cwd=str(context.cwd),
+            cap=context.max_tool_result_bytes,
+        )
+    except subprocess.TimeoutExpired:
+        return f"ERROR: browse timed out after {process_timeout} seconds fetching {_redacted_url(url)}"
+    except Exception as exc:  # noqa: BLE001
+        return f"ERROR: {type(exc).__name__}: {exc}"
+    if isinstance(result, CappedProcessResult):
+        code, raw_out, raw_err = result.returncode, result.stdout, result.stderr
+        out_truncated = result.stdout_truncated
+    else:
+        code, raw_out, raw_err = result
+        out_truncated = False
+    stdout = raw_out.decode("utf-8", errors="replace")
+    stderr = raw_err.decode("utf-8", errors="replace").strip()
+    if code != 0:
+        return f"ERROR: obscura exited {code}: {stderr[-300:] or stdout[-300:]}"
+    if shot_path is not None:
+        # obscura's --screenshot short-circuits the dump: it writes the PNG and emits
+        # nothing on stdout, and -o writes no file either (measured on obscura 0.2.0).
+        # Say so, rather than returning a bare path and letting the caller read the
+        # missing page text as "this page is empty".
+        if not shot_path.exists():
+            return f"ERROR: obscura exited 0 but wrote no screenshot at {shot_path}"
+        return (
+            f"SCREENSHOT path={shot_path} size={shot_path.stat().st_size} bytes\nobscura returns either a picture or a dump, never both. Call browse again without screenshot to read this page's content."
+        )
+    if dump != "original":
+        stdout = stdout.strip()
+    if dump == "markdown":
+        stdout = absolutize(stdout, url)
+    if out_truncated:
+        stdout = truncate(stdout, context, cut=True)
+    body = stdout or "(empty page)"
+    if status is not None and status >= 400:
+        # The body is kept: a 404 page sometimes IS what the caller wanted to
+        # read. But it leads with ERROR so the runtime marks the result as an
+        # error and the model cannot mistake an error page for the document.
+        return f'ERROR: HTTP {status} from {_redacted_url(url)}; the page below is the error response\n{body}'
+    return body
+
+
+def tools() -> tuple[Tool, ...]:
+    return (
+        Tool(
+            "serper_search",
+            load_description("serper_search"),
+            serper_search,
+            {
+                "query": {"type": "string"},
+                "num": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
+            },
+            required=("query",),
+            read_only=True,
+            presentation=Presentation(key=("query",), fold_noun="search"),
+        ),
+        Tool(
+            "tavily_search",
+            load_description("tavily_search"),
+            tavily_search,
+            {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
+            },
+            required=("query",),
+            read_only=True,
+            presentation=Presentation(key=("query",), fold_noun="search"),
+        ),
+        Tool(
+            "exa_search",
+            load_description("exa_search"),
+            exa_search,
+            {
+                "query": {"type": "string"},
+                "num": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
+                "text_chars": {"type": "integer", "minimum": 100, "default": 1500},
+            },
+            required=("query",),
+            read_only=True,
+            presentation=Presentation(key=("query",), fold_noun="search"),
+        ),
+        Tool(
+            "docs_search",
+            load_description("docs_search"),
+            docs_search,
+            {
+                "library": {"type": "string"},
+                "topic": {"type": "string"},
+                "tokens": {"type": "integer", "minimum": 500, "default": 4000},
+            },
+            required=("library",),
+            read_only=True,
+            presentation=Presentation(key=("topic",), fold_noun="search"),
+        ),
+        Tool(
+            "browse",
+            load_description("browse"),
+            browse,
+            {
+                "url": {"type": "string", "description": load_parameter_description('browse', 'url')},
+                "dump": {
+                    "type": "string",
+                    "enum": list(_BROWSE_DUMPS),
+                    "default": "markdown",
+                    "description": (
+                        load_parameter_description('browse', 'dump')
+                    ),
+                },
+                "screenshot": {
+                    "type": "string",
+                    "description": load_parameter_description('browse', 'screenshot'),
+                },
+            },
+            required=("url",),
+            # Each call is its own obscura process; only a screenshot writes a file.
+            read_only_when=lambda args: not text_or_default(args.get("screenshot")).strip(),
+            presentation=Presentation(key=("url",), fold_noun="page"),
+        ),
+    )

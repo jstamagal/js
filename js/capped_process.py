@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
 import signal
 import subprocess
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import paths, settings as _settings
+from .jail import _IGNORE_SIGINT
 
 # After the process exits, how long its reader threads get to drain the pipes
 # before a reader still blocked (a grandchild holding the pipe) is stopped.
@@ -107,6 +111,7 @@ class _StreamCapture:
         self._tail_cap = 0 if spill_path is None else self.cap - self._head_cap
         self._head = bytearray()
         self._tail = bytearray()
+        self.newlines = 0
         self._total = 0
         self._file = None
         self._spilled = False
@@ -126,13 +131,13 @@ class _StreamCapture:
             handle.write(self._head)
             handle.write(self._tail)
             handle.flush()
+            if self._closed:
+                handle.close()
         except OSError:
             self._spill_failed = True
             return
         self._spilled = True
-        if self._closed:
-            handle.close()
-        else:
+        if not self._closed:
             self._file = handle
 
     def feed(self, chunk: bytes) -> None:
@@ -149,6 +154,7 @@ class _StreamCapture:
                     with contextlib.suppress(OSError):
                         self._file.close()
                     self._file = None
+            self.newlines += chunk.count(b"\n")
             self._total += len(chunk)
             rest = chunk
             room = self._head_cap - len(self._head)
@@ -165,8 +171,11 @@ class _StreamCapture:
         with self._lock:
             self._closed = True
             if self._file is not None:
-                with contextlib.suppress(OSError):
+                try:
                     self._file.close()
+                except OSError:
+                    self._spill_failed = True
+                    self._spilled = False
                 self._file = None
 
     def ensure_spilled(self) -> Path | None:
@@ -205,14 +214,19 @@ class _StreamCapture:
             if start >= tail_start:
                 return bytes(self._tail[start - tail_start:end - tail_start])
             if self._spilled and self.spill_path is not None:
-                if self._file is not None:
-                    self._file.flush()
                 try:
+                    if self._file is not None:
+                        self._file.flush()
                     with open(self.spill_path, "rb") as spilled:
                         spilled.seek(start)
                         return spilled.read(end - start)
                 except OSError:
-                    pass
+                    self._spill_failed = True
+                    self._spilled = False
+                    if self._file is not None:
+                        with contextlib.suppress(OSError):
+                            self._file.close()
+                        self._file = None
             kept = bytes(self._head[start:min(end, head_len)])
             if end > tail_start:
                 kept += bytes(self._tail[max(start, tail_start) - tail_start:end - tail_start])
@@ -238,13 +252,64 @@ class _StreamCapture:
         tail = tail[_utf8_start(tail):]
         cut = tail.find(b"\n", 0, _LINE_SNAP)
         tail = tail[cut + 1:] if 0 <= cut < len(tail) - 1 else tail
-        return Excerpt(head, tail, (start + len(head), total - len(tail)), total, path)
+        return Excerpt(head, tail, (start + len(head), total - len(tail)), total,
+                       path if self._spilled else None)
+
+
+def _session_members(sid: int) -> list[int]:
+    """Pids in session ``sid``, read from /proc (empty where there is none)."""
+    found = []
+    with contextlib.suppress(OSError):
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "rb") as f:
+                    stat = f.read()
+            except OSError:
+                continue
+            # Fields after the command name, which may hold spaces and ')'.
+            fields = stat[stat.rfind(b")") + 2:].split()
+            if len(fields) > 3 and int(fields[3]) == sid:
+                found.append(int(entry.name))
+    return found
+
+
+def _log_kill(proc: subprocess.Popen, members: list[int]) -> None:
+    """Append one line to KILL_LOG_FILE (unset = ~/.js/state/kill.log): when,
+    which command, the pids hit, and the js calls that led to the kill."""
+
+    path = Path(_settings.live_value("KILL_LOG_FILE") or paths.state_root() / "kill.log").expanduser()
+    args = proc.args if isinstance(proc.args, (list, tuple)) else [str(proc.args)]
+    args = [str(a) for a in args]
+
+    wrapped = args[len(_IGNORE_SIGINT):] if args[:len(_IGNORE_SIGINT)] == _IGNORE_SIGINT else args
+    if (wrapped and Path(wrapped[0]).name == "bwrap"
+            and wrapped[1:5] == ["--die-with-parent", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"]
+            and "--" in wrapped):
+        args = wrapped[wrapped.index("--") + 1:]
+    command = shlex.join(args)
+    frames = traceback.extract_stack()[:-2][-10:]
+    via = " < ".join(f"{Path(f.filename).stem}.{f.name}" for f in reversed(frames))
+    line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} js={os.getpid()} pid={proc.pid} "
+            f"session={members} cmd={command[:300]!r} via {via}\n")
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
 
 
 def _signal_tree(proc: subprocess.Popen) -> None:
-    """SIGKILL the child and its whole process group (grandchildren spawned
-    into the session would otherwise survive a timeout kill and keep the box
-    busy). Returns without waiting for them to die."""
+    """SIGKILL the child and everything in its session. The child leads a new
+    session, and a grandchild that moves to its own process group (``timeout``
+    does, and so does any job-control shell) stays in it; killing the group
+    alone left those running and the box busy. Returns without waiting for
+    them to die."""
+    members = _session_members(proc.pid)
+    _log_kill(proc, members)
+    for pid in members:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
         os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(Exception):
@@ -289,19 +354,18 @@ class CappedProcess:
         return self._captures[name]
 
     def _finish_readers(self) -> None:
+        """Give the readers ``READER_GRACE_S`` to drain the pipes, then stop
+        the ones still polling (a grandchild holding a pipe keeps them from
+        seeing EOF). Each reader closes its own pipe on the way out; this side
+        never touches the fds, so no close lands on a number the kernel has
+        already handed to another file."""
         deadline = time.monotonic() + READER_GRACE_S
         for thread in self._threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
         if any(thread.is_alive() for thread in self._threads):
             self._stop_readers.set()
-            for stream in (self.proc.stdout, self.proc.stderr):
-                with contextlib.suppress(Exception):
-                    os.close(stream.fileno())
             for thread in self._threads:
                 thread.join(timeout=0.5)
-        for stream in (self.proc.stdout, self.proc.stderr):
-            with contextlib.suppress(Exception):
-                stream.close()
         for capture in self._captures.values():
             capture.close()
 
@@ -317,13 +381,29 @@ class CappedProcess:
                 )
             return self._result
 
-    def wait(self, timeout: float | None) -> CappedProcessResult | None:
+    def wait(self, timeout: float | None, *, pipe_idle: float | None = None) -> CappedProcessResult | None:
+        """Wait for exit. With pipe_idle, drain active descendants until EOF or
+        that many seconds of silence, within the same overall timeout."""
         if self._result is not None:
             return self._result
+        deadline = None if timeout is None else time.monotonic() + timeout
         try:
             rc = self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
+        if pipe_idle is not None:
+            for thread in self._threads:
+                while thread.is_alive():
+                    before = sum(stream.total for stream in self._captures.values())
+                    wait = pipe_idle if deadline is None else min(pipe_idle, deadline - time.monotonic())
+                    thread.join(max(0, wait))
+                    if not thread.is_alive():
+                        break
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return None
+                    if before == sum(stream.total for stream in self._captures.values()):
+                        self._stop_readers.set()
+                        break
         return self._collect(rc)
 
     def send_kill(self) -> None:
@@ -346,6 +426,7 @@ def start_capped(
     env: dict[str, str] | None = None,
     cap: int,
     spill_prefix: Path | None = None,
+    merge_stderr: bool = False,
 ) -> CappedProcess:
     """Start ``argv`` with both streams captured to at most ``cap`` bytes each.
 
@@ -368,7 +449,7 @@ def start_capped(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
         cwd=cwd,
         env=env,
         start_new_session=True,
@@ -397,20 +478,15 @@ def start_capped(
                 capture.feed(chunk)
         except Exception:  # noqa: BLE001 - a dying pipe just ends the capture
             return
+        finally:
+            with contextlib.suppress(Exception):
+                stream.close()
 
     threads = [
-        threading.Thread(
-            target=_reader,
-            args=("stdout", proc.stdout),
-            daemon=True,
-            name="capped-process-stdout",
-        ),
-        threading.Thread(
-            target=_reader,
-            args=("stderr", proc.stderr),
-            daemon=True,
-            name="capped-process-stderr",
-        ),
+        threading.Thread(target=_reader, args=(name, stream), daemon=True,
+                         name=f"capped-process-{name}")
+        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr))
+        if stream is not None
     ]
 
     for thread in threads:
@@ -418,7 +494,7 @@ def start_capped(
     return CappedProcess(proc, captures, threads, stop_readers)
 
 
-def _run_capped(
+def run_capped(
     argv: list[str],
     *,
     timeout: int,
@@ -430,7 +506,11 @@ def _run_capped(
     ``subprocess.run``, with the whole process tree killed and whatever was
     captured attached."""
     job = start_capped(argv, cwd=cwd, env=env, cap=cap)
-    result = job.wait(timeout)
+    try:
+        result = job.wait(timeout)
+    except BaseException:
+        job.kill()
+        raise
     if result is None:
         killed = job.kill()
         raise CappedProcessTimeout(
@@ -445,5 +525,5 @@ def _run_capped(
     return result
 
 
-def truncation_marker(cap: int, knob: str = "limits.max_bash_output_bytes") -> str:
-    return f"[truncated: {knob} ({cap}) reached]"
+def truncation_marker(cap: int, knob: str = "SHELL_OUTPUT_MAX") -> str:
+    return f'[truncated: {knob} ({cap}) reached]'

@@ -9,37 +9,82 @@ original text lives in the session JSONL.
 from __future__ import annotations
 
 import contextlib
-import re
+import os
+import sys
 import threading
+import weakref
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+from . import (
+    control_sequences,
+    fset,
+    messages as msgs,
+    network_display,
+    output,
+    paths as _paths,
+    settings as _settings,
+    text_layout,
+    tool_display,
+    toolkit as _toolkit,
+)
+from .console import call_stats_visible, subagent_finished_fields, subagent_started_fields
 
-_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+if TYPE_CHECKING:
+    from . import runtime
+    from .config import Config
 
 
 def strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    """``text`` without terminal escapes, the ones `control_sequences.clean` removes,
+    so no write puts an escape into the log. Other control bytes stay, so the
+    log keeps carriage returns and tabs as they were shown."""
+    cleaner = control_sequences.StreamCleaner(controls=True)
+    return cleaner.feed(text) + cleaner.flush()
 
 
 class TranscriptLogSink:
     """Thread-safe append-only transcript sink.
 
-    Every write swallows IO failures. A failing file disables the whole sink so a
-    bad log path never crashes or slows later turns with repeated errors.
+    Every write swallows IO failures. TRANSCRIPT_DISABLE_ALL_ON_ERROR decides
+    whether a failing file disables the whole sink or only that file.
     """
 
-    def __init__(self, files: list, paths: list[Path]) -> None:
+    def __init__(self, files: list, paths: list[Path], *, settings: dict | None = None) -> None:
+        self.settings = settings
         self._files = files
         self.paths = paths
         self._lock = threading.Lock()
+        self._failures: list[tuple[str, BaseException]] = []
         self._plain_at_line_start = True
         self._speaker_at_line_start: dict[str, bool] = {}
         self._mute = threading.local()
+        # One escape cleaner per stream, each plain source (`plain:NAME`) and
+        # each speaker, so an escape cut between two writes is still taken
+        # whole and one stream's open escape never swallows another's text.
+        self._cleaners: dict[str, control_sequences.StreamCleaner] = {}
+
+    def emit(self, event: output.OutputEvent) -> None:
+        fields = dict(event.fields)
+        if event.name == "transcript_plain":
+            self.write_plain(fields["text"], source=fields.get("source", ""))
+        elif event.name == "transcript_user":
+            self.write_user(fields["text"])
+        elif event.name == "transcript_assistant":
+            self.write_assistant(fields["text"])
+
+    def _cleaned(self, stream: str, text: str) -> str:
+        cleaner = self._cleaners.setdefault(stream, control_sequences.StreamCleaner(controls=True))
+        return cleaner.feed(text)
+
+    def _flushed(self, stream: str) -> str:
+        cleaner = self._cleaners.pop(stream, None)
+        return cleaner.flush() if cleaner is not None else ""
 
     def _stamp(self) -> str:
-        return datetime.now().strftime("[%H:%M] ")
+        return datetime.now().strftime(_settings.knob(self.settings, "TRANSCRIPT_TIMESTAMP_FORMAT"))
 
     def _disable_locked(self) -> None:
         for f in self._files:
@@ -52,77 +97,106 @@ class TranscriptLogSink:
     def _write_locked(self, text: str) -> None:
         if not text or not self._files:
             return
-        try:
-            for f in self._files:
+        for f in list(self._files):
+            try:
                 f.write(text)
                 f.flush()
-        except Exception:
-            self._disable_locked()
+            except Exception as exc:
+                if self._failed_locked(f, exc):
+                    break
 
-    def write_plain(self, text: str) -> None:
-        """Write non-speaker visible text, line-prefixed with a cheap timestamp."""
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold the lock, then report the files that failed under it. The
+        report is printed after release because the tee may write it back
+        into this sink."""
+        with self._lock:
+            yield
+            failures, self._failures = self._failures, []
+        for name, exc in failures:
+            output.failed_once(f"transcript log {name}", exc)
+
+    def _failed_locked(self, failed: Any, exc: BaseException) -> bool:
+        """Disable failed destinations; return whether the whole sink stopped."""
+        self._failures.append((str(getattr(failed, "name", "")), exc))
+        if _settings.knob(self.settings, "TRANSCRIPT_DISABLE_ALL_ON_ERROR"):
+            self._disable_locked()
+            return True
+        with contextlib.suppress(Exception):
+            failed.close()
+        self._files = [f for f in self._files if f is not failed]
+        return False
+
+    def write_plain(self, text: str, *, source: str = "") -> None:
+        """Write non-speaker visible text, line-prefixed with a cheap timestamp.
+        ``source`` names the stream it came from: each has its own cleaner."""
         if not text or self.is_muted():
             return
-        clean = strip_ansi(str(text))
-        with self._lock:
-            for part in clean.splitlines(keepends=True):
-                if self._plain_at_line_start:
-                    self._write_locked(self._stamp())
-                    self._plain_at_line_start = False
-                if part.endswith("\n"):
-                    self._write_locked(part)
-                    self._plain_at_line_start = True
-                else:
-                    self._write_locked(part)
+        with self._locked():
+            self._plain_locked(self._cleaned(f"plain:{source}", str(text)))
+
+    def _plain_locked(self, clean: str) -> None:
+        for part in clean.splitlines(keepends=True):
+            if self._plain_at_line_start:
+                self._write_locked(self._stamp())
+                self._plain_at_line_start = False
+            if part.endswith("\n"):
+                self._write_locked(part)
+                self._plain_at_line_start = True
+            else:
+                self._write_locked(part)
 
     def write_turn(self, speaker: str, text: str) -> None:
         self._write_speaker_chunk(speaker, text)
         self.end_speaker_stream(speaker)
 
     def write_user(self, text: str) -> None:
-        self.write_turn("USER", text)
+        self.write_turn(_settings.knob(self.settings, "TRANSCRIPT_USER_LABEL"), text)
 
     def write_assistant(self, text: str) -> None:
-        self.write_turn("APE", text)
+        self.write_turn(_settings.knob(self.settings, "TRANSCRIPT_ASSISTANT_LABEL"), text)
 
     def write_assistant_chunk(self, text: str) -> None:
-        self._write_speaker_chunk("APE", text)
+        self._write_speaker_chunk(_settings.knob(self.settings, "TRANSCRIPT_ASSISTANT_LABEL"), text)
 
     def end_assistant_stream(self) -> None:
-        self.end_speaker_stream("APE")
+        self.end_speaker_stream(_settings.knob(self.settings, "TRANSCRIPT_ASSISTANT_LABEL"))
 
     def _write_speaker_chunk(self, speaker: str, text: str) -> None:
         if not text:
             return
-        clean = strip_ansi(str(text))
-        prefix = f"<{speaker}> "
-        with self._lock:
-            at_line_start = self._speaker_at_line_start.get(speaker, True)
-            for part in clean.splitlines(keepends=True):
-                if at_line_start:
-                    self._write_locked(self._stamp() + prefix)
-                    at_line_start = False
-                if part.endswith("\n"):
-                    self._write_locked(part)
-                    at_line_start = True
-                else:
-                    self._write_locked(part)
-            self._speaker_at_line_start[speaker] = at_line_start
+        with self._locked():
+            self._speaker_locked(speaker, self._cleaned(speaker, str(text)))
+
+    def _speaker_locked(self, speaker: str, clean: str) -> None:
+        prefix = _settings.knob(self.settings, "TRANSCRIPT_SPEAKER_FORMAT").replace("{speaker}", speaker)
+        at_line_start = self._speaker_at_line_start.get(speaker, True)
+        for part in clean.splitlines(keepends=True):
+            if at_line_start:
+                self._write_locked(self._stamp() + prefix)
+                at_line_start = False
+            if part.endswith("\n"):
+                self._write_locked(part)
+                at_line_start = True
+            else:
+                self._write_locked(part)
+        self._speaker_at_line_start[speaker] = at_line_start
 
     def end_speaker_stream(self, speaker: str) -> None:
-        with self._lock:
+        with self._locked():
+            self._speaker_locked(speaker, self._flushed(speaker))
             if not self._speaker_at_line_start.get(speaker, True):
                 self._write_locked("\n")
                 self._speaker_at_line_start[speaker] = True
 
     def flush(self) -> None:
-        with self._lock:
-            for f in self._files:
+        with self._locked():
+            for f in list(self._files):
                 try:
                     f.flush()
-                except Exception:
-                    self._disable_locked()
-                    break
+                except Exception as exc:
+                    if self._failed_locked(f, exc):
+                        break
 
     def isatty(self) -> bool:
         return False
@@ -139,12 +213,40 @@ class TranscriptLogSink:
             self._mute.depth -= 1
 
     def close(self) -> None:
-        with self._lock:
+        with self._locked():
+            for stream in list(self._cleaners):
+                if stream.startswith("plain:"):
+                    self._plain_locked(self._flushed(stream))
+                else:
+                    self._speaker_locked(stream, self._flushed(stream))
             for speaker in list(self._speaker_at_line_start):
                 if not self._speaker_at_line_start.get(speaker, True):
                     self._write_locked("\n")
                     self._speaker_at_line_start[speaker] = True
             self._disable_locked()
+
+
+class ToolRecordsOnly:
+    """A transcript as a run sees it that records its answer and user line
+    itself afterwards (plain `js -p`): the tool calls go in, whole, as they
+    finish; the streamed answer does not, so it is not recorded twice."""
+
+    def __init__(self, sink: TranscriptLogSink) -> None:
+        self._sink = sink
+
+    def write_plain(self, text: str, *, source: str = "") -> None:
+        self._sink.write_plain(text, source=source)
+
+    def mute_tee(self):
+        return self._sink.mute_tee()
+
+    def flush(self) -> None:
+        self._sink.flush()
+
+
+# A write to a stream whose reader has gone (`js -p | head`) or that is closed:
+# the text has nowhere to go. Any other write failure is raised.
+READER_GONE = (BrokenPipeError, ValueError)
 
 
 class TranscriptTee:
@@ -157,24 +259,24 @@ class TranscriptTee:
     def write(self, text: str) -> None:
         try:
             self._primary.write(text)
-        except Exception:
+        except READER_GONE:
             pass
         sink = self._sink_getter()
         if sink is not None:
-            sink.write_plain(text)
+            sink.emit(output.event("transcript_plain", text=text, source=f"tee:{id(self)}"))
 
     def write_unlogged(self, text: str) -> None:
         """Write display-only material without feeding any nested transcript tee."""
         try:
             write = getattr(self._primary, "write_unlogged", self._primary.write)
             write(text)
-        except Exception:
+        except READER_GONE:
             pass
 
     def flush(self) -> None:
         try:
             self._primary.flush()
-        except Exception:
+        except READER_GONE:
             pass
         sink = self._sink_getter()
         if sink is not None:
@@ -187,16 +289,194 @@ class TranscriptTee:
             return False
 
 
+class TranscriptSink:
+    """The transcript log's record of a turn's output events: every traced tool
+    call whole as it finishes, the streamed answer, and the lines selected by
+    transcript stdio capture. It writes to the
+    telemetry's ``transcript_log``, the one it had when the answer's turn
+    began; a log without a method for a record (`ToolRecordsOnly` has no
+    answer) skips that record. What the console draws does not change what is
+    recorded."""
+
+    def __init__(self, telemetry: Any) -> None:
+        self._telemetry = telemetry
+        # Per turn: [the log its answer goes to, an answer is being written].
+        self._streams: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+    def emit(self, event: Any) -> None:
+        handler = getattr(self, f"_on_{event.name}", None)
+        if handler is not None:
+            handler(**dict(event.fields))
+
+    def _plain(self, text: str, *, stderr: bool = False) -> None:
+        log = getattr(self._telemetry, "transcript_log", None)
+        stream = sys.stderr if stderr else sys.stdout
+        seen = set()
+        while stream is not None and id(stream) not in seen:
+            seen.add(id(stream))
+            if isinstance(stream, TranscriptTee) and stream._sink_getter() is log and log is not None:
+                log.emit(output.event("transcript_plain", text=text, source=f"tee:{id(stream)}"))
+                return
+            stream = getattr(stream, "_primary", None)
+
+    def _on_run_line(self, *, fields: list[str]) -> None:
+        parts = msgs.RUN_LINE.runs(fields="".join(
+            text_layout.FIELD_BREAK + control_sequences.clean(field) for field in fields))
+        for row in text_layout.field_rows(parts, text_layout.block_width()):
+            self._plain(fset.to_ansi(row) + "\n")
+
+    def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
+                       first_token_s: float | None, prompt_tokens: int, cached_tokens: int,
+                       trace: bool | None = None, suppressed: bool = False) -> None:
+        if not call_stats_visible(label, trace, suppressed):
+            return
+        tps = (tokens / elapsed_s) if elapsed_s > 0 else 0.0
+        cache = ""
+        if prompt_tokens > 0 and cached_tokens > 0:
+            cache = f"  cache {100.0 * cached_tokens / prompt_tokens:.0f}%"
+        ttft = f"  ttft {int(first_token_s * 1000)}ms" if first_token_s is not None else ""
+        self._plain(msgs.CALL_STATS.line(
+            label=f"{label}: " if label else "", ms=int(elapsed_s * 1000),
+            finish=finish, tool_calls=tool_calls, tokens=tokens, tps=tps, ttft=ttft, cache=cache) + "\n")
+
+    def _on_notice(self, *, message: msgs.Message, fields: dict, stderr: bool, flush: bool) -> None:
+        self._plain(message.line(**fields) + "\n", stderr=stderr)
+
+    def _on_subagent_start(self, **fields: Any) -> None:
+        self._plain(msgs.SUBAGENT_STARTED.line(**subagent_started_fields(fields)) + "\n", stderr=True)
+
+    def _on_subagent_end(self, **fields: Any) -> None:
+        self._plain(msgs.SUBAGENT_FINISHED.line(**subagent_finished_fields(fields)) + "\n", stderr=True)
+
+    def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
+        if fallback and network_display.installed_sink is None:
+            self._plain(network_display._net_line(line) + "\n", stderr=True)
+
+    def _on_retry_wait(self, *, n: int, attempts: int, delay: float, error: BaseException, label: str) -> None:
+        line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay, failure=network_display.describe_failure(error))
+        self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
+                    + "\n", stderr=True)
+
+    def _on_retry_gave_up(self, *, n: int, error: BaseException, label: str) -> None:
+        line = msgs.RETRY_GAVE_UP.said(n=n, failure=network_display.describe_failure(error))
+        self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
+                    + "\n", stderr=True)
+
+    def _on_tool_result(self, *, name: str, args: dict | None, result: Any, malformed: bool,
+                        context: Any, traced: bool = True, **_fields: Any) -> None:
+        if not traced:
+            return
+        write_plain = getattr(getattr(self._telemetry, "transcript_log", None), "write_plain", None)
+        if not callable(write_plain):
+            return
+        settings = getattr(getattr(context or _toolkit.STOCK_CONTEXT, "config", None), "settings", None)
+        level = tool_display.tools_level(settings)
+        if level <= 0:
+            return
+        # Every call whole, at every level.
+        if level < 3:
+            record = tool_display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
+        else:
+            record = tool_display.render_exchange(name, args, result, level=level,
+                                                  preview=tool_display.preview_lines(settings),
+                                                  malformed=malformed, settings=settings)
+        write_plain(tool_display.for_transcript(record))
+
+    def _on_stream_open(self, *, stream: Any) -> None:
+        self._streams[stream] = [getattr(self._telemetry, "transcript_log", None), False]
+
+    def _on_answer(self, *, stream: Any, text: str, suppressed: bool, **_fields: Any) -> None:
+        if suppressed:
+            return
+        if stream not in self._streams:
+            self._on_stream_open(stream=stream)
+        record = self._streams[stream]
+        record[1] = True
+        write_chunk = getattr(record[0], "write_assistant_chunk", None)
+        if callable(write_chunk):
+            write_chunk(text)
+
+    def _on_answer_end(self, *, stream: Any, suppressed: bool) -> None:
+        record = self._streams.get(stream)
+        if record is None or suppressed or not record[1]:
+            return
+        record[1] = False
+        end_stream = getattr(record[0], "end_assistant_stream", None)
+        if callable(end_stream):
+            end_stream()
+
+
 def open_transcript_sink(paths: list[Path]) -> TranscriptLogSink | None:
     files: list = []
     opened: list[Path] = []
     for path in paths:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            files.append(open(path, "a", encoding="utf-8"))  # noqa: SIM115 - sink owns lifetime
+            files.append(
+                open(path, "a", encoding="utf-8", errors="backslashreplace")  # noqa: SIM115 - sink owns lifetime
+            )
             opened.append(path)
         except OSError:
             pass
     if not files:
         return None
     return TranscriptLogSink(files, opened)
+
+
+def _transcript_log_path(cfg: Config, live_settings: dict) -> Path | None:
+    """Resolve the per-session visible transcript path, or None when disabled."""
+    if not _settings.live_bool_setting(
+        live_settings, ("TRANSCRIPT_LOG",), getattr(cfg, "transcript_log", True)
+    ):
+        return None
+    session = cfg.session_file
+    if not session or session == Path(os.devnull):
+        stem = f"{cfg.agent_id}-{os.getpid()}"
+    else:
+        stem = session.stem
+    override = _settings.live_optional_str_setting(
+        live_settings, ("TRANSCRIPT_LOG_DIR",), getattr(cfg, "transcript_log_dir", None)
+    )
+    root = Path(override).expanduser() if override else (_paths.transcript_root() / cfg.agent_id)
+    return root / f"{stem}.log"
+
+
+def _open_transcript_log_sink(paths: list[Path]):
+    return open_transcript_sink(paths)
+
+
+def sync_transcript_sink(cfg: Config, live_settings: dict, telemetry: runtime.Telemetry) -> None:
+    desired: list[Path] = []
+    transcript_path = _transcript_log_path(cfg, live_settings)
+    if transcript_path is not None:
+        desired.append(transcript_path)
+    old = getattr(telemetry, "transcript_log", None)
+    if isinstance(old, TranscriptLogSink) and old.paths == desired:
+        old.settings = live_settings
+        return
+    telemetry.transcript_log = _open_transcript_log_sink(desired) if desired else None
+    if isinstance(telemetry.transcript_log, TranscriptLogSink):
+        telemetry.transcript_log.settings = live_settings
+    if isinstance(old, TranscriptLogSink) and old is not telemetry.transcript_log:
+        old.close()
+
+
+def transcript_sink(telemetry: runtime.Telemetry):
+    sink = getattr(telemetry, "transcript_log", None)
+    return sink if isinstance(sink, TranscriptLogSink) else None
+
+
+def enter_transcript_stdio(stack: contextlib.ExitStack, telemetry: runtime.Telemetry) -> None:
+    stack.enter_context(contextlib.redirect_stdout(
+        TranscriptTee(sys.stdout, lambda: transcript_sink(telemetry))
+    ))
+    stack.enter_context(contextlib.redirect_stderr(
+        TranscriptTee(sys.stderr, lambda: transcript_sink(telemetry))
+    ))
+
+
+@contextlib.contextmanager
+def transcript_stdio(telemetry: runtime.Telemetry):
+    with contextlib.ExitStack() as stack:
+        enter_transcript_stdio(stack, telemetry)
+        yield

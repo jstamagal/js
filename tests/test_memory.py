@@ -4,7 +4,9 @@ import json
 import re
 from pathlib import Path
 
-from js import memory as M
+from session_marks import append_compaction_mark
+
+from js import history_record, memory as M
 
 
 def _assistant_toolcall(cid: str = "tc1") -> dict:
@@ -121,7 +123,7 @@ def test_compaction_keep_from_is_applied_in_post_heal_space(tmp_path: Path):
     M.append_message(f, {"role": "user", "content": "keep-user"})
     M.append_message(f, {"role": "assistant", "content": "keep-assistant"})
     # healed live space: [u1, assistant(tc), synthetic-tool, keep-user, keep-assistant]
-    M.append_compaction_mark(f, summary="S", keep_from=3)
+    append_compaction_mark(f, summary="S", keep_from=3)
 
     out = M.load_messages(f)
 
@@ -132,7 +134,6 @@ def test_compaction_keep_from_is_applied_in_post_heal_space(tmp_path: Path):
 def test_heal_drops_duplicate_and_orphaned_tool_results():
     from ai.providers import history_utils
 
-    from js import model_client
 
     messages = [
         {"role": "user", "content": "go"},
@@ -152,4 +153,64 @@ def test_heal_drops_duplicate_and_orphaned_tool_results():
 
     assert [m.get("tool_call_id") for m in healed if m["role"] == "tool"] == ["c1", "c2"]
     assert healed[-1] == {"role": "user", "content": "again"}
-    assert history_utils.check_tool_ids(model_client.history_to_ai_messages("", healed)) == []
+    assert history_utils.check_tool_ids(history_record.history_to_ai_messages("", healed)) == []
+
+
+def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds():
+    import ai
+
+
+    earlier = {"role": "assistant", "content": "earlier", "reasoning_parts": [
+        {"text": "thought", "provider_metadata": {"anthropic": {"signature": "S0"}}}],
+        "reasoning_from": {"provider": "anthropic", "model": "m"}}
+    prefix = [{"role": "user", "content": "first"}, earlier, {"role": "user", "content": "go"}]
+    first = [_assistant_toolcall("c1"), _tool_result("c1", "first result")]
+    second = [_assistant_toolcall("c2"), _tool_result("c2", "second result")]
+    attachment = ai.types.messages.FilePart(data=b"image", media_type="image/png")
+    steered = {"role": "user", "steered": True,
+               "content": [ai.types.messages.TextPart(text="use this"), attachment]}
+    nudge = {"role": "user", "resume_nudge": True, "content": "continue"}
+    messages = [*prefix, *first, steered, *second, nudge]
+
+    assert history_record.restart_thinking_turn(messages, require_tool_calls=True) == 6
+
+    assert messages[:3] == prefix
+    assert messages[4] is steered
+    assert messages[6] is nudge
+    assert json.loads(messages[3]["content"].split("\n", 1)[1]) == first
+    assert json.loads(messages[5]["content"].split("\n", 1)[1]) == second
+    projected = history_record.history_to_ai_messages("", messages, provider_id="anthropic", model_id="m")
+    assert projected[4].parts[-1] is attachment
+
+
+def test_compaction_keeps_the_stamp_of_a_retained_signed_reply(tmp_path):
+    path = tmp_path / "signed.jsonl"
+    stamp = M.stamp_for("model-y", "anthropic", "high")
+    M.append_message(path, {"role": "user", "content": "question"})
+    M.append_message(path, {"role": "assistant", "content": "answer",
+                            "reasoning_parts": [{"type": "thinking", "signature": "sig"}],
+                            "reasoning_from": {"provider": "anthropic", "model": "model-y"}}, stamp=stamp)
+    append_compaction_mark(path, summary="earlier work", keep_from=1)
+
+    assert M.load_replay_messages(path)[-1] == {"role": "assistant", "content": "answer"}
+    assert M.last_reply_stamp(path) == stamp
+
+
+def test_the_history_a_compaction_mark_leaves_is_the_history_replay_rebuilds(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = [
+        {"role": "user", "content": "u1"},
+        _assistant_toolcall("tc1"),                      # no result: replay heals it
+        {"role": "tool", "tool_call_id": "stray", "content": "no call"},
+        {"role": "user", "content": "u2"},
+        {"role": "assistant", "content": "a2", "reasoning_parts": [{"signature": "s"}]},
+    ]
+    M.persist_messages(f, live)
+
+    marker, after = M.compaction_mark(live, 3, summary="S", rehydrated={"role": "user", "content": "files"})
+    M.append_mark(f, marker)
+
+    assert list(M.load_replay_messages(f)) == after
+    assert [m.get("content") for m in after] == [
+        "<compaction-summary>\nS\n</compaction-summary>", "files", "u2", "a2"]
+    assert "reasoning_parts" not in after[-1] and "reasoning_parts" in live[-1]

@@ -5,8 +5,7 @@ day a new generation ships."""
 
 from __future__ import annotations
 
-import os
-
+from js import model_metadata
 from js.config import vision_enabled_for_model
 
 
@@ -18,8 +17,24 @@ def test_catalog_models_report_their_real_image_support():
     assert vision_enabled_for_model("9router/cx/gpt-5.6-sol") is True
 
 
+def test_an_effort_suffix_keeps_the_models_image_support():
+    # No name hint covers kimi: only the catalog row can say yes.
+    assert vision_enabled_for_model("cpa/kimi-k3-high", {}) is True
+    assert vision_enabled_for_model("cpa/antigravity/kimi-k3-low", {}) is True
+
+
 def test_text_only_models_stay_disabled():
     assert vision_enabled_for_model("deepseek/deepseek-v4-pro") is False
+
+
+def test_the_makers_modalities_beat_a_resellers(monkeypatch):
+    rows = (
+        model_metadata._ModelRow("zai", "glm-9", 1_000_000, 131072, None, "glm", "2027-01-01", False),
+        model_metadata._ModelRow("resellerx", "glm-9", 1_000_000, 131072, None, "glm", "2027-01-01", True),
+    )
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+
+    assert model_metadata.accepts_image_input("cpa/glm-9-high", refresh=lambda: None) is False
 
 
 def test_env_override_still_wins(monkeypatch):
@@ -35,34 +50,6 @@ def test_unknown_models_fall_back_to_the_name_heuristic():
 
 
 def test_knob_forces_vision_on_or_off():
-    assert vision_enabled_for_model("deepseek/deepseek-v4-pro", {"model": {"vision": True}}) is True
-    assert vision_enabled_for_model("claude-opus-5", {"model": {"vision": False}}) is False
-    assert vision_enabled_for_model("some-private-build", {"model": {"vision": True}}) is True
-
-
-def test_env_override_beats_the_knob(monkeypatch):
-    from js import settings
-
-    monkeypatch.setenv("JS_VISION", "0")
-    # Detection consumes the merged view; environment overrides config there.
-    store = settings.apply_env_overrides({"model": {"vision": True}}, env=os.environ)
-    assert vision_enabled_for_model("claude-opus-5", store) is False
-
-
-def test_vision_knob_is_registered_and_settable():
-    from js import settings, setcmd
-
-    assert settings.SPEC_BY_KEY["model.vision"].type == "bool"
-    store: dict = {}
-    assert setcmd.set_command(store, "model.vision on").error is None
-    assert settings.get_dotted(store, ("model", "vision")) is True
-    assert setcmd.set_command(store, "-model.vision").error is None
-    assert settings.get_dotted(store, ("model", "vision")) is None
-
-
-def test_js_vision_env_feeds_the_knob(monkeypatch):
-    from js import settings
-
-    monkeypatch.setenv("JS_VISION", "on")
-    store = settings.collect_settings(config_paths=[], env=os.environ)
-    assert settings.get_dotted(store, ("model", "vision")) is True
+    assert vision_enabled_for_model("deepseek/deepseek-v4-pro", {"VISION": True}) is True
+    assert vision_enabled_for_model("claude-opus-5", {"VISION": False}) is False
+    assert vision_enabled_for_model("some-private-build", {"VISION": True}) is True

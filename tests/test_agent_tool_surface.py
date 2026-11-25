@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import ai
+import ai.types.usage
 import pytest
+from turn_driver import one_turn, run
 
-from js import persona
-from js import runtime
+from js import persona, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry, select
-import ai
-import ai.types.usage
 
 
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
@@ -83,7 +83,7 @@ def test_registry_selection_handles_empty_globs_aliases_unknowns_and_dedupe():
     assert names(select(["read:lazy", "Read:lazy", "fs_read:lazy", "unknown:lazy", "read:lazy"])) == ["read"]
     # prompt-dir agents are selectable by name and reachable via a prefix glob
     # (discovered from prompts/, so adding/removing an agent dir never snaps this).
-    prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
+    prompt_agents = sorted(p.name for p in (Path(__file__).resolve().parents[1] / "defaults" / "agents").iterdir() if p.is_dir())
     assert prompt_agents, "prompts/ should expose at least one agent dir"
     assert names(select([f"{name}:eager" for name in prompt_agents])) == prompt_agents
     assert prompt_agents[0] in names(select([prompt_agents[0][:-2] + "*:eager"]))
@@ -100,8 +100,8 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
             "sampling:\n"
             "  temperature: 0.2\n"
         ),
-        ("01-first.md", "FIRST\n"),
-        ("02-second.md", "SECOND\n"),
+        ("01-prompt.md", "FIRST\n"),
+        ("02-env.md", "SECOND\n"),
     )
 
     spec = persona.load_prompt_spec(prompts)
@@ -118,7 +118,7 @@ def test_yaml_tools_manifest_is_parsed_and_not_prompt_body(tmp_path):
     ("00-tools.md", "---\ntools:\n  - shell\n---\nLEGACY BODY\n"),
 ])
 def test_pre_agent_yaml_manifests_are_refused_naming_agent_yaml(tmp_path, name, text):
-    prompts = write_prompt_dir(tmp_path, text, ("01.md", "BODY\n"), zero_name=name)
+    prompts = write_prompt_dir(tmp_path, text, ("01-prompt.md", "BODY\n"), zero_name=name)
     (prompts / "agent.yaml").write_text("tools: [plan:eager]\n", encoding="utf-8")
 
     with pytest.raises(ValueError) as excinfo:
@@ -130,7 +130,7 @@ def test_pre_agent_yaml_manifests_are_refused_naming_agent_yaml(tmp_path, name, 
 
 
 def test_zero_markdown_without_frontmatter_is_prompt_text(tmp_path):
-    prompts = write_prompt_dir(tmp_path, "HEAD\n", ("01.md", "BODY\n"), zero_name="00-intro.md")
+    prompts = write_prompt_dir(tmp_path, "HEAD\n", ("01-prompt.md", "BODY\n"), zero_name="00-prompt.md")
 
     assert persona.load_prompt_spec(prompts).system == "HEAD\n\nBODY\n"
 
@@ -163,9 +163,9 @@ def test_agent_yaml_unknown_key_is_refused(tmp_path):
 
 
 def test_yaml_manifest_absent_tools_empty_list_and_missing_00_default_none(tmp_path):
-    manifest_only = write_prompt_dir(tmp_path / "manifest", "tools: []\n", ("01.md", "BODY\n"))
-    no_tools_key = write_prompt_dir(tmp_path / "nokey", "model: x\n", ("01.md", "BODY\n"))
-    missing_zero = write_prompt_dir(tmp_path / "missing", None, ("01.md", "BODY\n"))
+    manifest_only = write_prompt_dir(tmp_path / "manifest", "tools: []\n", ("01-prompt.md", "BODY\n"))
+    no_tools_key = write_prompt_dir(tmp_path / "nokey", "model: x\n", ("01-prompt.md", "BODY\n"))
+    missing_zero = write_prompt_dir(tmp_path / "missing", None, ("01-prompt.md", "BODY\n"))
 
     assert persona.load_prompt_spec(manifest_only).tool_selectors == ()
     assert persona.load_prompt_spec(manifest_only).system == "BODY\n"
@@ -174,7 +174,7 @@ def test_yaml_manifest_absent_tools_empty_list_and_missing_00_default_none(tmp_p
 
 
 def test_yaml_manifest_malformed_yaml_fails_clear(tmp_path):
-    prompts = write_prompt_dir(tmp_path, "tools: [\n", ("01.md", "BODY\n"))
+    prompts = write_prompt_dir(tmp_path, "tools: [\n", ("01-prompt.md", "BODY\n"))
 
     with pytest.raises(ValueError):
         persona.load_prompt_spec(prompts)
@@ -200,12 +200,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
     (project_root / "myagent").mkdir()
     (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
 
-    spec = persona.load_agent_prompt_spec(
-        "myagent",
-        repo_prompts_root=repo_root,
-        global_agents_root=global_root,
-        project_agents_root=project_root,
-    )
+    spec = persona.load_agent_prompt_spec("myagent", (repo_root, global_root, project_root))
 
     assert spec.system == "PROJECT PROMPT\n"
     assert spec.tool_selectors == ("wiki_*:lazy",)
@@ -230,19 +225,14 @@ def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(
     (project_root / "myagent" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
     (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
 
-    spec = persona.load_agent_prompt_spec(
-        "myagent",
-        repo_prompts_root=repo_root,
-        global_agents_root=global_root,
-        project_agents_root=project_root,
-    )
+    spec = persona.load_agent_prompt_spec("myagent", (repo_root, global_root, project_root))
 
     assert spec.system == "PROJECT PROMPT\n"
     assert spec.tool_selectors == ()
 
 
 def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path):
-    prompts = write_prompt_dir(tmp_path, None, ("01.md", "SYSTEM\n"))
+    prompts = write_prompt_dir(tmp_path, None, ("01-prompt.md", "SYSTEM\n"))
     calls: list[dict] = []
 
     def stream_stub(**kwargs):
@@ -252,7 +242,7 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "hi"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg(tmp_path, prompts),
         persona.load_prompt(prompts),
         messages,
@@ -265,21 +255,15 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
     assert messages[-1] == {"role": "assistant", "content": "NO_TOOLS_OK"}
 
 
-def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path):
+def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path, monkeypatch):
     registry = select(["plan:lazy"])
     (tmp_path / "note.txt").write_text("unselected tool must not read this", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    _, result = runtime._dispatch(
-        "read",
-        '{"file_path":"note.txt"}',
-        runtime.Telemetry(None),
-        cap_bytes=4096,
-        registry=registry,
-        tool_context=context,
-    )
+    turn = run(tmp_path, monkeypatch, registry, [[("c1", "read", '{"file_path":"note.txt"}')]], context=context)
 
+    result = turn.results()["c1"]
     assert result.startswith("ERROR:")
     assert "read" in result
     assert "unselected tool must not read this" not in result
-    assert context.read_paths == set()
+    assert context.reads.paths() == []

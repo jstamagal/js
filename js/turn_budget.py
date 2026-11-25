@@ -13,16 +13,25 @@ prompt cache as broken.
 
 from __future__ import annotations
 
-import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from . import compaction
-from . import messages as msgs
-from . import model_client
-from . import stream_transport
+from ai.types.messages import ToolCallPart, ToolResultPart
+
+from . import (
+    compaction,
+    compaction_settings,
+    context_window,
+    history_record,
+    messages as msgs,
+    microcompact,
+    model_client,
+    output,
+    snippets,
+    stream_transport,
+)
 
 
 def last_user_message_index(messages: list[dict]) -> int | None:
@@ -40,28 +49,66 @@ class TurnConvo:
     history replaces ``ai`` with a new list, so a flight record holding the
     old list keeps what was sent before the rewrite."""
 
-    def __init__(self, system: str, messages: list[dict], *, provider_id: str | None, model: str):
+    def __init__(self, system: str, messages: list[dict], *, provider_id: str | None, model: str,
+                 vision: bool = False, tool_aliases: Mapping[str, str] | None = None):
         self.system = system
         self.messages = messages
         self._provider_id = provider_id
         self._model = model
+        self._vision = vision
+        self._tool_aliases = tool_aliases or {}
         self.ai: list[Any] = []
         self.rebuild()
 
     def rebuild(self) -> None:
         """Build ``ai`` again from the history, and trace the next request
         from its first message with the tool schemas."""
-        self.ai = model_client.history_to_ai_messages(
-            self.system, self.messages, provider_id=self._provider_id, model_id=self._model,
-        )
+        self.ai = self._render_history(self.system, self.messages)
         self.sent = 0
         self.schemas = True
 
-    def add(self, records: list[dict]) -> None:
-        """Append history records already appended to ``messages``."""
-        self.ai.extend(model_client.history_to_ai_messages(
-            "", records, provider_id=self._provider_id, model_id=self._model,
-        ))
+    @property
+    def vision(self) -> bool:
+        return self._vision
+
+    def drop_vision(self) -> None:
+        """Send no more media this turn: the endpoint refused it."""
+        self._vision = False
+        self.rebuild()
+
+    def append(self, *records: dict, message: Any = None) -> None:
+        """Append ``records`` to the history, and their SDK form to ``ai``:
+        the messages `history_record.history_to_ai_messages` builds from them,
+        or ``message`` for one record whose SDK message the turn already has.
+        A batch of tool records goes in one call, so their media follow all of
+        the batch's tool messages."""
+        self.messages.extend(records)
+        if message is not None:
+            self.ai.append(self._public_tool_names(message))
+            return
+        self.ai.extend(self._render_history("", list(records)))
+
+    def _render_history(self, system: str, records: list[dict]) -> list[Any]:
+        messages = history_record.history_to_ai_messages(
+            system, records, provider_id=self._provider_id, model_id=self._model, vision=self._vision,
+        )
+        if not self._tool_aliases:
+            return messages
+        return [self._public_tool_names(message) for message in messages]
+
+    def _public_tool_names(self, message: Any) -> Any:
+        if not self._tool_aliases or message.role not in {"assistant", "tool"}:
+            return message
+        parts = []
+        changed = False
+        for part in message.parts:
+            if isinstance(part, (ToolCallPart, ToolResultPart)):
+                public = self._tool_aliases.get(part.tool_name, part.tool_name)
+                if public != part.tool_name:
+                    part = part.model_copy(update={"tool_name": public})
+                    changed = True
+            parts.append(part)
+        return message.model_copy(update={"parts": parts}) if changed else message
 
     def traced(self) -> None:
         """The request trace has now shown every message and the schemas."""
@@ -110,17 +157,22 @@ class TurnBudget:
         self._resolve_window = resolve_window
         self._max_out = max_out
 
+    def _warn(self, message: msgs.Message, **fields: Any) -> None:
+        """``message`` as a stderr notice to the telemetry's output sink."""
+        output.sink_of(self._telemetry).emit(output.event(
+            "notice", message=message, fields=fields, stderr=True, flush=True))
+
     def context_window(self) -> int:
         """The window the budget holds requests to; 0 when none is known."""
-        return compaction.configured_context_window(self._cfg, self._resolve_window)
+        return context_window.configured_context_window(self._cfg, self._resolve_window)
 
     def provider_window(self) -> int | None:
-        """The window the provider holds its input to, or None. A
-        compact.context_window above the catalog's says the real window is
-        larger than the catalog knows."""
+        """The window the provider holds its input to, or None. A CONTEXT_SIZE
+        above the catalog's says the real window is larger than the catalog
+        knows."""
         return max(
             self._resolve_window() or 0,
-            compaction.get_int(self._cfg, "context_window", 0),
+            compaction_settings.get_int(self._cfg, "CONTEXT_SIZE", 0),
         ) or None
 
     async def fit(self, *, phase: str, specs: list[dict], force: bool = False,
@@ -134,19 +186,19 @@ class TurnBudget:
         Returns True when the history changed."""
         cfg, context = self._cfg, self._context
         system, messages = self._convo.system, self._convo.messages
-        if not force and not compaction.get_bool(cfg, "auto"):
+        if not force and not compaction_settings.get_bool(cfg, "COMPACTION_AUTO"):
             return False
-        context_window = self.context_window()
-        if context_window <= 0 and not force:
+        window = self.context_window()
+        if window <= 0 and not force:
             return False
         ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
-        reserved = context_window - compaction.effective_context_window(cfg, context_window)
-        buffer_tokens = min(compaction.get_nonnegative_int(cfg, "buffer_tokens"), max(0, reserved))
+        reserved = window - context_window.effective_context_window(cfg, window)
+        buffer_tokens = min(compaction_settings.get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS"), max(0, reserved))
         status = self._tokens.budget_status(
             system=system,
             messages=messages,
             tools=ai_tools,
-            context_window=context_window if context_window > 0 else None,
+            context_window=window if window > 0 else None,
             output_reserve_tokens=max(0, reserved - buffer_tokens),
             buffer_tokens=buffer_tokens,
         )
@@ -166,11 +218,11 @@ class TurnBudget:
         check = _Check(
             phase=phase, force=force, status=status,
             trigger={"phase": phase, "context_tokens": status.current_context_tokens,
-                     "context_window": context_window,
+                     "context_window": window,
                      "effective_input_limit": status.effective_input_limit,
                      "forced_recovery": force},
             flight_data={"budget": asdict(status), "tools": specs,
-                         "usage_anchor": vars(self._tokens).get("_anchor"),
+                         "usage_anchor": self._tokens.anchor,
                          "ai_messages": self._convo.ai},
             chars_per_token=self._tokens.calibrated_chars_per_token(
                 system=system, messages=messages, tools=ai_tools,
@@ -192,7 +244,7 @@ class TurnBudget:
         #    verbatim along with the turn's work so far.
         preserve_from = last_user_message_index(messages)
         if (preserve_from is not None and preserve_from > 0
-                and compaction.prefix_worth_summarizing(messages, preserve_from)
+                and microcompact.prefix_worth_summarizing(messages, preserve_from)
                 and await self._summarize(check, preserve_from, f"{phase} context budget")
                 and (force or not check.over_budget())):
             return True
@@ -208,12 +260,12 @@ class TurnBudget:
         #    A summary that already failed in this check is not retried here.
         if check.summary_failed:
             return check.changed
-        tail_tokens = compaction.get_int(cfg, "tail_tokens")
+        tail_tokens = compaction_settings.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
         if force:
-            history_tokens = int(compaction.history_chars(messages) / check.chars_per_token)
+            history_tokens = int(context_window.history_chars(messages) / check.chars_per_token)
             tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_round
         keep_from = compaction.tail_start(messages, tail_tokens, check.chars_per_token)
-        if keep_from > 0 and compaction.prefix_worth_summarizing(messages, keep_from):
+        if keep_from > 0 and microcompact.prefix_worth_summarizing(messages, keep_from):
             await self._summarize(check, None, f"{phase} context budget: current turn over budget",
                                   tail_tokens=tail_tokens)
         elif not check.changed:
@@ -227,14 +279,15 @@ class TurnBudget:
         registry's specs for the flight record, ``specs`` the specs the
         request sends. True when the history changed and the request is worth
         sending again."""
-        action, _cleared, _reclaimed = compaction.recover_overflow(
+        action, _cleared, _reclaimed = microcompact.recover_overflow(
             self._convo.messages, overflow_round, cfg=self._cfg,
             system=self._convo.system, error=error,
             flight_data={"context_window": self.context_window(),
                          "max_output_tokens": self._max_out,
-                         "usage_anchor": vars(self._tokens).get("_anchor"),
+                         "usage_anchor": self._tokens.anchor,
                          "tools": tools,
                          "ai_messages": self._convo.ai},
+            log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),
         )
         if action == "cleared":
             self._rewritten()
@@ -250,11 +303,26 @@ class TurnBudget:
 
     def _clear(self, check: _Check) -> bool:
         """Clear old tool-result bodies; True when that brought the request
-        under budget."""
-        cleared, chars = compaction.clear_for_budget(
-            self._convo.messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
-            flight_data=check.flight_data, over_budget=check.over_budget,
-        )
+        under budget. A failure (the clearing record or the history write hits
+        a full or read-only disk) is a skipped step like a failed summary, not
+        a dead turn: the history is put back as it was, a warning shows, and
+        the next step runs."""
+        messages = self._convo.messages
+        before = list(messages)
+        try:
+            cleared, chars = microcompact.clear_for_budget(
+                messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
+                flight_data=check.flight_data, over_budget=check.over_budget,
+                log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),
+            )
+        except snippets.SnippetError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an optional step never kills the turn
+            messages[:] = before  # microcompact edits in place; keep memory and disk alike
+            self._warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
+            self._telemetry.event("context_clear_failed", phase=check.phase,
+                                  error=f"{type(exc).__name__}: {exc}")
+            return False
         if not cleared:
             return False
         check.reclaimed += chars
@@ -270,21 +338,24 @@ class TurnBudget:
             self._telemetry.event("context_compaction_skipped", phase=check.phase,
                                   reason="paused_after_failures")
             return False
-        before_chars = compaction.history_chars(messages)
+        before_chars = context_window.history_chars(messages)
         self._status.compacting = True
         try:
-            with stream_transport.net_role("Compacting"):
+            with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
                 result = await compaction.compact_now(
                     cfg, self._convo.system, messages, focus=focus, forced=True,
                     preserve_from=preserve_from, trigger=check.trigger, flight_data=check.flight_data,
-                    tail_tokens=tail_tokens, context=context, emit=self._emit,
+                    tail_tokens=tail_tokens, context=context, emit=compaction.printing(self._emit, warn=self._warn),
+                    log_dir=compaction.flight_log_dir(cfg),
                 )
+        except snippets.SnippetError:
+            raise
         except Exception as exc:  # noqa: BLE001
-            msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
+            self._warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
             self._telemetry.event("context_compaction_failed", phase=check.phase,
                                   error=f"{type(exc).__name__}: {exc}")
             if (paused := compaction.record_auto_failure(cfg, context)) is not None:
-                msgs.say_said(paused, file=sys.stderr, flush=True)
+                self._warn(paused.message, **paused.fields)
             check.summary_failed = True
             return False
         finally:
@@ -292,7 +363,7 @@ class TurnBudget:
         if not compaction.compacted(result):
             self._telemetry.event("context_compaction_skipped", phase=check.phase, reason=result)
             return False
-        check.reclaimed += before_chars - compaction.history_chars(messages)
+        check.reclaimed += before_chars - context_window.history_chars(messages)
         check.changed = True
         self._rewritten()
         self._telemetry.event("context_compacted", phase=check.phase, result=result)

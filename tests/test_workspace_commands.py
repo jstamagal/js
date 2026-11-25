@@ -4,29 +4,31 @@ on the next user message, and a resumed session is put back where it was."""
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
+from jail_probe import needs_bwrap
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, jail, runtime
-from js import messages as msgs
-from js.toolkit import call_tool, process_net
+from js import cli, conversation, jail, messages as msgs, runtime, snippets
+from js.toolkit import call_tool, shell
 from js.toolkit.registry import build_default_registry
 
 SESSION = "workspace"
-needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
 
 
 @pytest.fixture
 def turns(monkeypatch, tmp_path):
     """Each REPL turn runs the probes in `turns.probes` with the REPL's tool
     context and records the user message and the probe results."""
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", runtime.T.STOCK_CONTEXT.cwd)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
 
     class Turns:
         sent: list[str] = []
@@ -42,28 +44,18 @@ def turns(monkeypatch, tmp_path):
         record.results.append({name: probe(context) for name, probe in record.probes.items()})
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     return record
 
 
 def repl(monkeypatch, args, lines):
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            try:
-                return next(self.lines)
-            except StopIteration:
-                raise EOFError from None
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    cli.main([*args, "--blocking", "--session", SESSION])
+    stub_screen(monkeypatch, lines, wait=True)
+    cli.main([*args, "--session", SESSION])
 
 
 def shell_out(command):
     def probe(context):
-        return process_net.shell(command, context=context)
+        return shell.shell(command, context=context)
     return probe
 
 
@@ -95,8 +87,8 @@ def test_add_shows_a_path_and_drop_hides_it(monkeypatch, places, turns):
     assert "extra-data" in shown["read"]
     assert "exit=0" not in hidden["shell"]
     assert hidden["read"].startswith("ERROR:")
-    assert cli._ADD_NOTICE.format(path=extra, access="read-only") in turns.sent[0]
-    assert cli._DROP_NOTICE.format(path=extra) in turns.sent[1]
+    assert snippets.render('jail-path-added', PATH=extra, ACCESS="read-only") in turns.sent[0]
+    assert snippets.render('jail-path-removed', PATH=extra) in turns.sent[1]
 
 
 @needs_bwrap
@@ -120,7 +112,7 @@ def test_cd_moves_where_commands_run(monkeypatch, places, turns):
     repl(monkeypatch, ["-C", str(root)], ["/cd sub", "where"])
 
     assert f"\n{(root / 'sub').resolve()}\n" in turns.results[0]["pwd"]
-    assert cli._CD_NOTICE.format(path=(root / "sub").resolve()) in turns.sent[0]
+    assert snippets.render('working-directory', PATH=(root / "sub").resolve()) in turns.sent[0]
 
 
 @needs_bwrap
@@ -143,13 +135,15 @@ def test_cd_without_a_jail_moves_the_session(monkeypatch, places, turns):
     assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
 
 
-def test_add_and_drop_need_a_jail(places):
+def test_add_and_drop_need_a_jail(monkeypatch, places, turns, capsys):
     _root, extra = places
-    state: dict = {}
 
-    assert cli._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
-    assert cli._cmd_drop(str(extra), state, None).message is msgs.NO_JAIL
-    assert "pending_notes" not in state
+    repl(monkeypatch, [], [f"/add {extra}", f"/drop {extra}", "where"])
+
+    out = capsys.readouterr().out
+    assert msgs.NO_JAIL.text(verb="add") in out
+    assert msgs.NO_JAIL.text(verb="drop") in out
+    assert turns.sent == ["where"]
 
 
 @needs_bwrap
@@ -199,5 +193,5 @@ def test_drop_keeps_the_path_the_working_directory_is_in(monkeypatch, places, tu
     repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", f"/cd {extra}", f"/drop {extra}", "where"])
 
     assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
-    assert cli._DROP_NOTICE.format(path=extra) not in turns.sent[0]
+    assert snippets.render('jail-path-removed', PATH=extra) not in turns.sent[0]
     assert jail.active().added == [jail.Bind(extra, False)]

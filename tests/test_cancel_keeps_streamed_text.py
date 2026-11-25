@@ -7,10 +7,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from test_runtime_cluster_fixes import _cfg, _Recorder
 
 from js import runtime
-
-from test_runtime_cluster_fixes import _Recorder, _cfg
 
 
 def _cancel_midstream(tmp_path, monkeypatch, stream):

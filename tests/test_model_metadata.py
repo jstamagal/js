@@ -17,6 +17,22 @@ def _no_prior_refresh_failure(monkeypatch):
     monkeypatch.setattr(model_metadata, "_refresh_failure", None)
 
 
+@pytest.mark.parametrize("model_name,expected", [
+    ("gpt-5.99", False),
+    ("gpt-5-mini", False),
+    ("gpt-50", False),
+    ("gpt-5:cloud", True),
+    ("gpt-5", True),
+])
+def test_model_version_is_not_a_wrapper_suffix(monkeypatch, model_name, expected):
+    rows = (model_metadata._ModelRow("openai", "gpt-5", 400_000, 128_000, None),)
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", lambda _model_id: None)
+    model_metadata.lookup_limits.cache_clear()
+    limits = model_metadata.lookup_limits(model_name, "omp")
+    assert (limits is not None and limits.model_id == "gpt-5") is expected
+
+
 class _FakeModel:
     def __init__(self, provider_id: str, model_id: str, context: int | None, output: int | None, input_: int | None = None):
         self.provider_id = provider_id
@@ -61,6 +77,17 @@ def test_lookup_limits_prefers_exact_provider_match(monkeypatch):
     assert limits.max_output_tokens == 384_000
 
 
+def test_output_cap_uses_the_explicit_servers_slashy_model_id():
+    from js import logins
+
+    logins.cache_models(
+        "ollama", ["openai/gpt-5"],
+        metadata={"openai/gpt-5": logins.ModelCacheMetadata(max_output_tokens=1024)},
+    )
+
+    assert model_metadata.resolve_max_output("openai/gpt-5", "ollama") == 1024
+
+
 def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypatch):
     """The bidirectional substring fallback let a shorter catalog id (gpt-5) bleed
     into a longer, genuinely-distinct sibling request (gpt-5-mini-2026) since '-'
@@ -102,7 +129,6 @@ def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypat
 
     monkeypatch.setattr(model_metadata, "_generate_database", fake_generate_database)
     model_metadata.lookup_limits.cache_clear()
-    model_metadata._all_models.cache_clear()
 
     status = model_metadata.ensure_fresh_catalog()
 
@@ -236,9 +262,12 @@ def test_catalog_refresh_retains_release_dates(monkeypatch, tmp_path):
     path = tmp_path / "catalog.sqlite"
     monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_load_providers", lambda source: payload)
     monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: path)
-    model_metadata._generate_database(output=path)
-    assert model_metadata._release_dates() == {"maker:model-v2": "2026-05-01"}
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: tmp_path / "status.json")
+    model_metadata.refresh_catalog(force=True)
     with sqlite3.connect(path) as connection:
+        assert dict(connection.execute("SELECT full_id, release_date FROM model_release_dates")) == {
+            "maker:model-v2": "2026-05-01"
+        }
         assert connection.execute("SELECT limit_context FROM models").fetchone() == (1000000,)
 
 
@@ -287,3 +316,55 @@ def test_routed_catalog_prefers_issuer_limits(monkeypatch):
     result = model_metadata.lookup_limits("omni/gpt-5.6-sol", "cpa")
     assert result.provider_id == "openai"
     assert result.context_window == 1050000
+
+
+def test_a_pinned_latest_id_takes_its_own_catalog_row(monkeypatch):
+    """The exact provider lookup was skipped for every `-latest`
+    id, so openai's real gpt-5.2-chat-latest (128k) fell through to routing."""
+    from types import SimpleNamespace
+
+    seen = []
+
+    def by_id(key):
+        seen.append(key)
+        if key == "openai:gpt-5.2-chat-latest":
+            return SimpleNamespace(provider_id="openai", id="gpt-5.2-chat-latest",
+                                   limits=SimpleNamespace(context=128000, output=16384, input=None))
+        return None
+
+    rows = (model_metadata._ModelRow("abacus", "gpt-5.2-chat-latest", 400000, 32000, None,
+                                     "gpt-5.2-chat-latest", "2026-01-01"),)
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", by_id)
+    model_metadata.lookup_limits.cache_clear()
+    result = model_metadata.lookup_limits("gpt-5.2-chat-latest", "openai")
+    assert (result.provider_id, result.context_window) == ("openai", 128000)
+    assert "openai:gpt-5.2-chat-latest" in seen
+
+
+def test_registered_setting_can_disable_catalog_refresh(monkeypatch):
+    from contextvars import ContextVar
+
+    monkeypatch.setattr(model_metadata, "_policy_settings", ContextVar("test_metadata_policy", default=None), raising=False)
+    model_metadata.bind_settings({"MODEL_CATALOG_AUTO_REFRESH": False})
+    current = model_metadata.current_catalog_status()
+    calls = []
+    monkeypatch.setattr(model_metadata, "catalog_is_stale", lambda _status: True)
+
+    def refresh(**kwargs):
+        calls.append(kwargs)
+        return current
+
+    monkeypatch.setattr(model_metadata, "refresh_catalog", refresh)
+    assert model_metadata.ensure_fresh_catalog() == current
+    assert calls == []
+
+
+def test_capability_lookup_uses_the_callers_catalog_refresh(monkeypatch):
+    refreshes = []
+    def unexpected():
+        raise AssertionError("default refresh used")
+    monkeypatch.setattr(model_metadata, "ensure_fresh_catalog", unexpected)
+    monkeypatch.setattr(model_metadata, "lookup_limits", lambda *args: SimpleNamespace(context_window=1234))
+    assert model_metadata.context_window("model", refresh=lambda: refreshes.append(True)) == 1234
+    assert refreshes == [True]

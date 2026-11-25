@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
-from js import runtime, session_store, settings
-from js.config import Config, from_env
-from js import messages as msgs
+from js import jsrc_save, messages as msgs, runtime, session_store, setting_layers, settings
+from js.config import Config, InvocationSources, from_env
 
 
 def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
@@ -59,58 +60,73 @@ def _build_config(
 
 
 def test_collect_settings_uses_built_in_default_when_no_file_or_env():
-    out = settings.collect_settings(config_paths=[], env={})
-    assert out["model"]["id"] == settings.default_value("model.id")
-    assert out["limits"]["max_tool_iterations"] == settings.default_value("limits.max_tool_iterations")
-    assert out["limits"]["max_tool_calls_per_message"] == settings.default_value("limits.max_tool_calls_per_message")
+    out = setting_layers.collect_settings(config_paths=[], env={})
+    assert out["MODEL"] == settings.default_value("MODEL")
+    assert out["TURN_ROUNDS_MAX"] == settings.default_value("TURN_ROUNDS_MAX")
+    assert out["REPLY_TOOL_CALLS_MAX"] == settings.default_value("REPLY_TOOL_CALLS_MAX")
 
 
 def test_collect_settings_reads_jsrc_set_lines(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(config_paths=[cfg], env={})
+    out = setting_layers.collect_settings(config_paths=[cfg], env={})
 
-    assert out["model"]["id"] == "file-model"
+    assert out["MODEL"] == "file-model"
+
+
+def test_save_preserves_disabled_reasoning(tmp_path):
+    from js import setcmd
+
+    store = settings.seed_defaults()
+    result = setcmd.apply_set(store, "EFFORT", "off")
+    assert result.error is None
+    path = tmp_path / "jsrc"
+
+    jsrc_save.save_settings_to_jsrc(path, store, keys=["EFFORT"])
+
+    loaded = setting_layers.collect_settings([path], env={})
+    assert loaded["EFFORT"] == store["EFFORT"] == "off"
 
 
 def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text(
-        "set tools.alias_profiles.foo bar\n"
-        "set model.id file-model\n",
+        "set TOOL_ALIASES.foo bar\n"
+        "set MODEL file-model\n",
         encoding="utf-8",
     )
     live_settings = settings.seed_defaults()
+    aliases_before = copy.deepcopy(live_settings.get("TOOL_ALIASES"))
 
-    warnings = settings.load_jsrc_files([cfg], live_settings)
+    warnings = setting_layers.load_jsrc_files([cfg], live_settings)
 
     assert warnings == [msgs.SCRIPT_LINE_FAILED.text(
-        path=cfg, lineno=1, error=msgs.UNKNOWN_SETTING.text(key="tools.alias_profiles.foo"))]
-    assert live_settings["model"]["id"] == "file-model"
-    assert "alias_profiles" not in live_settings.get("tools", {})
+        path=cfg, lineno=1, error=msgs.UNKNOWN_SETTING.text(key="TOOL_ALIASES.foo"))]
+    assert live_settings["MODEL"] == "file-model"
+    assert live_settings.get("TOOL_ALIASES") == aliases_before
 
 
 def test_collect_settings_applies_env_after_file(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"})
+    out = setting_layers.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"})
 
-    assert out["model"]["id"] == "env-model"
+    assert out["MODEL"] == "env-model"
 
 
 def test_collect_settings_cli_extras_win_over_env(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(
+    out = setting_layers.collect_settings(
         config_paths=[cfg],
         env={"JS_MODEL": "env-model"},
-        extras=["model.id=cli-model"],
+        extras=["MODEL=cli-model"],
     )
 
-    assert out["model"]["id"] == "cli-model"
+    assert out["MODEL"] == "cli-model"
 
 
 def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
@@ -119,22 +135,22 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
     local_cfg = tmp_path / "project" / ".js" / "jsrc.local"
     global_cfg.parent.mkdir(parents=True)
     project_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set model.id global-model\nset limits.fetch_timeout_s 20\nset limits.inline_code_timeout_s 222\n", encoding="utf-8")
-    project_cfg.write_text("set model.id project-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
-    local_cfg.write_text("set model.id local-model\n", encoding="utf-8")
+    global_cfg.write_text("set MODEL global-model\nset FETCH_TIMEOUT 20\nset INLINE_CODE_TIMEOUT 222\n", encoding="utf-8")
+    project_cfg.write_text("set MODEL project-model\nset TURN_ROUNDS_MAX 7\n", encoding="utf-8")
+    local_cfg.write_text("set MODEL local-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(config_paths=[global_cfg, project_cfg, local_cfg], env={})
+    out = setting_layers.collect_settings(config_paths=[global_cfg, project_cfg, local_cfg], env={})
 
-    assert out["model"]["id"] == "local-model"
-    assert out["limits"]["fetch_timeout_s"] == 20
-    assert out["limits"]["inline_code_timeout_s"] == 222
-    assert out["limits"]["max_tool_iterations"] == 7
+    assert out["MODEL"] == "local-model"
+    assert out["FETCH_TIMEOUT"] == 20
+    assert out["INLINE_CODE_TIMEOUT"] == 222
+    assert out["TURN_ROUNDS_MAX"] == 7
 
 
 def test_from_env_uses_the_js_home_and_writes_no_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
-    # Explicit pin (provider.id / JS_PROVIDER) authorizes reading the provider's
-    # native env key: an env key alone would create no route (ruling #1).
+    # Explicit pin (PROVIDER / JS_PROVIDER) authorizes reading the provider's
+    # native env key: an env key alone would create no route.
     monkeypatch.setenv("JS_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
@@ -153,42 +169,81 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     global_cfg = config_home / "jsrc"
     global_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set model.id global-model\nset limits.max_tool_iterations 8\n", encoding="utf-8")
+    global_cfg.write_text("set MODEL global-model\nset TURN_ROUNDS_MAX 8\n", encoding="utf-8")
 
     cfg = from_env(save_session=False)
 
     assert cfg.model == "global-model"
     assert cfg.max_tool_iterations == 8
-    assert global_cfg.read_text(encoding="utf-8").startswith("set model.id global-model")
+    assert global_cfg.read_text(encoding="utf-8").startswith("set MODEL global-model")
+
+
+def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
+    from js import logins, run_assembly
+
+    model_id = settings.default_value("MODEL")
+    provider_id, _, _ = model_id.partition("/")
+    logins.save_login(logins.Login(provider_id=provider_id, provider_api_key="fixture-key"))
+    agent = tmp_path / ".js" / "agents" / "pinned"
+    agent.mkdir(parents=True)
+    (agent / "agent.yaml").write_text("model: agent-model\ntools: []\n", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("PINNED\n", encoding="utf-8")
+    cfg = from_env(cwd=tmp_path, save_session=False, agent_id="pinned", sources=InvocationSources(extras=(f"MODEL={model_id}",)))
+
+    active = run_assembly.settle(cfg).config
+
+    assert active.model == cfg.model
 
 
 def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     js_dir = config_home
     js_dir.mkdir(parents=True)
-    (js_dir / "jsrc").write_text("set model.id base-model\nset limits.fetch_timeout_s 5\n", encoding="utf-8")
-    (js_dir / "jsrc.fast").write_text("set model.id fast-model\n", encoding="utf-8")
-    (js_dir / "jsrc.slow").write_text("set model.id slow-model\nset limits.fetch_timeout_s 99\n", encoding="utf-8")
+    (js_dir / "jsrc").write_text("set MODEL base-model\nset FETCH_TIMEOUT 5\n", encoding="utf-8")
+    (js_dir / "jsrc.fast").write_text("set MODEL fast-model\n", encoding="utf-8")
+    (js_dir / "jsrc.slow").write_text("set MODEL slow-model\nset FETCH_TIMEOUT 99\n", encoding="utf-8")
 
     # No preset: base wins.
     assert from_env(save_session=False).model == "base-model"
 
     # Last preset wins on overlap; earlier preset's non-overlapping keys persist.
-    cfg = from_env(save_session=False, presets=["fast", "slow"])
+    cfg = from_env(save_session=False, sources=InvocationSources(presets=("fast", "slow")))
     assert cfg.model == "slow-model"
     assert cfg.fetch_timeout_s == 99
 
-    cfg2 = from_env(save_session=False, presets=["slow", "fast"])
+    cfg2 = from_env(save_session=False, sources=InvocationSources(presets=("slow", "fast")))
     assert cfg2.model == "fast-model"
     assert cfg2.fetch_timeout_s == 99  # from slow; fast didn't set it
 
 
-def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
-    # Inverted: inline code runs by default, no flag/knob needed.
-    _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.delenv("JS_ALLOW_INLINE_CODE", raising=False)
-    cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is True
+@pytest.mark.parametrize("presets", [(), ("fast",)])
+def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, presets):
+    config_dir = tmp_path / ".js"
+    config_dir.mkdir()
+    (config_dir / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")
+    (config_dir / "jsrc.fast").write_text("set SHELL_WAIT 49\n", encoding="utf-8")
+
+    cfg = from_env(cwd=tmp_path, save_session=False,
+                   sources=InvocationSources(presets=presets, ignore_global_config=True))
+
+    assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
+
+
+def test_ignoring_global_config_holds_under_another_name_for_home(tmp_path, monkeypatch):
+    # The home directory reached by a second name is the same directory, so
+    # its jsrc is still the global layer --no-global-config excludes.
+    home = tmp_path / "home"
+    (home / ".js").mkdir(parents=True)
+    (home / ".js" / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")
+    (home / ".js" / "jsrc.fast").write_text("set SHELL_WAIT 49\n", encoding="utf-8")
+    second_name = tmp_path / "home-link"
+    second_name.symlink_to(home, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(second_name))
+
+    for presets in ((), ("fast",)):
+        cfg = from_env(cwd=home, save_session=False,
+                       sources=InvocationSources(presets=presets, ignore_global_config=True))
+        assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
 
 
 def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
@@ -196,35 +251,10 @@ def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     global_cfg = config_home / "jsrc"
     global_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set runtime.allow_inline_code off\n", encoding="utf-8")
+    global_cfg.write_text("set INLINE_CODE off\n", encoding="utf-8")
 
     cfg = from_env(save_session=False)
     assert cfg.allow_inline_code is False
-
-
-def test_allow_inline_code_opt_out_via_env(monkeypatch, tmp_path):
-    # --im-a-pussy sets JS_ALLOW_INLINE_CODE=0; that env must flip the knob off
-    # through the registry env layer.
-    _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.setenv("JS_ALLOW_INLINE_CODE", "0")
-    cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is False
-
-
-def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
-    _env_dirs(monkeypatch, tmp_path)
-    project = tmp_path / "project"
-    cfg_path = project / ".js" / "jsrc"
-    cfg_path.parent.mkdir(parents=True)
-    cfg_path.write_text("set model.id file-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
-    monkeypatch.setenv("JS_MODEL", "env-model")
-
-    cfg_env = from_env(cwd=project, save_session=False)
-    assert cfg_env.model == "env-model"
-    assert cfg_env.max_tool_iterations == 7
-
-    cfg_cli = from_env(cwd=project, save_session=False, extras=["model.id=cli-model"])
-    assert cfg_cli.model == "cli-model"
 
 
 def test_js_model_provider_prefix_is_parsed_once(monkeypatch, tmp_path):
@@ -256,9 +286,10 @@ def test_js_provider_base_and_key_env_names(monkeypatch, tmp_path):
 
 
 def _fake_stream_result(text: str = "ok"):
-    from js.model_client import ModelStreamResult
     import ai
     import ai.types.usage
+
+    from js.model_client import ModelStreamResult
 
     return ModelStreamResult(
         text=text,
@@ -287,7 +318,7 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     )
     from js.toolkit import ToolContext
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         [{"role": "user", "content": "hi"}],
@@ -300,4 +331,13 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_id") == "openai"
     assert captured_kwargs.get("provider_base_url") == "http://127.0.0.1:11434/v1"
     assert captured_kwargs.get("provider_api_key") == "ollama"
-    assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
+    assert captured_kwargs.get("provider_headers") == {"x-test": "1", "X-JS-Scrub": "on"}
+
+
+def test_loading_a_jsrc_with_old_names_leaves_it_as_written(tmp_path):
+    path = tmp_path / "jsrc"
+    original = "set model.id old-model\n"
+    path.write_text(original)
+    setting_layers.collect_settings(config_paths=[path], env={})
+    assert path.read_text() == original
+    assert list(tmp_path.glob("jsrc.*")) == []

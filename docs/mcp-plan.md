@@ -4,6 +4,20 @@ Plan for adding Model Context Protocol support to `js`. Written against
 specification revision **2025-11-25**, pulled from modelcontextprotocol.io on
 2026-07-26. Nothing here is inferred from another implementation.
 
+> Built, differently from this plan. The code is the reference now; the text
+> below is the plan as written. js has its own MCP client in `js/mcp/`
+> (`JSONRPCPeer`, `StdioTransport`, `StreamableHTTPTransport`, `MCPClient`,
+> `MCPHost`) and no `mcp` SDK dependency; it offers protocol version
+> `2025-06-18` (`LATEST_PROTOCOL_VERSION`). Servers are the JSON-valued jsrc
+> settings `MCP_SERVERS` and `MCP_AGENT_POLICY`, with `MCP_TIMEOUT` (see
+> [configuration-and-sessions.md](configuration-and-sessions.md)), not a TOML
+> table. The host connects to a server only when a discovery reaches it, not at
+> startup. A remote tool's public name is `<server>__<tool>`, held to 64
+> characters, and its `inputSchema` reaches the model through
+> `Tool.input_schema`. A `list_changed` notification marks the server for a
+> refresh before the next model call. Resources and prompts are the
+> `mcp_resource_*` and `mcp_prompt_*` tools.
+
 ## Pinned Spec Facts
 
 Everything in this section is a direct requirement. Ignoring any of it produces
@@ -210,14 +224,14 @@ The streamable HTTP client yields a third value, the session id accessor.
 
 **Recommendation: take the dependency, pinned to `mcp>=1.28,<2`.** It drags in
 httpx, pydantic, anyio, and starlette. Pydantic and anyio are the ones to be
-aware of — `js` currently has neither. The alternative is hand-rolling stdio
+aware of — `js` had neither when this was written. The alternative is hand-rolling stdio
 JSON-RPC, which is genuinely about 200 lines for the happy path and gives up
 nothing on day one, because stdio needs no HTTP stack at all.
 
 The case for the dependency is not the framing code. It is that the SDK already
 tracks version negotiation, the pagination cursor, the SSE resumption rules, and
 the `2025-03-26` fallback assumption, and those are the parts that rot with every
-spec revision. The case against is that `js` has ten dependencies today and each
+spec revision. The case against is that `js` had ten dependencies then and each
 one is a thing that breaks `just sync`.
 
 If the answer is no dependency, hand-roll stdio only, and revisit at Phase 2 —
@@ -227,12 +241,11 @@ Streamable HTTP with resumable SSE is where hand-rolling stops being cheap.
 
 This is the one architectural problem, and it needs settling before any code.
 
-`js` tool handlers are synchronous: `Handler = Callable[..., str]` in
-`js/toolkit/core.py`. The runtime is async at the top (`run_turn_async`, with
-`asyncio.run` at `js/runtime.py:1590`) and pushes handlers into
-`ThreadPoolExecutor`s, awaiting them through `asyncio.wrap_future`. So when a
-tool runs, an event loop is alive on the main thread and the handler is on a
-worker thread.
+When this was written, `js` tool handlers were synchronous:
+`Handler = Callable[..., str]` in `js/toolkit/core.py`. The runtime was async at
+the top (`run_turn_async`) and pushed handlers into `ThreadPoolExecutor`s,
+awaiting them through `asyncio.wrap_future`. So when a tool ran, an event loop
+was alive on the main thread and the handler was on a worker thread.
 
 The MCP SDK is anyio-async throughout, and a stdio session is a long-lived
 subprocess that must outlive any single turn.
@@ -261,15 +274,14 @@ caller.
 An MCP tool name collides with a `js` tool name sooner or later, and
 `ToolRegistry` builds a lowercase alias table where a collision silently wins or
 loses. Namespace on import: `<server>.<tool>` (dots are legal in MCP tool names
-and in `js` selectors). `registry.select()` already globs, so
-`--tools 'jupyter.*'` works for free, and so does excluding one server.
+and in `js` selectors).
 
 Reject or mangle imported names outside `[A-Za-z0-9_.-]` before they reach the
 alias table.
 
 ### Schemas — this needs a change to `core.Tool`
 
-`Tool.openai_spec()` hardcodes the wrapper:
+`Tool.openai_spec()` hardcoded the wrapper:
 
 ```python
 "parameters": {"type": "object", "properties": self.params,
@@ -322,7 +334,7 @@ Servers belong in the existing config file, merged across global and project
 scope like everything else:
 
 ```toml
-[mcp.servers.jupyter]
+[MCP_SERVERS.jupyter]
 command = "uvx"
 args = ["mcp-jupyter-notebook"]
 env = { MCP_JUPYTER_SESSION_MODE = "server" }
@@ -330,7 +342,7 @@ cwd = "~/notebooks"
 enabled = true
 tools = ["notebook_*"]        # allow-list, globbed, optional
 
-[mcp.servers.linear]
+[MCP_SERVERS.linear]
 url = "https://mcp.linear.app/mcp"
 headers = { Authorization = "Bearer ..." }
 ```

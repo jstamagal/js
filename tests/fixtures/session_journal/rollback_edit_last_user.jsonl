@@ -1,0 +1,5 @@
+{"kind":"message","message":{"role":"user","content":"q"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"ans"},"stamp":{"model":"model-a","provider":"anthropic","reasoning":"high"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"user","content":"note"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"mark","marker":"rollback_to:2","ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"message","message":{"role":"user","content":"note\n\n<js-reminder>closed</js-reminder>"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}

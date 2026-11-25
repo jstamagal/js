@@ -3,6 +3,9 @@
 import asyncio
 import json
 import sys
+import threading
+from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,9 +22,6 @@ from harness import (
     observed,
     persist_turn,
 )
-from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import threading
 
 
 class Server(BaseHTTPRequestHandler):
@@ -146,7 +146,7 @@ async def wire(mode):
     server.owner = owner
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
-    cfg = cfg_for("wire_" + mode, context_window=128000, tail_tokens=100)
+    cfg = cfg_for("wire_" + mode, CONTEXT_SIZE=128000, COMPACTION_KEEP_RECENT_TOKENS=100)
     cfg = replace(cfg, provider_base_url=f"http://127.0.0.1:{server.server_port}/v1")
     context = ToolContext(cwd=cfg.agent_dir)
     effects = []
@@ -163,7 +163,6 @@ async def wire(mode):
         for n in range(8)
     ]
     messages.append({"role": "user", "content": "run tools"})
-    user = messages[-1]
     for message in messages:
         M.append_message(cfg.session_file, message)
     stats = []
@@ -180,7 +179,7 @@ async def wire(mode):
                 suppress_output=True,
                 call_stats=stats,
             )
-            persist_turn(cfg, messages, user)
+            persist_turn(cfg, messages)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     finally:

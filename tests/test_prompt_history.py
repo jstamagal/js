@@ -40,12 +40,48 @@ def test_a_stored_prompt_is_one_json_line_with_its_origin(tmp_path):
     assert isinstance(record["ts"], float)
 
 
+def test_overflowing_timestamps_do_not_hide_valid_prompts(tmp_path):
+    path = tmp_path / "history.jsonl"
+    records = [
+        {"ts": 2, "text": "before"},
+        {"ts": 10**400, "text": "overflow"},
+        {"ts": -(10**400), "text": "underflow"},
+        {"ts": 1, "text": "after"},
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+    assert [(entry.ts, entry.text) for entry in ph.read_entries(path)] == [(1.0, "after"), (2.0, "before")]
+    assert list(_history(path).load_history_strings()) == ["before", "after"]
+
+
 def test_a_blank_prompt_is_not_stored(tmp_path):
     path = tmp_path / "history.jsonl"
 
     _history(path).store_string("   ")
 
     assert not path.exists()
+
+
+_SEPARATORS = ["a\u2028b", "c\u2029d", "e\x85f", "ok"]
+
+
+def test_unicode_line_separators_survive_the_round_trip(tmp_path):
+    # 4 written, 1 read back.
+    path = tmp_path / "history.jsonl"
+    _write(path, *[(float(i), "/p", text) for i, text in enumerate(_SEPARATORS)])
+
+    assert [entry.text for entry in ph.read_entries(path)] == _SEPARATORS
+    raw = path.read_text(encoding="utf-8")
+    assert len(raw.splitlines()) == len(raw.split("\n")) - 1 == 4
+
+
+def test_records_an_older_writer_left_with_raw_separators_are_read(tmp_path):
+    path = tmp_path / "history.jsonl"
+    lines = [json.dumps({"ts": float(i), "cwd": "/p", "session": "s", "agent": "a", "text": text},
+                        ensure_ascii=False) for i, text in enumerate(_SEPARATORS)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert [entry.text for entry in ph.read_entries(path)] == _SEPARATORS
 
 
 def test_every_session_appends_to_the_same_file(tmp_path):
@@ -57,6 +93,22 @@ def test_every_session_appends_to_the_same_file(tmp_path):
 
     assert [(e.session, e.agent, e.text) for e in entries] == [("one", "a", "first"), ("two", "b", "second")]
     assert list(_history(path).load_history_strings()) == ["second", "first"]
+
+
+def test_an_append_after_a_torn_record_keeps_the_new_prompt(tmp_path, monkeypatch):
+    path = tmp_path / "history.jsonl"
+    _write(path, (1.0, "/p", "first"))
+    with path.open("ab") as stream:
+        stream.write(b'{"text":"interrupted')
+    write = os.write
+
+    def short_write(fd, data):
+        return write(fd, data[:7])
+
+    monkeypatch.setattr(ph.os, "write", short_write)
+    _write(path, (2.0, "/p", "next prompt"))
+
+    assert [entry.text for entry in ph.read_entries(path)] == ["first", "next prompt"]
 
 
 def test_up_offers_the_current_directorys_prompts_first_newest_first(tmp_path):
@@ -177,3 +229,13 @@ def test_config_puts_the_history_in_state_unless_history_file_says(tmp_path, mon
 
     monkeypatch.setenv("JS_HISTORY_FILE", "~/hist.jsonl")
     assert from_env(save_session=False).history_file == tmp_path / "hist.jsonl"
+
+
+def test_history_migration_can_be_supplied_by_the_caller(tmp_path):
+    seen = []
+    path = tmp_path / "history.jsonl"
+    state = tmp_path / "state"
+    history = _history(path, state_root=state, migrate=lambda *args: seen.append(args))
+    assert list(history.load_history_strings()) == []
+    assert seen == [(path, state)]
+    assert not path.exists()

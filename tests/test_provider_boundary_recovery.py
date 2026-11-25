@@ -1,22 +1,31 @@
 import asyncio
 import json
 import re
-from pathlib import Path
 from dataclasses import replace
+from pathlib import Path
 
 import ai
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, model_client, runtime, turn_call
-from js import settings as _settings
+from js import (
+    compaction_summary,
+    context_window,
+    microcompact,
+    model_client,
+    request_params,
+    runtime,
+    settings as _settings,
+    turn_call,
+    turn_dispatch,
+)
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -56,7 +65,7 @@ def test_summary_partitions_through_real_boundary(monkeypatch, tmp_path, persist
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = [{"role": "user", "content": f"entry {i}"} for i in range(32)]
     entries = [m["content"] for m in messages]
-    call = compaction.summarize(_config(tmp_path), "offline-test", messages, "", "")
+    call = compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", "")
     if persistent:
         with pytest.raises(ai.ProviderAPIError) as caught:
             asyncio.run(call)
@@ -83,7 +92,7 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         return _result(text="recovered")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(turn_call, "_backoff", lambda _: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda *_: 0)
     messages = []
     for i in range(81):
         messages.extend([
@@ -105,12 +114,12 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         asyncio.run(call)
         assert messages[-1]["content"] == "recovered"
     if kind != "overflow":
-        budget = _settings.default_value("runtime.retry_attempts")
+        budget = _settings.default_value("RETRY_COUNT_MAX")
         assert len(attempts) == (1 if kind == "fatal" else budget + 1 if persistent else 2)
         assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
     else:
-        assert len(attempts) <= compaction.MAX_OVERFLOW_ROUNDS + 1
-        assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+        assert len(attempts) <= microcompact.MAX_OVERFLOW_ROUNDS + 1
+        assert any(m["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
@@ -123,15 +132,15 @@ def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     with pytest.raises(ai.ProviderAPIError) as caught:
-        asyncio.run(compaction.summarize(_config(tmp_path), "offline-test",
+        asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test",
                                         [{"role": "user", "content": "x"}] * 12, "", ""))
     assert caught.value is error
     assert len(attempts) == 1
 
 @pytest.mark.parametrize("window", [750000, 1000000])
 def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path, capsys, window):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
-    cfg = replace(_config(tmp_path), trace=True, settings={"compact": {"context_window": window}})
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
+    cfg = replace(_config(tmp_path), trace=True, settings={"CONTEXT_SIZE": window})
     events = []
 
     class Capture:
@@ -155,10 +164,45 @@ def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path
     assert str(window) in capsys.readouterr().out
 
 
+def test_run_line_names_the_base_url_a_model_with_no_provider_goes_to(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
+    cfg = replace(_config(tmp_path), trace=True, provider_id=None, provider_base_url="http://local.test:8080/v1")
+
+    async def sdk(**kwargs):
+        assert kwargs["model"].provider.base_url == "http://local.test:8080/v1"
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    run_line = capsys.readouterr().out
+    assert "base=http://local.test:8080/v1" in run_line
+    assert "ai-gateway" not in run_line
+
+
+def test_run_line_shows_the_connect_and_first_byte_timeouts(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
+    cfg = replace(_config(tmp_path), trace=True, settings={"CONNECT_TIMEOUT": 41, "FIRST_BYTE_TIMEOUT": 613})
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    run_line = capsys.readouterr().out
+    assert "41" in run_line and "613" in run_line
+
+
 def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path, capsys):
     cfg = replace(_config(tmp_path), max_output_tokens=500,
-                  settings={"compact": {"context_window": 10000, "tail_tokens": 100,
-                                        "buffer_tokens": 100, "summary_reserve_tokens": 500}})
+                  settings={"CONTEXT_SIZE": 10000, "COMPACTION_KEEP_RECENT_TOKENS": 100, "COMPACTION_HEADROOM_TOKENS": 100, "COMPACTION_REPLY_RESERVE_TOKENS": 500})
     messages = [{"role": "user", "content": "old " * 15000},
                 {"role": "assistant", "content": "prior answer"},
                 {"role": "user", "content": "continue"}]
@@ -170,7 +214,7 @@ def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path,
         return "Earlier work summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     asyncio.run(runtime.run_turn_async(
         cfg, "system", messages, runtime.Telemetry(None),
         tool_registry=build_default_registry().select([]),
@@ -191,7 +235,7 @@ def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path,
 
 def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path):
     cfg = replace(_config(tmp_path), max_output_tokens=128000,
-                  settings={"compact": {"context_window": 128000}})
+                  settings={"CONTEXT_SIZE": 128000})
     messages = [{"role": "user", "content": "old " * 1000},
                 {"role": "assistant", "content": "answer"},
                 {"role": "user", "content": "continue"}]
@@ -205,7 +249,7 @@ def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path)
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     asyncio.run(runtime.run_turn_async(
         cfg, "system", messages, runtime.Telemetry(None),
         tool_registry=build_default_registry().select([]),
@@ -221,7 +265,7 @@ def test_overflow_clearing_is_visible_with_stdout_redirected(monkeypatch, tmp_pa
     import io
 
     cfg = _config(tmp_path)
-    cfg.settings["compact"] = {"flight_log_dir": str(tmp_path / "flights")}
+    cfg.settings["COMPACTION_LOG_DIR"] = str(tmp_path / "flights")
     messages = []
     for index in range(22):
         messages.extend([
@@ -258,7 +302,7 @@ def test_overflow_clearing_is_visible_with_stdout_redirected(monkeypatch, tmp_pa
     assert changes["cleared"] == 2
     assert [r["tool_call_id"] for r in changes["results"]] == ["c0", "c1"]
     assert before["messages"][1]["content"] == "x" * 1000
-    assert after["messages"][1]["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE
+    assert after["messages"][1]["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE
     assert records[-1]["event"] == "success"
     visible = capsys.readouterr().err
     notices = [line for line in visible.splitlines() if start["id"][:12] in line]
@@ -271,8 +315,8 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
     from ai.types.usage import Usage
 
     cfg = replace(_config(tmp_path), max_tool_iterations=20, max_output_tokens=None,
-                  settings={"compact": {"context_window_fallback": 128000}})
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+                  settings={"CONTEXT_SIZE_UNKNOWN": 128000})
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
     calls = []
     summaries = []
@@ -293,8 +337,8 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
         return "summary"
 
     monkeypatch.setattr(model_client, "stream_model_async", response)
-    monkeypatch.setattr(runtime, "_dispatch_batch", dispatch)
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(turn_dispatch, "dispatch_batch", dispatch)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     messages = [{"role": "user", "content": "previous summary"},
                 {"role": "user", "content": "active task " + "material " * 10000}]
     asyncio.run(runtime.run_turn_async(
@@ -307,3 +351,31 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
     assert messages[1]["content"].startswith("active task")
     assert sum(m["role"] == "tool" for m in messages) == 11
     assert messages[-1]["content"] == "finished"
+
+
+@pytest.mark.parametrize(("provider_id", "model", "effort", "shown"), [
+    ("openai", "some-model", "off", "effort=off"),
+    ("openai", "some-model", "spoon", "effort=spoon"),
+    ("anthropic", "claude-opus-5-5", "off", "effort=low"),
+    ("anthropic", "claude-opus-4-8", "off", "thinking=disabled"),
+    ("deepseek", "deepseek-chat", "high", "DEEPSEEK_REASONING_TOKENS_MAX=32000"),
+])
+def test_run_line_shows_the_effort_the_request_carries(monkeypatch, tmp_path, capsys,
+                                                       provider_id, model, effort, shown):
+    cfg = replace(_config(tmp_path), trace=True, provider_id=provider_id, model=model, reasoning_effort=effort)
+    sent = []
+
+    async def sdk(**kwargs):
+        sent.append(request_params.wire_fields(kwargs["params"]))
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    run_line = capsys.readouterr().out
+    assert shown in run_line
+    name, _, value = shown.partition("=")
+    assert str(sent[0][name]) == value

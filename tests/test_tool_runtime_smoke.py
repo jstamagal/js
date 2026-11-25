@@ -4,19 +4,28 @@ import base64
 import json
 import re
 import shutil
-from pathlib import Path
 
-import pytest
-
-from tool_loading import after_loading
-
-from js import capped_process, model_client, runtime, setcmd, settings, toolkit as runtime_tools
-from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
-from js.toolkit import fs, process_net
-from js.toolkit.core import ToolResult, call_tool
 import ai
+import pytest
+from tool_loading import after_loading
+from turn_driver import config as turn_config, one_turn, registry as turn_registry, run as run_turn
 
+from js import (
+    capped_process,
+    history_record,
+    model_client,
+    result_caps,
+    setcmd,
+    settings,
+    tool_calls,
+    tool_errors,
+    tool_result_messages,
+    toolkit as runtime_tools,
+)
+from js.model_client import ModelStreamResult, ModelToolCall
+from js.toolkit import Tool, ToolContext, file_search, fs, fs_tools, patch, shell
+from js.toolkit.core import ToolResult
+from js.toolkit.registry import ToolRegistry, build_default_registry
 
 NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
 
@@ -26,14 +35,14 @@ def test_numbered_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    unread_patch = fs.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
+    unread_patch = patch.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
     assert unread_patch == "ERROR: You must read the file with the read tool before attempting to edit it."
 
-    read_result = fs.read("sample.txt", context=context)
+    read_result = fs.fs_read("sample.txt", context=context)
     assert NUMBERED_RE.search(read_result)
     assert "2" in read_result and "|beta" in read_result
 
-    patch_result = fs.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
+    patch_result = patch.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
     assert patch_result.startswith(f"patched {target}")
     assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\n"
 
@@ -47,7 +56,7 @@ def test_read_prefix_is_the_line_number_alone(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    rendered = fs.read("numbered.txt", context=context)
+    rendered = fs.fs_read("numbered.txt", context=context)
 
     assert rendered.splitlines() == ["1|alpha", "2|beta"]
 
@@ -58,15 +67,15 @@ def _read_file(tmp_path, name: str, body: str) -> tuple:
     target = tmp_path / name
     target.write_text(body, encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read(name, context=context)
+    fs.fs_read(name, context=context)
     return target, context
 
 
 def test_patch_scalar_form_accepts_search_and_content_aliases(tmp_path):
     target, context = _read_file(tmp_path, "aliased.txt", "alpha\nbeta\n")
 
-    named = fs.patch(file_path="aliased.txt", old_string="alpha", new_string="ALPHA", context=context)
-    aliased = fs.patch(path="aliased.txt", search="beta", content="BETA", context=context)
+    named = patch.patch(file_path="aliased.txt", old_string="alpha", new_string="ALPHA", context=context)
+    aliased = patch.patch(path="aliased.txt", search="beta", content="BETA", context=context)
 
     assert named.startswith(f"patched {target} (1 replacement, hash ")
     assert aliased.startswith(f"patched {target} (1 replacement, hash ")
@@ -77,7 +86,7 @@ def test_patch_scalar_form_accepts_search_and_content_aliases(tmp_path):
 def test_patch_edits_list_applies_in_order_so_later_edits_see_earlier_results(tmp_path):
     target, context = _read_file(tmp_path, "chain.txt", "one\ntwo\n")
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="chain.txt",
         edits=[
             {"old_string": "one", "new_string": "two"},   # file now has two\ntwo
@@ -90,13 +99,12 @@ def test_patch_edits_list_applies_in_order_so_later_edits_see_earlier_results(tm
     assert target.read_text(encoding="utf-8") == "three\n"
 
 
-def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_path):
+def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_path, monkeypatch):
     """Grammar-constrained backends hand back a nested array as an escaped JSON
     string. The batch form was then rejected by schema validation before `patch`
     ever ran, so only the scalar form worked."""
     target, context = _read_file(tmp_path, "serialized.txt", "one\ntwo\n")
-    tool = next(item for item in fs.tools() if item.name == "patch")
-    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
+    tool = next(item for item in fs_tools.tools() if item.name == "patch")
     arguments = json.dumps({
         "file_path": "serialized.txt",
         "edits": json.dumps([
@@ -105,14 +113,11 @@ def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_pa
         ]),
     })
 
-    normalized, stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("call_1", "patch", [arguments])], registry, limit=10
-    )
+    turn = run_turn(tmp_path, monkeypatch, turn_registry(tool), [[("call_1", "patch", arguments)]],
+                    context=context)
 
-    assert stats.invalid == 0
-    assert normalized[0].validation_error is None
-    result = call_tool(tool, json.loads(normalized[0].arguments()), context)
-    assert str(result).startswith(f"patched {target} (2 edits, hash ")
+    assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [0]
+    assert turn.results()["call_1"].startswith(f"patched {target} (2 edits, hash ")
     assert target.read_text(encoding="utf-8") == "ONE\nTWO\n"
 
 
@@ -120,7 +125,7 @@ def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
     target, context = _read_file(tmp_path, "atomic.txt", "alpha\nbeta\n")
     before = target.read_bytes()
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="atomic.txt",
         edits=[
             {"old_string": "alpha", "new_string": "ALPHA"},
@@ -132,15 +137,18 @@ def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
     assert result.startswith("ERROR: edit 2: Could not find match for search text: 'gamma'")
     # The first edit resolved cleanly; nothing may reach disk regardless.
     assert target.read_bytes() == before
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)
 
 
-def test_patch_rejects_no_op_edit_in_both_scalar_and_list_form(tmp_path):
+def test_patch_identical_edit_is_skipped_in_both_scalar_and_list_form(tmp_path):
     target, context = _read_file(tmp_path, "noop.txt", "alpha\nbeta\n")
     before = target.read_bytes()
 
-    scalar = fs.patch(file_path="noop.txt", old_string="alpha", new_string="alpha", context=context)
-    listed = fs.patch(
+    scalar = patch.patch(file_path="noop.txt", old_string="alpha", new_string="alpha", context=context)
+    assert not scalar.startswith("ERROR")
+    assert target.read_bytes() == before
+
+    listed = patch.patch(
         file_path="noop.txt",
         edits=[
             {"old_string": "alpha", "new_string": "ALPHA"},
@@ -149,16 +157,16 @@ def test_patch_rejects_no_op_edit_in_both_scalar_and_list_form(tmp_path):
         context=context,
     )
 
-    assert scalar == "ERROR: old_string and new_string must be different"
-    assert listed == "ERROR: edit 2: old_string and new_string must be different"
-    assert target.read_bytes() == before
+    assert listed.startswith(f"patched {target}")
+    assert "edit 2" in listed
+    assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\n"
 
 
 def test_patch_ambiguous_match_needs_replace_all_in_both_forms(tmp_path):
     target, context = _read_file(tmp_path, "dupes.txt", "x = 1\ny = 1\n")
 
-    scalar_rejected = fs.patch(file_path="dupes.txt", old_string="1", new_string="2", context=context)
-    list_rejected = fs.patch(
+    scalar_rejected = patch.patch(file_path="dupes.txt", old_string="1", new_string="2", context=context)
+    list_rejected = patch.patch(
         file_path="dupes.txt",
         edits=[{"old_string": "1", "new_string": "2"}],
         context=context,
@@ -167,11 +175,11 @@ def test_patch_ambiguous_match_needs_replace_all_in_both_forms(tmp_path):
     assert list_rejected.startswith("ERROR: edit 1: Multiple matches found for search text: '1'")
     assert target.read_text(encoding="utf-8") == "x = 1\ny = 1\n"
 
-    scalar_ok = fs.patch(file_path="dupes.txt", old_string="1", new_string="2", replace_all=True, context=context)
+    scalar_ok = patch.patch(file_path="dupes.txt", old_string="1", new_string="2", replace_all=True, context=context)
     assert scalar_ok.startswith(f"patched {target} (2 replacements, hash ")
     assert target.read_text(encoding="utf-8") == "x = 2\ny = 2\n"
 
-    list_ok = fs.patch(
+    list_ok = patch.patch(
         file_path="dupes.txt",
         edits=[{"old_string": "2", "new_string": "3", "replace_all": True}],
         context=context,
@@ -184,14 +192,14 @@ def test_patch_rejects_mixing_the_scalar_form_with_edits(tmp_path):
     target, context = _read_file(tmp_path, "mixed.txt", "alpha\n")
     before = target.read_bytes()
 
-    mixed = fs.patch(
+    mixed = patch.patch(
         file_path="mixed.txt",
         old_string="alpha",
         new_string="ALPHA",
         edits=[{"old_string": "alpha", "new_string": "OMEGA"}],
         context=context,
     )
-    with_flag = fs.patch(
+    with_flag = patch.patch(
         file_path="mixed.txt",
         replace_all=True,
         edits=[{"old_string": "alpha", "new_string": "OMEGA"}],
@@ -212,7 +220,7 @@ def test_patch_edits_list_still_requires_a_prior_read(tmp_path):
     target.write_text("alpha\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="unread.txt",
         edits=[{"old_string": "alpha", "new_string": "ALPHA"}],
         context=context,
@@ -226,9 +234,9 @@ def test_patch_refuses_a_match_outside_the_ranges_actually_read(tmp_path):
     target = tmp_path / "ranged.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\nsix\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read("ranged.txt", start_line=1, end_line=2, context=context)
+    fs.fs_read("ranged.txt", start_line=1, end_line=2, context=context)
 
-    blocked = fs.patch(
+    blocked = patch.patch(
         file_path="ranged.txt",
         old_string="five",
         new_string="FIVE",
@@ -243,10 +251,10 @@ def test_patch_accepts_target_covered_by_union_of_ranged_reads(tmp_path):
     target = tmp_path / "pieces.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\nsix\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read("pieces.txt", start_line=1, end_line=2, context=context)
-    fs.read("pieces.txt", start_line=4, end_line=5, context=context)
+    fs.fs_read("pieces.txt", start_line=1, end_line=2, context=context)
+    fs.fs_read("pieces.txt", start_line=4, end_line=5, context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="pieces.txt",
         old_string="four\nfive",
         new_string="FOUR\nFIVE",
@@ -261,9 +269,9 @@ def test_implicit_read_page_does_not_unlock_unrendered_remainder(tmp_path):
     target = tmp_path / "paged.txt"
     target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_lines=2)
-    fs.read("paged.txt", context=context)
+    fs.fs_read("paged.txt", context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="paged.txt",
         old_string="four",
         new_string="FOUR",
@@ -277,7 +285,7 @@ def test_implicit_read_page_does_not_unlock_unrendered_remainder(tmp_path):
 def test_undo_reverts_a_whole_multi_edit_patch_in_one_step(tmp_path):
     target, context = _read_file(tmp_path, "undoable.txt", "one\ntwo\nthree\n")
 
-    patched = fs.patch(
+    patched = patch.patch(
         file_path="undoable.txt",
         edits=[
             {"old_string": "one", "new_string": "ONE"},
@@ -299,9 +307,9 @@ def test_patch_empty_or_malformed_edits_list_is_rejected(tmp_path):
     target, context = _read_file(tmp_path, "shape.txt", "alpha\n")
     before = target.read_bytes()
 
-    empty = fs.patch(file_path="shape.txt", edits=[], context=context)
-    missing_new = fs.patch(file_path="shape.txt", edits=[{"old_string": "alpha"}], context=context)
-    not_an_object = fs.patch(file_path="shape.txt", edits=["alpha"], context=context)
+    empty = patch.patch(file_path="shape.txt", edits=[], context=context)
+    missing_new = patch.patch(file_path="shape.txt", edits=[{"old_string": "alpha"}], context=context)
+    not_an_object = patch.patch(file_path="shape.txt", edits=["alpha"], context=context)
 
     assert empty == "ERROR: edits must be a non-empty list of {old_string, new_string} objects"
     assert missing_new == "ERROR: edit 1: every edit requires old_string and new_string"
@@ -315,9 +323,9 @@ def test_patch_matches_crlf_search_text_per_edit(tmp_path):
     target = tmp_path / "crlf.txt"
     target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
     context = ToolContext(cwd=tmp_path)
-    fs.read("crlf.txt", context=context)
+    fs.fs_read("crlf.txt", context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="crlf.txt",
         edits=[
             {"old_string": "alpha\r\nbeta", "new_string": "one\r\ntwo"},
@@ -336,7 +344,7 @@ def test_read_boolean_line_range_values_are_ignored(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.read("lines.txt", start_line=True, end_line=True, context=context)
+    actual = fs.fs_read("lines.txt", start_line=True, end_line=True, context=context)
 
     assert "alpha" in actual
     assert "beta" in actual
@@ -348,28 +356,38 @@ def test_read_start_past_eof_returns_non_error_note(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.read("lines.txt", start_line=50, end_line=80, context=context)
+    actual = fs.fs_read("lines.txt", start_line=50, end_line=80, context=context)
 
     assert not actual.startswith("ERROR")
     assert "2 total lines" in actual
     assert "start_line=50" in actual
 
 
-def test_write_overwrite_guard_requires_explicit_overwrite_and_prior_read(tmp_path):
-    target = tmp_path / "guarded.txt"
+def test_write_replaces_an_existing_file_once_it_has_been_read(tmp_path):
+    target = tmp_path / "known.txt"
     target.write_text("old\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    refused = fs.write("guarded.txt", "new\n", context=context)
-    assert refused.startswith("ERROR: guarded.txt already exists")
-    assert "patch" in refused and "overwrite=true" in refused
-    assert fs.write("guarded.txt", "new\n", overwrite=True, context=context) == (
-        "ERROR: You must read the file with the read tool before attempting to overwrite it."
-    )
-    fs.read("guarded.txt", context=context)
+    assert fs.write("known.txt", "new\n", context=context).startswith("ERROR")
+    assert fs.write("known.txt", "new\n", overwrite=True, context=context).startswith("ERROR")
+    assert target.read_text(encoding="utf-8") == "old\n"
+    fs.fs_read("known.txt", context=context)
 
-    write_result = fs.write("guarded.txt", "new\n", overwrite=True, context=context)
-    assert write_result.startswith(f"wrote 4 bytes to {target}")
+    assert fs.write("known.txt", "new\n", context=context).startswith(f"wrote 4 bytes to {target}")
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_write_require_overwrite_also_demands_the_flag_on_a_read_file(tmp_path):
+    target = tmp_path / "guarded.txt"
+    target.write_text("old\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, write_require_overwrite=True)
+    fs.fs_read("guarded.txt", context=context)
+
+    refused = fs.write("guarded.txt", "new\n", context=context)
+    assert refused.startswith("ERROR") and "overwrite=true" in refused
+    assert target.read_text(encoding="utf-8") == "old\n"
+
+    assert fs.write("guarded.txt", "new\n", overwrite=True, context=context).startswith(f"wrote 4 bytes to {target}")
     assert target.read_text(encoding="utf-8") == "new\n"
 
 
@@ -377,7 +395,7 @@ def test_write_overwrite_is_authorized_by_a_partial_read(tmp_path):
     target = tmp_path / "partial.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read("partial.txt", start_line=1, end_line=1, context=context)
+    fs.fs_read("partial.txt", start_line=1, end_line=1, context=context)
 
     written = fs.write("partial.txt", "replacement\n", overwrite=True, context=context)
 
@@ -440,16 +458,17 @@ def test_remove_chonker_requires_confirmed_permanent_delete(tmp_path, monkeypatc
     target = tmp_path / "big.log"
     target.write_text("not actually big\n", encoding="utf-8")
 
-    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path: fs._TRASH_MAX_BYTES + 1)
+    maximum = settings.default_value("TRASH_BYTES_MAX")
+    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path, *, cap: maximum + 1)
 
     result = fs.remove("big.log", context=context)
 
     assert result == (
-        f"ERROR: target is over the 512 MiB trash limit ({fs._TRASH_MAX_BYTES + 1} bytes); "
+        f"ERROR: target is over the 512 MiB trash limit ({maximum + 1} bytes); "
         "confirm with the operator and pass permanent=true to delete directly."
     )
     assert target.exists()
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)
 
 
 def test_remove_symlink_does_not_follow_target_and_undo_restores_link(tmp_path):
@@ -475,7 +494,7 @@ def test_fs_search_negative_offset_and_context_are_ignored(tmp_path):
     (tmp_path / "two.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.fs_search("needle", path=".", offset=-1, context_lines=-1, context=context)
+    actual = file_search.fs_search("needle", path=".", offset=-1, context_lines=-1, context=context)
 
     assert str(tmp_path / "one.txt") in actual
     assert str(tmp_path / "two.txt") in actual
@@ -486,7 +505,7 @@ def test_fs_search_boolean_head_limit_is_ignored(tmp_path):
     (tmp_path / "two.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.fs_search("needle", path=".", head_limit=True, context=context)
+    actual = file_search.fs_search("needle", path=".", head_limit=True, context=context)
 
     assert str(tmp_path / "one.txt") in actual
     assert str(tmp_path / "two.txt") in actual
@@ -495,8 +514,8 @@ def test_fs_search_repeated_query_is_deduplicated(tmp_path):
     (tmp_path / "one.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    first = fs.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
-    second = fs.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
+    first = file_search.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
+    second = file_search.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
 
     assert str(tmp_path / "one.txt") in first
     assert second == first + "\n[deduplicated repeated search]"
@@ -518,26 +537,26 @@ def test_tool_resolution_is_canonical_case_insensitive_and_not_compat_alias_base
 
 
 def test_runtime_repairs_common_jsonish_argument_shapes():
-    assert runtime._repair_jsonish('{"path":"a",}') == {"path": "a"}
-    assert runtime._repair_jsonish('"{\\"path\\":\\"a\\"}"') == {"path": "a"}
-    assert runtime._repair_jsonish('{"path":"a"') == {"path": "a"}
-    assert runtime._repair_jsonish("") == {}
+    assert tool_calls.repair_jsonish('{"path":"a",}') == {"path": "a"}
+    assert tool_calls.repair_jsonish('"{\\"path\\":\\"a\\"}"') == {"path": "a"}
+    assert tool_calls.repair_jsonish('{"path":"a"') == {"path": "a"}
+    assert tool_calls.repair_jsonish("") == {}
 
     with pytest.raises(ValueError, match="tool args must be an object"):
-        runtime._repair_jsonish('["not", "an", "object"]')
+        tool_calls.repair_jsonish('["not", "an", "object"]')
 
 
 def test_canonical_tool_args_preserves_valid_and_repairs_blankable():
     # Valid JSON is returned byte-for-byte (model's exact bytes preserved).
     valid = '{"file_path": "/tmp/out.md", "content": "hi"}'
-    assert runtime._canonical_tool_args(valid) == valid
+    assert tool_calls.canonical_tool_args(valid) == valid
 
     # Trailing comma / unclosed brace: js repairs for execution, but the raw
     # string would be blanked to "{}" by the SDK's integrity pass on resend.
     # _canonical_tool_args must substitute the repaired, json-decodable form.
     for bad in ('{"file_path": "/tmp/out.md", "content": "hi",}',
                 '{"file_path": "/tmp/out.md", "content": "hi"'):
-        fixed = runtime._canonical_tool_args(bad)
+        fixed = tool_calls.canonical_tool_args(bad)
         import json as _json
         assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
 
@@ -550,7 +569,7 @@ def test_canonical_tool_args_unwraps_double_encoded_object():
     # was returning the raw string untouched because it happens to be valid JSON.
     import json as _json
     double = '"{\\"file_path\\": \\"/tmp/out.md\\", \\"content\\": \\"hi\\"}"'
-    fixed = runtime._canonical_tool_args(double)
+    fixed = tool_calls.canonical_tool_args(double)
     assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
     assert isinstance(_json.loads(fixed), dict)
 
@@ -562,7 +581,7 @@ def test_canonical_tool_args_survives_sdk_integrity_pass():
     from ai.providers import history_utils
 
     bad = '{"file_path": "/tmp/out.md", "content": "hi",}'  # trailing comma
-    fixed = runtime._canonical_tool_args(bad)
+    fixed = tool_calls.canonical_tool_args(bad)
 
     asst = ai.assistant_message(
         ai.types.messages.ToolCallPart(
@@ -596,7 +615,7 @@ def test_sanitize_assistant_message_repairs_sdk_tool_call_parts():
             tool_call_id="c1", tool_name="write", tool_args=bad
         )
     )
-    fixed_msg = runtime._sanitize_assistant_message(msg)
+    fixed_msg = tool_calls.sanitize_assistant_message(msg)
     import json as _json
     parts = [
         p for p in fixed_msg.parts
@@ -613,103 +632,84 @@ def test_sanitize_assistant_message_repairs_sdk_tool_call_parts():
             tool_args='{"file_path": "/tmp/out.md", "content": "hi"}',
         )
     )
-    assert runtime._sanitize_assistant_message(good) is good
+    assert tool_calls.sanitize_assistant_message(good) is good
 
 
 def test_retry_metadata_is_appended_and_resets_after_success():
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
 
     assert tracker.record("read", "ERROR: bad path") == (
         "ERROR: bad path\n<retry>attempts_left=1, allowed_max_attempts=2</retry>"
     )
-    assert tracker.record("read", "ERROR: still bad") == (
-        "ERROR: still bad\n<retry>attempts_left=0, allowed_max_attempts=2</retry>"
+    assert tracker.record("read", "ERROR: bad path") == (
+        "ERROR: bad path\n<retry>attempts_left=0, allowed_max_attempts=2</retry>"
     )
-    assert tracker.limit_reached()
+    assert tracker.steer_due() == [("read", 2)]
 
     assert tracker.record("read", "ok") == "ok"
-    assert not tracker.limit_reached()
+    assert tracker.record("read", "ERROR: bad path").endswith(
+        "<retry>attempts_left=1, allowed_max_attempts=2</retry>"
+    )
+    assert tracker.steer_due() == []
 
 
 def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
-    telemetry_events: list[tuple[str, dict]] = []
 
-    class TelemetryStub:
-        def event(self, kind: str, **payload):
-            telemetry_events.append((kind, payload))
+    turn = run_turn(tmp_path, monkeypatch, build_default_registry().select(["read:eager", "write:eager"]), [
+        [("write", "write", '{"file_path":"created.txt","content":"ok",}')],
+        [("missing", "missing_tool", "{}")],
+        [("read", "read", '{"file_path":"does-not-exist.txt"}')],
+    ], cfg=turn_config(tmp_path, settings={"TOOL_ERRORS_MAX": 2}), context=context)
 
-    args, result = runtime._dispatch(
-        "write",
-        '{"file_path":"created.txt","content":"ok",}',
-        TelemetryStub(),
-        cap_bytes=4096,
-        error_tracker=runtime.ToolErrorTracker(limit=2),
-    )
-
-    assert args == {"file_path": "created.txt", "content": "ok"}
-    assert result.startswith(f"wrote 2 bytes to {tmp_path / 'created.txt'}")
+    results = turn.results()
+    assert json.loads(turn.calls()[0][2]) == {"file_path": "created.txt", "content": "ok"}
+    assert results["write"].startswith(f"wrote 2 bytes to {tmp_path / 'created.txt'}")
     assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "ok"
-    assert len(telemetry_events) == 1
-    kind, payload = telemetry_events[0]
-    assert kind == "tool_ok"
-    assert payload["tool"] == "write"
+    assert [event["tool"] for event in turn.events("tool_ok") if event["call_id"] == "write"] == ["write"]
 
-    tracker = runtime.ToolErrorTracker(limit=2)
-    _, error = runtime._dispatch(
-        "missing_tool",
-        "{}",
-        TelemetryStub(),
-        cap_bytes=4096,
-        error_tracker=tracker,
-    )
+    error = results["missing"]
     assert "unknown tool" in error and "missing_tool" in error
     assert "tool_discovery" not in error
     assert "<retry>" not in error
-    assert not tracker.limit_reached()
 
-    _, handler_error = runtime._dispatch(
-        "read", '{"file_path":"does-not-exist.txt"}', TelemetryStub(),
-        cap_bytes=4096, error_tracker=tracker, tool_context=context,
+    assert results["read"].endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
+
+
+def _spill_to(tmp_path, monkeypatch) -> None:
+    real_spill = result_caps.spill_oversized_result
+    monkeypatch.setattr(
+        result_caps,
+        "spill_oversized_result",
+        lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
     )
-    assert handler_error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
+
+
+def _clipping_config(tmp_path, read_lines: int):
+    """Reads of up to ``read_lines`` lines whose results spill past 2000 bytes."""
+    return turn_config(tmp_path, max_read_lines=read_lines, max_read_bytes=0,
+                       max_tool_result_inline_bytes=2000, max_tool_result_bytes=0)
 
 
 def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_path, monkeypatch):
     """The read handler records coverage for its full text, but the runtime
     clips the result before the model sees it. Only the delivered preview may
     count as read."""
+    _spill_to(tmp_path, monkeypatch)
     context = ToolContext(cwd=tmp_path)
-    context.max_read_lines = 5000
-    context.max_read_bytes = 0
-    context.max_tool_result_inline_bytes = 2000
-    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
-    real_spill = runtime.spill_oversized_result
-    monkeypatch.setattr(
-        runtime,
-        "spill_oversized_result",
-        lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
-    )
     target = tmp_path / "big.txt"
     target.write_text("".join(f"L{index:05d} filler\n" for index in range(3000)), encoding="utf-8")
+    patch = {"file_path": str(target), "old_string": "L02000 filler\n", "new_string": "changed\n"}
 
-    _args, delivered = runtime._dispatch(
-        "read",
-        json.dumps({"file_path": str(target)}),
-        runtime.Telemetry(None),
-        cap_bytes=0,
-        tool_context=context,
-    )
+    turn = run_turn(tmp_path, monkeypatch, build_default_registry().select(["read:eager", "patch:eager"]), [
+        [("read", "read", json.dumps({"file_path": str(target)}))],
+        [("late_line", "patch", json.dumps(patch))],
+    ], cfg=_clipping_config(tmp_path, 5000), context=context)
 
-    assert len(delivered.encode("utf-8")) < target.stat().st_size
-    assert target.resolve() not in context.fully_read_paths
-
-    late_line = fs.patch(
-        file_path=str(target), old_string="L02000 filler\n", new_string="changed\n", context=context
-    )
-
-    assert late_line.startswith("ERROR:")
+    results = turn.results()
+    assert len(results["read"].encode("utf-8")) < target.stat().st_size
+    assert not context.reads.coverage(target.resolve()).whole
+    assert results["late_line"].startswith("ERROR:")
     assert target.read_text(encoding="utf-8").startswith("L00000")
     assert target.read_text(encoding="utf-8").endswith("L02999 filler\n")
 
@@ -717,48 +717,27 @@ def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_pa
 def test_a_clipped_read_does_not_revoke_an_earlier_read(tmp_path, monkeypatch):
     """A later clip narrows that read's coverage without erasing lines an
     earlier read already delivered in full."""
+    _spill_to(tmp_path, monkeypatch)
     context = ToolContext(cwd=tmp_path)
-    context.max_read_lines = 50_000
-    context.max_read_bytes = 0
-    context.max_tool_result_inline_bytes = 2000
-    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
-    real_spill = runtime.spill_oversized_result
-    monkeypatch.setattr(
-        runtime,
-        "spill_oversized_result",
-        lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
-    )
     target = tmp_path / "big.txt"
     target.write_text("".join(f"L{index:05d} filler\n" for index in range(30000)), encoding="utf-8")
 
-    _args, page = runtime._dispatch(
-        "read",
-        json.dumps({"file_path": str(target), "start_line": 2500, "end_line": 2510}),
-        runtime.Telemetry(None),
-        cap_bytes=0,
-        tool_context=context,
-    )
-    assert "L02505 filler" in page
+    def patch(line: str) -> str:
+        return json.dumps({"file_path": str(target), "old_string": f"{line} filler\n", "new_string": "changed\n"})
 
-    _args, delivered = runtime._dispatch(
-        "read",
-        json.dumps({"file_path": str(target)}),
-        runtime.Telemetry(None),
-        cap_bytes=0,
-        tool_context=context,
-    )
-    assert len(delivered.encode("utf-8")) < target.stat().st_size
-    assert target.resolve() not in context.fully_read_paths
+    turn = run_turn(tmp_path, monkeypatch, build_default_registry().select(["read:eager", "patch:eager"]), [
+        [("page", "read", json.dumps({"file_path": str(target), "start_line": 2500, "end_line": 2510}))],
+        [("whole", "read", json.dumps({"file_path": str(target)}))],
+        [("earlier", "patch", patch("L02505"))],
+        [("unseen", "patch", patch("L20000"))],
+    ], cfg=_clipping_config(tmp_path, 50_000), context=context)
 
-    earlier = fs.patch(
-        file_path=str(target), old_string="L02505 filler\n", new_string="changed\n", context=context
-    )
-    unseen = fs.patch(
-        file_path=str(target), old_string="L20000 filler\n", new_string="changed\n", context=context
-    )
-
-    assert earlier.startswith("patched ")
-    assert unseen.startswith("ERROR:")
+    results = turn.results()
+    assert "L02505 filler" in results["page"]
+    assert len(results["whole"].encode("utf-8")) < target.stat().st_size
+    assert not context.reads.coverage(target.resolve()).whole
+    assert results["earlier"].startswith("patched ")
+    assert results["unseen"].startswith("ERROR:")
 
 
 _TINY_PNG = base64.b64decode(
@@ -807,12 +786,23 @@ def test_fs_read_image_returns_marker_without_inline_base64(tmp_path):
 
 
 def test_fs_read_image_oversize_and_vision_off_fallback(tmp_path):
+    from PIL import Image
+
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
 
-    # Oversize is rejected before any vision handling, regardless of vision state.
-    too_small = ToolContext(cwd=tmp_path, max_file_bytes=4, vision_enabled=True)
-    assert fs.fs_read("pixel.png", context=too_small).startswith("ERROR: image size")
+    # An image over 2000 px is not refused, whatever FILE_BYTES_MAX says: the
+    # marker names a copy that fits 2000 x 2000, and the text says so.
+    tall = tmp_path / "tall.png"
+    Image.new("RGB", (600, 5000), (10, 120, 40)).save(tall)
+    original = tall.read_bytes()
+    small_cap = ToolContext(cwd=tmp_path, max_file_bytes=4, vision_enabled=True)
+    _prefix, sent_path, mime, stub = fs.fs_read("tall.png", context=small_cap).split("\t", 3)
+    with Image.open(sent_path) as sent:
+        assert sent.size == (240, 2000)
+    assert mime == "image/png"
+    assert "600x5000" in stub and "240x2000" in stub
+    assert tall.read_bytes() == original
 
     # Vision off (the default): a plain text descriptor, never an image marker.
     vision_off = ToolContext(cwd=tmp_path)
@@ -825,7 +815,7 @@ def test_build_tool_result_messages_expands_image_marker_with_user_file_part(tmp
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
     marker = f"IMAGE_RESULT\t{image}\timage/png\tvisual stub"
-    messages = model_client.build_tool_result_messages("call_1", "read", marker)
+    messages = tool_result_messages.build_tool_result_messages("call_1", "read", marker)
 
     assert [msg.role for msg in messages] == ["tool", "user"]
     trp = messages[0].parts[0]
@@ -835,7 +825,8 @@ def test_build_tool_result_messages_expands_image_marker_with_user_file_part(tmp
     assert not trp.is_error
     assert trp.result == "visual stub"
     assert isinstance(messages[1].parts[0], ai.types.messages.TextPart)
-    assert messages[1].parts[0].text == "visual stub"
+    # The stub goes once, in the tool message; the media message has the label.
+    assert messages[1].parts[0].text == history_record.media_label("call_1", "visual stub")
     assert isinstance(messages[1].parts[1], ai.types.messages.FilePart)
     assert messages[1].parts[1].data == _TINY_PNG
     assert messages[1].parts[1].media_type == "image/png"
@@ -880,6 +871,23 @@ def test_fs_read_pdf_over_the_read_cap_still_reads(tmp_path):
     assert "Hello PDF Text" in read_result
 
 
+def test_fs_read_pdf_text_is_cut_by_bytes_to_the_result_cap(tmp_path, monkeypatch):
+    """Extracted text of multi-byte characters is cut to TOOL_RESULT_MAX bytes,
+    not characters, and says it was cut; a cap of 0 cuts nothing."""
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(_simple_pdf_bytes("Hello PDF Text"))
+    text = "\u00e9\u4e2d" * 400
+    monkeypatch.setattr(fs, "run", lambda argv, context: (0, text, ""))
+
+    capped = fs.fs_read("sample.pdf", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300))
+    whole = fs.fs_read("sample.pdf", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=0))
+
+    assert len(capped.encode("utf-8")) <= 300
+    assert capped.startswith("\u00e9\u4e2d" * 10)
+    assert "TOOL_RESULT_MAX" in capped
+    assert whole == text
+
+
 def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch):
     """A bool command is empty and refused; an invalid wait falls back to the
     configured window."""
@@ -893,14 +901,14 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
         def stream(self, name): return capped_process._StreamCapture(0)
         def wait(self, timeout):
             waits.append(timeout)
-            return process_net.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
+            return shell.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(process_net, "start_capped", lambda argv, **kw: FakeProcess())
+    monkeypatch.setattr(shell, "start_capped", lambda argv, **kw: FakeProcess())
     context = ToolContext(cwd=tmp_path, shell_wait_seconds=42, shell_program="/bin/sh")
 
-    assert process_net.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
-    process_net.shell("echo ok", timeout=-1, context=context)
-    process_net.shell("echo ok", timeout="bad", context=context)
+    assert shell.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
+    shell.shell("echo ok", timeout=-1, context=context)
+    shell.shell("echo ok", timeout="bad", context=context)
 
     assert waits == [42, 42]
 
@@ -916,7 +924,7 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     fake_shell.chmod(0o700)
     context = ToolContext(cwd=tmp_path, shell_program=str(fake_shell))
 
-    actual = process_net.shell("printf should-not-need-real-shell", context=context)
+    actual = shell.shell("printf should-not-need-real-shell", context=context)
 
     expected = (
         f"shell={fake_shell}\n"
@@ -929,30 +937,27 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     assert actual == expected
 
 
+def test_tool_result_record_keeps_image_as_media_ref(tmp_path):
+    from js import media
 
-
-
-
-def test_history_tool_result_message_dehydrates_image(tmp_path):
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
     marker = f"IMAGE_RESULT\t{image}\timage/png\tVISUAL_FILE stub"
-    pc = runtime._PendingToolCall(id="c1", name="read")
     b64 = base64.b64encode(_TINY_PNG).decode("ascii")
 
-    msgs = runtime._history_tool_result_message(pc, marker)
+    record = tool_result_messages.tool_result_record("c1", "read", marker)
 
-    assert msgs == [{"role": "tool", "tool_call_id": "c1", "name": "read", "content": "VISUAL_FILE stub"}]
-    assert b64 not in str(msgs)
-    assert runtime._history_tool_result_message(pc, "plain done")[0]["content"] == "plain done"
-
-
-def test_tool_display_keys_are_canonical_tool_names():
-    from js import display
-
-    canonical = {t.name for t in build_default_registry().tools}
-    extra = set(display._BODY_ARG) - canonical
-    assert not extra, f"display._BODY_ARG has non-canonical keys: {extra}"
+    assert record["content"] == "VISUAL_FILE stub"
+    [part] = record["media"]
+    assert media.load(part) == _TINY_PNG
+    assert b64 not in json.dumps(record)
+    # The image outlives its file: replay reads the store, not the path.
+    image.unlink()
+    wire = history_record.history_to_ai_messages("", [record], vision=True)
+    assert [m.role for m in wire] == ["tool", "user"]
+    assert wire[1].parts[-1].data == _TINY_PNG
+    assert tool_result_messages.tool_result_record("c1", "read", "plain done") == {
+        "role": "tool", "tool_call_id": "c1", "name": "read", "content": "plain done"}
 
 
 def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
@@ -960,7 +965,7 @@ def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
     specs = registry.openai_specs()
     alias_map = {"read": "Read", "write": "Write", "task": "Task"}
 
-    aliased = runtime._aliased_tool_specs(specs, alias_map)
+    aliased = tool_calls.aliased_tool_specs(specs, alias_map)
     actual_names = [spec["function"]["name"] for spec in aliased]
 
     assert actual_names == ["Read", "Write", "fs_search", "shell", "Task"]
@@ -971,69 +976,39 @@ def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
     write_desc = next(s["function"]["description"] for s in aliased if s["function"]["name"] == "Write")
     assert "`Read`" in write_desc and "`read`" not in write_desc
     # Empty alias map is a no-op returning the same object.
-    assert runtime._aliased_tool_specs(specs, {}) is specs
+    assert tool_calls.aliased_tool_specs(specs, {}) is specs
 
 
 def test_alias_profile_skips_existing_tool_name_collisions_from_config():
     live_settings = settings.seed_defaults()
     result = setcmd.set_command(
         live_settings,
-        'tools.alias_profiles [{"match":["openai"],"aliases":{"read":"Write"}}]',
+        'TOOL_ALIASES [{"match":["openai"],"aliases":{"read":"Write"}}]',
     )
     registry = build_default_registry().select(["read:lazy", "write:lazy"])
 
     assert result.error is None
-    alias_map = runtime._resolve_alias_profile(live_settings, "openai-test", None)
-    specs = runtime._aliased_tool_specs(registry.openai_specs(), alias_map)
+    alias_map = tool_calls.resolve_alias_profile(live_settings, "openai-test", None)
+    specs = tool_calls.aliased_tool_specs(registry.openai_specs(), alias_map)
     aliased_registry = registry.aliased(alias_map)
 
     assert [spec["function"]["name"] for spec in specs] == ["read", "write"]
     assert aliased_registry.resolve("WRITE").name == "write"
 
 
-def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(
-        live_settings,
-        'tools.alias_profiles ['
-        '{"match":["openai"],"aliases":{"missing_tool":"MissingTool"}},'
-        '{"match":["openai"],"aliases":{"read":"Read"}}'
-        ']',
-    )
-    registry = build_default_registry().select(["read:lazy"])
-
-    assert result.error is None
-    assert runtime._resolve_alias_profile(live_settings, "openai-test", None, registry) == {
-        "read": "Read",
-    }
-
-
-def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(
-        live_settings,
-        'tools.alias_profiles [{"match":[" openai "],"aliases":{"read":"Read"}}]',
-    )
-
-    assert result.error is None
-    assert runtime._resolve_alias_profile(live_settings, "openai-test", None) == {
-        "read": "Read",
-    }
-
-
 def test_resolve_alias_profile_matches_model_or_provider_substring():
-    settings = {"tools": {"alias_profiles": [
+    settings = {"TOOL_ALIASES": [
         {"match": ["claude"], "aliases": {"read": "Read", "write": "Write", "task": "Task"}},
-    ]}}
-    assert runtime._resolve_alias_profile(settings, "openai/proxy-claude-sonnet-4", None) == {
+    ]}
+    assert tool_calls.resolve_alias_profile(settings, "openai/proxy-claude-sonnet-4", None) == {
         "read": "Read", "write": "Write", "task": "Task"}
     # Non-matching model id falls through to the default (empty) map.
-    assert runtime._resolve_alias_profile(settings, "openai/proxy-gpt-5", None) == {}
+    assert tool_calls.resolve_alias_profile(settings, "openai/proxy-gpt-5", None) == {}
     # The provider id is also matched against the substrings.
-    prov = {"tools": {"alias_profiles": [{"match": ["anthropic"], "aliases": {"read": "Read"}}]}}
-    assert runtime._resolve_alias_profile(prov, "some-model", "anthropic") == {"read": "Read"}
+    prov = {"TOOL_ALIASES": [{"match": ["anthropic"], "aliases": {"read": "Read"}}]}
+    assert tool_calls.resolve_alias_profile(prov, "some-model", "anthropic") == {"read": "Read"}
     # No profiles configured → empty map → default tool names.
-    assert runtime._resolve_alias_profile({}, "openai/proxy-claude-sonnet-4", None) == {}
+    assert tool_calls.resolve_alias_profile({}, "openai/proxy-claude-sonnet-4", None) == {}
 
 
 def test_registry_aliased_resolves_noncase_variant_alias_to_canonical():
@@ -1058,14 +1033,14 @@ def test_long_lines_are_returned_whole_for_every_suffix(tmp_path):
     (tmp_path / "data.jsonl").write_text(record + "\n", encoding="utf-8")
     (tmp_path / "data.py").write_text(record + "\n", encoding="utf-8")
 
-    jsonl_out = fs.read("data.jsonl", context=context)
-    py_out = fs.read("data.py", context=context)
+    jsonl_out = fs.fs_read("data.jsonl", context=context)
+    py_out = fs.fs_read("data.py", context=context)
 
     assert long_value in jsonl_out
     assert long_value in py_out
 
 
-def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_order():
+def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_order(tmp_path, monkeypatch):
     events: list[str] = []
 
     def sleeper(label: str, context: ToolContext | None = None) -> str:
@@ -1079,24 +1054,15 @@ def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_or
         tools=(Tool("task", "test task", sleeper, {"label": {"type": "string"}}, required=("label",)),),
         aliases={"task": "task"},
     )
-    calls = [
-        runtime._PendingToolCall(id="slow", name="task", arg_chunks=['{"label":"slow"}']),
-        runtime._PendingToolCall(id="fast", name="Task", arg_chunks=['{"label":"fast"}']),
-    ]
 
     started = __import__("time").perf_counter()
-    actual = runtime._dispatch_tool_calls(
-        calls,
-        runtime.Telemetry(None),
-        cap_bytes=4096,
-        trace=False,
-        error_tracker=runtime.ToolErrorTracker(limit=2),
-        registry=registry,
-        tool_context=ToolContext(),
-    )
+    turn = run_turn(tmp_path, monkeypatch, registry, [
+        [("slow", "task", '{"label":"slow"}'), ("fast", "Task", '{"label":"fast"}')],
+    ])
     elapsed = __import__("time").perf_counter() - started
 
-    assert [(pc.id, result) for pc, _, result in actual] == [("slow", "SLOW"), ("fast", "FAST")]
+    assert [(message["tool_call_id"], message["content"]) for message in turn.messages
+            if message.get("role") == "tool"] == [("slow", "SLOW"), ("fast", "FAST")]
     assert events == ["fast", "slow"]
     assert elapsed < 0.25
 
@@ -1107,8 +1073,11 @@ def test_vision_enabled_for_model_detects_families(monkeypatch):
     monkeypatch.delenv("JS_VISION", raising=False)
     assert config.vision_enabled_for_model("ollama_chat/gemma4:e4b") is True
     assert config.vision_enabled_for_model("openai/qwen3-vl:235b-instruct") is True
-    assert config.vision_enabled_for_model("openai/claude-opus-4-8") is True
-    assert config.vision_enabled_for_model("anthropic/claude-sonnet-4") is True
+    assert config.vision_enabled_for_model("openai/claude-opus-5-5") is True
+    assert config.vision_enabled_for_model("anthropic/claude-sonnet-5-5") is True
+    # Ids no catalog lists yet fall to the family names.
+    for future in ("cpa/claude-opus-6-high", "cpa/claude-7", "openai/gpt-7-xhigh", "xai/grok-5.0", "meta/muse-wonder-3"):
+        assert config.vision_enabled_for_model(future) is True, future
     assert config.vision_enabled_for_model("openai/auto/glm-5.1") is False
     assert config.vision_enabled_for_model("gemma4-coder-q8-256k:latest") is False
     monkeypatch.setenv("JS_VISION", "1")
@@ -1119,6 +1088,7 @@ def test_vision_enabled_for_model_detects_families(monkeypatch):
 
 def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkeypatch):
     import json
+
     from js import config as js_config
 
     monkeypatch.delenv("JS_VISION", raising=False)
@@ -1192,7 +1162,7 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
             pass
 
     messages: list[dict] = [{"role": "user", "content": "what's in pixel.png?"}]
-    runtime.run_turn(cfg, "system", messages, _Tel())
+    one_turn(cfg, "system", messages, _Tel())
 
     # After discovery, image bytes appear only in the follow-up to the read.
     assert len(call_messages) == 2
@@ -1294,7 +1264,7 @@ def test_parallel_image_reads_keep_tool_results_contiguous(tmp_path, monkeypatch
     messages: list[dict] = [{"role": "user", "content": "what is in these images?"}]
     # after_loading runs the SDK's history check before the follow-up request:
     # a user FilePart between two tool results orphans the later ones.
-    runtime.run_turn(cfg, "system", messages, _Tel())
+    one_turn(cfg, "system", messages, _Tel())
 
     assert len(call_messages) == 2
     followup = call_messages[1]
@@ -1320,33 +1290,15 @@ def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
     assert (real / "f.txt").read_text(encoding="utf-8") == "payload"
 
 
-def test_shell_output_capped_while_streaming(tmp_path):
-    # Regression: subprocess.run(capture_output=True) buffered the WHOLE
-    # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
-    # The capped reader must hold memory at the cap while draining to EOF.
-    context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("head -c 2000000 /dev/zero | tr '\\0' 'a'", context=context)
-    assert "exit=0" in out
-    assert len(out) <= context.max_bash_output_bytes + 200
-
-
 def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # A backgrounded grandchild inherits the pipe and never closes it; the
     # child's own output must still come back instead of being lost to a
     # reader parked waiting for EOF.
     monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
     context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("sleep 30 & printf done", context=context, timeout=20)
+    out = shell.shell("sleep 30 & printf done", context=context, timeout=20)
     assert "exit=0" in out
     assert "done" in out
-
-
-def test_shell_marks_truncated_output(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
-    assert "[truncated: limits.max_tool_result_inline_bytes" in out
-    spill = re.search(r"(/\S+?\.log)", out)
-    assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000
 
 
 def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
@@ -1356,19 +1308,19 @@ def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
     target.write_text("".join(f"line {i}\n" for i in range(20_000)), encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_bytes=1024)
 
-    whole = fs.read("big.txt", context=context)
+    whole = fs.fs_read("big.txt", context=context)
     assert whole.startswith("ERROR")
-    assert "limits.max_read_bytes" in whole
+    assert "READ_BYTES_MAX" in whole
     assert "start_line" in whole
 
-    ranged = fs.read("big.txt", start_line=5, end_line=7, context=context)
+    ranged = fs.fs_read("big.txt", start_line=5, end_line=7, context=context)
     assert not ranged.startswith("ERROR")
     assert "|line 4" in ranged and "|line 6" in ranged
 
     # A bogus range must not smuggle the whole file past the cap.
-    bogus = fs.read("big.txt", start_line=True, end_line=True, context=context)
+    bogus = fs.fs_read("big.txt", start_line=True, end_line=True, context=context)
     assert bogus.startswith("ERROR")
-    assert "limits.max_read_bytes" in bogus
+    assert "READ_BYTES_MAX" in bogus
 
 
 def test_whole_file_read_under_cap_is_untouched(tmp_path):
@@ -1376,7 +1328,7 @@ def test_whole_file_read_under_cap_is_untouched(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_bytes=1024)
 
-    actual = fs.read("small.txt", context=context)
+    actual = fs.fs_read("small.txt", context=context)
     assert not actual.startswith("ERROR")
     assert "|alpha" in actual
 
@@ -1386,21 +1338,22 @@ def test_whole_file_read_under_cap_is_untouched(tmp_path):
     [
         ({"type": "text", "text": "x" * 16}, "x" * 16),
         ({"type": "structured", "value": {"data": "x" * 5}}, '{"data":"xxxxx"}'),
-        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}}, "x" * 16),
-        ({"type": "image", "data": "x" * 16, "mimeType": "image/png"}, "x" * 16),
+        # A resource costs its whole final text, the header line included.
+        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}},
+         "[embedded resource file:///x]\n" + "x" * 16),
     ],
 )
 def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(block, payload):
     cap = len(payload)
     result = ToolResult([block])
 
-    assert runtime._cap_result(result, cap) is result
-    capped = runtime._cap_result(result, cap - 1)
+    assert result_caps.cap_result(result, cap) is result
+    capped = result_caps.cap_result(result, cap - 1)
 
     assert isinstance(capped, ToolResult)
     assert len(capped.blocks) == 1
     assert capped.blocks[0]["type"] == "text"
-    assert "[truncated]" in capped.dehydrated()
+    assert "truncated" in capped.dehydrated()
     assert len(capped.dehydrated().encode("utf-8")) <= cap - 1
     assert all(item.get("type") not in {"image", "audio", "resource", "structured"} for item in capped.blocks)
 
@@ -1410,16 +1363,17 @@ def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(blo
     [
         ({"type": "text", "text": "x" * 16}, "x" * 16),
         ({"type": "structured", "value": {"data": "x" * 5}}, '{"data":"xxxxx"}'),
-        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}}, "x" * 16),
-        ({"type": "image", "data": "x" * 16, "mimeType": "image/png"}, "x" * 16),
+        # A resource costs its whole final text, the header line included.
+        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}},
+         "[embedded resource file:///x]\n" + "x" * 16),
     ],
 )
 def test_batch_cap_preserves_tool_result_at_boundary_and_dehydrates_when_over(block, payload):
     result = ToolResult([block])
     size = len(payload)
 
-    assert runtime._cap_batch_results([result], size) == [result]
-    capped = runtime._cap_batch_results([result], size - 1)
+    assert result_caps.cap_batch_results([result], size) == [result]
+    capped = result_caps.cap_batch_results([result], size - 1)
 
     assert isinstance(capped[0], ToolResult)
     assert capped[0].blocks[0]["type"] == "text"
@@ -1431,27 +1385,18 @@ def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
     # One runaway result in a turn of seven must not cost the other six their
     # content — the aggregate cap takes bytes off the biggest first.
     results = ["x" * 400_000] + ["small"] * 6
-    capped = runtime._cap_batch_results(results, 200_000)
+    capped = result_caps.cap_batch_results(results, 200_000)
 
     assert capped[1:] == ["small"] * 6
     assert capped[0] != results[0]
-    assert "[truncated: limits.max_tool_results_per_turn_bytes (200000) reached]" in capped[0]
+    assert "[truncated: PARALLEL_RESULTS_MAX (200000) reached]" in capped[0]
     assert sum(len(r) for r in capped) <= 200_000
-
-
-def test_batch_result_cap_splits_evenly_when_all_are_oversized():
-    results = ["a" * 150_000, "b" * 150_000]
-    capped = runtime._cap_batch_results(results, 200_000)
-
-    assert sum(len(r) for r in capped) <= 200_000
-    assert all("[truncated: limits.max_tool_results_per_turn_bytes" in r for r in capped)
-    assert abs(len(capped[0]) - len(capped[1])) <= 1
 
 
 def test_batch_result_cap_is_a_noop_under_budget_and_when_disabled():
     results = ["small", "also small"]
-    assert runtime._cap_batch_results(results, 200_000) == results
-    assert runtime._cap_batch_results(["x" * 500_000], 0) == ["x" * 500_000]
+    assert result_caps.cap_batch_results(results, 200_000) == results
+    assert result_caps.cap_batch_results(["x" * 500_000], 0) == ["x" * 500_000]
 
 
 def test_patch_exact_long_match_needs_no_prior_read(tmp_path):
@@ -1459,7 +1404,7 @@ def test_patch_exact_long_match_needs_no_prior_read(tmp_path):
     target.write_text("def compute_total(items):\n    return sum(items)\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="unread_long.txt",
         old_string="def compute_total(items):\n    return sum(items)",
         new_string="def compute_total(items):\n    return sum(items) + 1",
@@ -1468,7 +1413,7 @@ def test_patch_exact_long_match_needs_no_prior_read(tmp_path):
 
     assert result.startswith(f"patched {target}")
     assert target.read_text(encoding="utf-8") == "def compute_total(items):\n    return sum(items) + 1\n"
-    assert context.read_ranges[target] == [(1, 2)]
+    assert context.reads.coverage(target).ranges == [(1, 2)]
 
 
 def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
@@ -1476,7 +1421,7 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
     target.write_text("print(“hello there, world”)\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="unread_fuzzy.txt",
         old_string='print("hello there, world")',
         new_string='print("goodbye there, world")',
@@ -1485,3 +1430,27 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
 
     assert result == "ERROR: You must read the file with the read tool before attempting to edit it."
     assert target.read_text(encoding="utf-8") == "print(“hello there, world”)\n"
+
+
+def test_tool_error_tracker_uses_registered_limit():
+    tracker = tool_errors.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
+    tracker.record("read", "ERROR: missing")
+    assert tracker.steer_due() == [("read", 1)]
+
+
+def test_remove_uses_the_configured_trash_size_limit(tmp_path, monkeypatch):
+    from js import turn_settings
+    from js.config import InvocationSources, from_env
+
+    cfg = from_env(sources=InvocationSources(extras=("TRASH_BYTES_MAX=4",)))
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, cfg)
+    target = tmp_path / "small.txt"
+    target.write_bytes(b"too large")
+    monkeypatch.setattr(fs, "_trash_target", lambda target, context: target.unlink())
+
+    result = fs.remove("small.txt", context=context)
+
+    assert result.startswith("ERROR")
+    assert target.read_bytes() == b"too large"
+    assert not context.undo.count(target)

@@ -1,0 +1,63 @@
+# js generate — selected command-line interface for implementation.
+# js generate --t2i -p 'A squirrel with big nuts'    -> ./out.png
+# js generate --stt --audio-file interview.wav      -> transcript on stdout
+
+# Model, prompt and output
+-m, --model ID               Override JS_IMAGE_MODEL, JS_VIDEO_MODEL, JS_MUSIC_MODEL, JS_SFX_MODEL, JS_TTS_MODEL or JS_STT_MODEL for this run.
+-u, --url SPEC               Use the existing js endpoint override.
+-p, --prompt TEXT            Supply a prompt, or the exact script for TTS. Use - to read stdin.
+--prompt-file FILE           Read the prompt or script verbatim from a file.
+-o, --output PATH            Save the result here. Use - for one artifact on stdout.
+--format NAME                Request the output encoding from the endpoint.
+--force                      Replace an existing output file.
+--param-json KEY=JSON        Send an extra endpoint field as a typed value; repeatable.
+--dry-run                    Show the resolved model, request and output path before making calls.
+--enhance                    Have a writing model refine the prompt using a guide for the target model and operation. Preserve quoted text, lyrics and spoken scripts.
+
+# Image — OpenAI-style generation and edits
+--t2i                        Generate an image from text.
+--i2i                        Edit an image using a prompt.
+--image FILE                 Supply the source image for an edit.
+--ref PATH_OR_URL            Add an ordered reference image for an edit or reference-guided video; repeatable.
+--mask FILE                  Specify the editable area on a masked edit.
+-n, --count N                Request multiple images in one call.
+--size WxH                   Request exact pixel dimensions.
+--quality LEVEL              Request a quality tier (GPT Image, Grok Imagine).
+--background MODE            Request transparent, opaque or auto (GPT Image).
+--markup FILE                Attach an annotated overlay for a supported GPT Image edit.
+--aspect-ratio W:H           Request proportions such as 16:9 (Grok, Google).
+--resolution NAME            Request a tier such as 2K for a still or 720p for a clip.
+
+# Video — Grok Imagine. Print the request ID to stderr as soon as the job is accepted.
+--t2v                        Generate a clip from text.
+--i2v                        Animate a starting image.
+--r2v                        Use reference images to guide a shot.
+--v2v                        Edit an existing clip.
+--extend-video               Continue a clip from its ending.
+--resume REQUEST_ID          Wait for an already submitted video and save its output without starting another render.
+--video FILE                 Supply the source clip for editing or extension.
+--first-frame FILE           Pin the opening frame.
+--last-frame FILE            Pin the closing frame on a compatible model.
+--keyframe SEC=FILE          Pin an image inside the clip on a compatible model; repeatable.
+--duration SEC               Request a clip, music cue or sound effect of this length.
+--audio                      Request a generated soundtrack with the video.
+--no-audio                   Request silent video.
+
+# Speech — TTS and STT
+--tts                        Speak the supplied text.
+--stt                        Transcribe the supplied recording (Mistral Voxtral).
+--audio-file FILE            Supply the source recording for transcription.
+--voice NAME                 Choose the speaking voice.
+--list-voices                List voices when the selected endpoint exposes them (e.g. Grok TTS).
+--instructions TEXT          Give delivery directions separately from the words to speak.
+--language CODE              Specify the spoken language or give the transcriber a language hint.
+--timestamps                 Include segment times in the transcript (Voxtral).
+--diarize                    Include speaker labels and segment times (Voxtral).
+
+# Music and effects — ElevenLabs fields; Sono routing still to verify
+--music                      Generate a music track from a description.
+--lyrics TEXT                Supply exact words to sing; js places them in an ElevenLabs composition plan.
+--instrumental               Request a track without vocals.
+--composition-plan FILE      Supply a complete song plan with lyrics, sections and timing.
+--sfx                        Generate a sound effect from text.
+--loop                       Request a seamless sound-effect loop.

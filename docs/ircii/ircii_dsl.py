@@ -20,12 +20,11 @@ Syntax:    $var ${var}   variable interpolation
            ;             statement separator (also newline)
 """
 
-import sys
 import re
-import time
 import subprocess
+import sys
+import time
 from collections import OrderedDict
-
 
 # ═══════════════════════════════════════════════════════════
 #  TOKEN

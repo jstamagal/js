@@ -30,7 +30,7 @@ from . import paths
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _PLACEHOLDER = re.compile(
-    r"\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)"
+    r"\$\$|\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)"
 )
 _DESCRIPTION_CHARS = 60
 
@@ -45,7 +45,7 @@ class PromptCommand:
 
 def command_dirs(project_dir: Path) -> tuple[Path, ...]:
     """Where commands live, lowest layer first: global, then project."""
-    return (paths.global_commands_dir(), project_dir / ".js" / "commands")
+    return (paths.global_commands_dir(), paths.project_home(project_dir) / "commands")
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str]:
@@ -113,36 +113,48 @@ def discover(project_dir: Path) -> dict[str, PromptCommand]:
 
 
 def split_args(text: str) -> list[str]:
-    """Words of ``text``; single or double quotes group a run with spaces."""
+    """Words of ``text``; single or double quotes group a run with spaces, and
+    quoted and unquoted pieces with no space between join into one word
+    (``"a b"suffix`` is ``a bsuffix``, ``"a""b"`` is ``ab``).
+
+    A quote opens a group only at the start of a word or right after a closed
+    group, so an apostrophe inside a word ("don't") is an ordinary character.
+    A quote with no closer is taken literally instead of swallowing the rest of
+    the line."""
     args: list[str] = []
-    current = ""
-    quote: str | None = None
-    started = False
-    for char in text:
-        if quote is not None:
-            if char == quote:
-                quote = None
+    i, n = 0, len(text)
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+        word: list[str] = []
+        can_quote = True  # at word start, or right after a closed group
+        while i < n and not text[i].isspace():
+            char = text[i]
+            end = text.find(char, i + 1) if can_quote and char in ("'", '"') else -1
+            if end != -1:
+                word.append(text[i + 1:end])
+                i = end + 1
+                can_quote = True
             else:
-                current += char
-        elif char in ("'", '"'):
-            quote = char
-            started = True
-        elif char.isspace():
-            if started or current:
-                args.append(current)
-            current, started = "", False
-        else:
-            current += char
-    if started or current:
-        args.append(current)
+                word.append(char)
+                i += 1
+                can_quote = False
+        args.append("".join(word))
     return args
 
 
-def substitute(body: str, args: list[str]) -> str:
-    """``body`` with its placeholders filled from ``args``, in one pass."""
-    joined = " ".join(args)
+def substitute(body: str, args: list[str], raw: str | None = None) -> str:
+    """``body`` with its placeholders filled from ``args``, in one pass.
+
+    ``$@``/``$ARGUMENTS`` take ``raw``, the argument text as typed, when given,
+    so a pasted multi-line argument keeps its line breaks and indentation.
+    ``$$`` is a literal ``$``."""
+    joined = raw if raw is not None else " ".join(args)
 
     def fill(match: re.Match) -> str:
+        if match.group(0) == "$$":
+            return "$"
         default_target, default_value, slice_start, slice_length, simple = match.groups()
         if default_target is not None:
             value = joined if default_target in ("@", "ARGUMENTS") else _nth(args, int(default_target))
@@ -167,8 +179,13 @@ def expand(line: str, commands: dict[str, PromptCommand]) -> str | None:
     stripped = line.lstrip()
     if not stripped.startswith("/"):
         return None
-    words = stripped[1:].split(maxsplit=1)
+    invocation = stripped[1:].lstrip()
+    words = invocation.split(maxsplit=1)
     command = commands.get(words[0]) if words else None
     if command is None:
         return None
-    return substitute(command.body, split_args(words[1] if len(words) > 1 else "")).strip()
+    # The argument text as typed: only the one separator after the name goes,
+    # so a pasted first line keeps its indentation.
+    rest = invocation[len(words[0]):]
+    raw = rest[1:] if rest[:1].isspace() else rest
+    return substitute(command.body, split_args(raw), raw=raw).strip()

@@ -1,0 +1,11 @@
+{"kind":"message","message":{"role":"user","content":"go"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"shell","arguments":"{}"}},{"id":"c2","type":"function","function":{"name":"shell","arguments":"{}"}}]},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"c1","content":"one"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"c2","content":"ERROR: tool result was not recorded (session interrupted)"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"c2","content":"two late"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"never","content":"stray"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"message","message":{"role":"user","content":"again"},"ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"c1","content":"stray after user"},"ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","type":"function","function":{"name":"grep","arguments":"{}"}}]},"ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}
+{"kind":"message","message":{"role":"user","content":"interrupted"},"ts":1790000010.0,"version":1,"id":"r010","parent":"r009"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000011.0,"version":1,"id":"r011","parent":"r010"}

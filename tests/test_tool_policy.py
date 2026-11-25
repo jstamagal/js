@@ -7,10 +7,13 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import output_of, record_turns, run_async
+from turn_driver import one_turn
 
-from js import cli, persona, runtime
+from js import context_window, persona, repl_state, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
+from js.repl_state import ReplState
 from js.toolkit import ToolContext, policy
 from js.toolkit.registry import build_default_registry
 
@@ -28,7 +31,7 @@ tags:
     - tag:code_editor
   code_warrior:
     - tag:code_hacker
-    - ast_search:eager
+    - fs_search:eager
     - docs_search:eager
 
 ban:
@@ -78,7 +81,7 @@ def test_code_editor_bans_shell(tmp_path):
 def test_a_name_allows_past_a_glob_drop_and_names_resolve_by_position(tmp_path):
     states = _states(build_default_registry(), ["tag:code_warrior"], _config(tmp_path))
 
-    assert states["ast_search"] == "eager"
+    assert states["fs_search"] == "eager"
     assert states["shell"] == "eager"
     # code_editor's docs_search:lazy names it before code_warrior's eager does.
     assert states["docs_search"] == "lazy"
@@ -221,7 +224,7 @@ def _tool_results(messages: list[dict]) -> list[str]:
 @pytest.fixture
 def offline_model(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -238,7 +241,7 @@ def test_an_eager_tool_is_published_on_the_first_call_and_runs(monkeypatch, tmp_
     messages = [{"role": "user", "content": "read it"}]
     registry = build_default_registry().select(["read:eager"], config=policy.ToolsConfig())
 
-    runtime.run_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
                      trace_override=False)
 
@@ -247,15 +250,24 @@ def test_an_eager_tool_is_published_on_the_first_call_and_runs(monkeypatch, tmp_
     assert len(results) == 1 and "EAGER CONTENT" in results[0]
 
 
-def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, capsys):
+def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, monkeypatch, capsys):
     policy.tools_config_path().parent.mkdir(parents=True, exist_ok=True)
     policy.tools_config_path().write_text(SPEC_TOOLS_YAML, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     cfg = _cfg(tmp_path)
-    state = {"tool_selectors": ("tag:code_hacker",), "settings": {}}
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "agent.yaml").write_text("tools: [tag:code_hacker]\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+    printed: list[str] = []
 
-    assert cli._handle_command("/tools", state, cfg) is True
+    async def typing(enter):
+        printed.append(await output_of(enter, capsys, "/tools"))
 
-    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines() if line.strip()}
+    run_async(monkeypatch, cfg, typing)
+
+    assert turns == []
+    rows = {line.split()[0]: line for line in printed[0].splitlines() if line.strip()}
     assert "eager" in rows["shell"].split() and "shell:eager" in rows["shell"]
     assert "ban" in rows["fetch"].split() and '*:ban' in rows["fetch"]
     assert "tag:code_editor" in rows["fetch"]
@@ -268,7 +280,7 @@ def _run_shell_rm(monkeypatch, tmp_path, registry) -> tuple[Path, list[str]]:
     replies = iter([_tool_call("shell", {"command": f"rm -rf {victim}"}), _stop("done")])
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: next(replies))
     messages = [{"role": "user", "content": "clean up"}]
-    runtime.run_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
                      trace_override=False)
     return victim, _tool_results(messages)
@@ -320,14 +332,14 @@ def test_live_resync_keeps_the_surface_when_tools_yaml_stops_resolving(tmp_path,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(SPEC_TOOLS_YAML, encoding="utf-8")
     cfg = _cfg(tmp_path)
-    state = {"tool_selectors": ("tag:code_hacker", "todo_write:eager"), "settings": {}}
-    cli._sync_tool_registry_from_live_settings(cfg, state)
-    before = state["tool_registry"]
+    state = ReplState(tool_selectors=("tag:code_hacker", "todo_write:eager"), settings={})
+    repl_state.sync_tool_registry_from_live_settings(cfg, state)
+    before = state.tool_registry
     assert "shell" in before.by_name
     assert capsys.readouterr().err == ""
 
     path.write_text("tags:\n  code_hacker:\n    - tag:code_hacker\n", encoding="utf-8")
-    cli._sync_tool_registry_from_live_settings(cfg, state)
+    repl_state.sync_tool_registry_from_live_settings(cfg, state)
 
-    assert state["tool_registry"] is before
+    assert state.tool_registry is before
     assert len([line for line in capsys.readouterr().out.splitlines() if line.strip()]) == 1

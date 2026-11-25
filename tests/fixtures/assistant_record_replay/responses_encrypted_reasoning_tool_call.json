@@ -1,0 +1,239 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "rs_1",
+       "raw_item": {
+        "encrypted_content": "ENC1",
+        "id": "rs_1",
+        "status": "completed",
+        "summary": [
+         {
+          "text": "weigh it",
+          "type": "summary_text"
+         }
+        ],
+        "type": "reasoning"
+       },
+       "reasoning_encrypted_content": "ENC1"
+      }
+     },
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "msg_1",
+       "raw_item": {
+        "content": [
+         {
+          "annotations": [],
+          "text": "Reading the file.",
+          "type": "output_text"
+         }
+        ],
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+       }
+      }
+     },
+     "text": "Reading the file."
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "fc_1",
+       "raw_item": {
+        "arguments": "{\"path\": \"a\"}",
+        "call_id": "call_1",
+        "id": "fc_1",
+        "name": "no_such_tool",
+        "status": "completed",
+        "type": "function_call"
+       }
+      }
+     },
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "call_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "openai": {
+     "model": "m",
+     "response_id": "resp_1",
+     "status": "completed"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "input_tokens": 5,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens": 5,
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     },
+     "total_tokens": 10
+    },
+    "reasoning_tokens": 0
+   }
+  }
+ ],
+ "live_body": [
+  {
+   "id": "rs_1",
+   "type": "item_reference"
+  },
+  {
+   "id": "msg_1",
+   "type": "item_reference"
+  },
+  {
+   "id": "fc_1",
+   "type": "item_reference"
+  }
+ ],
+ "records": [
+  {
+   "content": "Reading the file.",
+   "provider_metadata": {
+    "openai": {
+     "model": "m",
+     "response_id": "resp_1",
+     "status": "completed"
+    }
+   },
+   "reasoning_content": "weigh it",
+   "reasoning_from": {
+    "model": "gpt-test",
+    "provider": "openai-responses"
+   },
+   "reasoning_layout": [
+    "reasoning",
+    17,
+    "tool_call"
+   ],
+   "reasoning_parts": [
+    {
+     "provider_metadata": {
+      "openai": {
+       "item_id": "rs_1",
+       "raw_item": {
+        "encrypted_content": "ENC1",
+        "id": "rs_1",
+        "status": "completed",
+        "summary": [
+         {
+          "text": "weigh it",
+          "type": "summary_text"
+         }
+        ],
+        "type": "reasoning"
+       },
+       "reasoning_encrypted_content": "ENC1"
+      }
+     },
+     "text": "weigh it"
+    }
+   ],
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "call_1",
+     "type": "function"
+    }
+   ]
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "rs_1",
+       "raw_item": {
+        "encrypted_content": "ENC1",
+        "id": "rs_1",
+        "status": "completed",
+        "summary": [
+         {
+          "text": "weigh it",
+          "type": "summary_text"
+         }
+        ],
+        "type": "reasoning"
+       },
+       "reasoning_encrypted_content": "ENC1"
+      }
+     },
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Reading the file."
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "call_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "openai": {
+     "model": "m",
+     "response_id": "resp_1",
+     "status": "completed"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "id": "rs_1",
+   "type": "item_reference"
+  },
+  {
+   "content": [
+    {
+     "text": "Reading the file.",
+     "type": "output_text"
+    }
+   ],
+   "role": "assistant"
+  },
+  {
+   "arguments": "{\"path\": \"a\"}",
+   "call_id": "call_1",
+   "name": "no_such_tool",
+   "type": "function_call"
+  }
+ ]
+}

@@ -4,7 +4,7 @@ Subagents in `js` are implemented by the `task` tool and generated
 prompt-directory tools. They are parallel worker turns. A `task` call waits for
 them, or with `background=true` returns a handle at once.
 
-Agents are created using prompt directories under `prompts/` (for bundled agents)
+Agents are created using prompt directories under `defaults/agents/` (for bundled agents)
 or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
 declaring `tools:` (`noun:modifier` entries, see
 [tool-system.md](tool-system.md)) and optional `model:`, `reasoning:` and
@@ -17,7 +17,7 @@ Schema:
 ```json
 {
   "tasks": ["inspect the runtime loop", "inspect the registry"],
-  "agent_id": "autocoder",
+  "agent_id": "slim",
   "session_id": "optional-session"
 }
 ```
@@ -25,22 +25,24 @@ Schema:
 Rules:
 
 - `agent_id` is required to start workers.
+- Agent IDs contain only letters, numbers, underscores, and hyphens.
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
-- `session_id` is optional and resumes that worker agent session.
-- Recursive task depth defaults to `2` and is set by `limits.task_max_depth` in
-  config or `--extra limits.task_max_depth=N`. (There is no `JS_TASK_MAX_DEPTH`
+- `session_id` is optional, takes a single task, and resumes that worker agent
+  session.
+- A session with an active worker refuses another concurrent run.
+- Recursive task depth defaults to `2` and is set by `SUBAGENT_DEPTH_MAX` in
+  config or `--extra SUBAGENT_DEPTH_MAX=N`. (There is no `JS_TASK_MAX_DEPTH`
   env var.)
 
 ## Direct Agent Tools
 
-Prompt directories under repo `prompts/`, global `~/.js/agents/`, and
-project `.js/agents/` become direct tools. Project scope wins over global,
-which wins over repo:
+Prompt directories under stock `defaults/agents/`, global `~/.js/agents/`, and
+project `.js/agents/` become direct tools. Files layer per relative name: project > home > defaults:
 
 ```json
 {
-  "tool": "autocoder",
+  "tool": "slim",
   "arguments": {
     "tasks": ["implement this focused fix and report tests"]
   }
@@ -48,9 +50,10 @@ which wins over repo:
 ```
 
 Direct tools call the same task implementation with the agent id fixed. They
-only expose `tasks`; they do not expose `agent_id` or `session_id`.
+expose `tasks`, `model` and `reasoning`; they do not expose `agent_id` or
+`session_id`.
 
-The default prompt currently selects direct `autocoder` and `commit` tools.
+The stock `defaultagent` selects the `task` tool and the direct `commit` tool.
 
 ## Parallelism
 
@@ -58,26 +61,60 @@ There are two layers of parallelism:
 
 1. If the assistant emits multiple `task` tool calls in the same turn, the
    runtime dispatches those `task` calls concurrently.
-2. Inside one `task` call, each task string runs concurrently in a thread pool.
+2. Inside one `task` call, each task string runs as a coroutine on the parent's
+   event loop.
+
+`SUBAGENT_WORKERS_MAX` caps how many subagents run at once in the whole
+process: every depth, every `task` call, foreground and background together.
+Past the cap a subagent waits for a slot. A subagent blocked on its own
+foreground `task` call (or on `action="wait"`) lends its slot to its children
+and takes one back when they are done, so with `SUBAGENT_DEPTH_MAX 4` and
+`SUBAGENT_WORKERS_MAX 4` the tree can grow to 4 + 16 + 64 + 256 subagents but
+no more than 4 of them work at the same time.
 
 Result order is stable. Output is returned in the order of the input task list.
 
 If a child fails, the result slot for that child contains `ERROR ...`. Successful
 sibling results are kept. A failing child does not sink its siblings.
 
-Non-task tools in a turn run sequentially.
+Foreground child turns share the parent's event loop in both the REPL and
+one-shot mode, so cancelling the parent cancels its foreground children.
+Synchronous leaf tools run in dispatch threads; read-only groups can run in
+parallel.
+
+Each child says when it starts and when it ends, one line each, on stderr in
+`-p` and in the REPL's scrollback, whatever `TOOLS_DISPLAY` is:
+
+```
+*** Subagent 1 of 2 started: explore (named agent)  cpa/claude-opus-5-5  effort medium  12 tools  session task-20261105-abcd
+*** Subagent 1 of 2 ok: explore  1m 13s  12,345 tok in  678 tok out
+```
+
+In the async REPL the launch line also names the subagent's window: each
+subagent gets one (2 to 9) that shows everything it streams and takes lines
+typed in it (user guide, "Windows").
+
+The kind is `task`, `named agent` or `background task`. Model, effort, tool
+count and session are the child's own, after its `agent.yaml` and the tool
+call's `model`/`reasoning` are applied; the effort is what its requests send.
+The end line says `ok`, `error` or `cancelled`. The lines are the output
+events `subagent_start` and `subagent_end` (`js/output.py`), formatted through
+the `SUBAGENT_STARTED` and `SUBAGENT_FINISHED` entries. Swarm agents run on
+their own path (`js/swarm_run.py`) and report through the swarm's event
+stream instead.
 
 ## Worker Session State
 
 For each child task:
 
 1. The parent config is copied with `dataclasses.replace`.
-2. `agent_id`, `agent_dir`, `history_file`, `sessions_dir`, `session_file`, and
-   `prompts_dir` are changed for the child agent.
-3. If `session_id` is provided, that child session is opened or created under
-   the child agent.
+2. `agent_id`, `agent_dir`, `sessions_dir`, `session_file`, and `prompts_dir`
+   are changed for the child agent.
+3. If `session_id` is provided, that child session is opened or created inside
+   the parent session's subagent directory.
 4. Otherwise a fresh `task-<timestamp>-<random>.jsonl` is reserved.
-5. The child's new messages are appended to that child session after success.
+5. The child's new messages are persisted on success, error, or cancellation.
+   Its terminal sessions and private Python kernel are closed when it exits.
 
 ## Tool Surface Isolation
 
@@ -86,12 +123,12 @@ Child agents do not inherit the parent's selected tool surface.
 The child loads:
 
 ```text
-<root>/<agent_id>/*.md  # root is repo prompts/, ~/.js/agents/, or project .js/agents/
+<root>/<agent_id>/*-prompt.md, *-env.md  # root is defaults/agents/, ~/.js/agents/, or project .js/agents/
 ```
 
 Then selects tools from the full registry using that agent's `agent.yaml`
-`tools:` entries. If the prompt directory is missing, the worker runs with an
-empty system prompt and no tools.
+`tools:` entries. A missing prompt directory returns an error before creating
+a worker session.
 
 Child contexts copy:
 
@@ -109,12 +146,12 @@ Child contexts do not inherit:
 - undo snapshots
 - search cache
 
-## Wiki Agents And Built-In Artifact Mode
+## Wiki Agents
 
 Wiki workers are ordinary prompt-directory agents selected with `--agent`; the
 `wiki` wrapper routes friendly commands to installed `wiki-*` agents. Native
 `wiki_convert`, `wiki_write`, and `wiki_finish_ingest` tools provide deterministic
-ingestion operations. Artifact remains a built-in CLI mode.
+ingestion operations.
 
 ## Predefined Subagent Types
 
@@ -125,9 +162,9 @@ What exists today:
 
 - `task`: generic subagent runner.
 - prompt-directory agents: any `<root>/<agent_id>` directory under repo
-  `prompts/`, global `~/.js/agents/`, and project `.js/agents/`.
+  `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
 - generated direct tools for prompt directories.
-- bundled prompt dirs: `defaultagent`, `autocoder`, `commit`.
+- bundled prompt dirs: `commit`, `defaultagent`, `slim`, `twotool`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
   `js --commit` wrapper.
 
@@ -165,7 +202,7 @@ private loop in a daemon thread and ends with the process.
 
 When a run started by the main agent finishes and the model has not read its
 result through poll, wait or kill, the next user message carries a
-`<js-reminder>` naming the handle and the result file (`cli._take_pending_notes`).
+`<js-reminder>` naming the handle and the result file (`repl._take_pending_notes`).
 A run a subagent started gets no reminder; that subagent polls it itself.
 
 Children run through the same `_prepare_fan_out` as a foreground call, so they
@@ -184,10 +221,10 @@ Not implemented:
 Subagents choose a model in this order:
 
 1. the `task` tool's `model` argument, if the operator has not set
-   `subagents.lock_model`;
-2. the parent turn's current model, when `subagents.prefer_inherit` is true;
+   `SUBAGENT_MODEL_LOCK`;
+2. the parent turn's current model, when `SUBAGENT_INHERIT_MODEL` is true;
 3. the child agent's `agent.yaml` `model:`;
-4. the parent model as the fallback.
+4. the parent model as the fallback, also when `model: inherit`.
 
 Put agent defaults in the prompt directory's `agent.yaml`:
 
@@ -204,16 +241,22 @@ tools:
 
 `reasoning:` sets the child default independently of the model. `off`
 explicitly disables reasoning; omitting it inherits the parent/provider setting.
+`model: inherit` and `reasoning: inherit` say the inheriting out loud: each
+means the same as leaving the key out.
+A child's `reasoning:` beats the effort it would inherit (the parent agent's,
+or a resumed session's), never an EFFORT the operator gave by env, flag or
+`/set`.
 Invalid values fail agent loading rather than being silently ignored.
 
 Top-level `js --agent <id>` also applies that agent's manifest through the same
 route resolver. A one-shot `-p` run applies `model:` and `reasoning:` over the
 jsrc files; `-m` / `--model`, `--reasoning`, a `JS_*` env var or `--extra` win
-over the manifest, and a resumed session stays on its last stamp. The REPL,
-`--bench` and `--commit` apply `model:` only, and there a configured
-non-default `model.id` also leaves the manifest model unused.
+over the manifest, and a resumed session stays on its last stamp. The REPL
+and `--bench` apply `model:` and `reasoning:`; `--commit` applies `model:`
+only. In those three a configured non-default `MODEL` also leaves the
+manifest model unused.
 
-`subagents.lock_model = true` (`Config.lock_subagent_model`) removes the `task`
+`SUBAGENT_MODEL_LOCK = true` (`Config.lock_subagent_model`) removes the `task`
 tool's `model` parameter from both the model-facing description and the JSON
 schema. The child can still use its own manifest `model:`; the parent model
 just cannot override it through a tool call.

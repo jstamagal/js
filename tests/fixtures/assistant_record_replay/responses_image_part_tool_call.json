@@ -1,0 +1,164 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "builtin_tool_call",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "ig_1",
+       "raw_item": {
+        "id": "ig_1",
+        "status": "completed",
+        "type": "image_generation_call"
+       }
+      }
+     },
+     "tool_args": "{}",
+     "tool_call_id": "ig_1",
+     "tool_name": "image_generation"
+    },
+    {
+     "data": "aW1hZ2U=",
+     "filename": null,
+     "kind": "file",
+     "media_type": "image/png",
+     "provider_metadata": null
+    },
+    {
+     "is_error": false,
+     "kind": "builtin_tool_return",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "ig_1",
+       "raw_item": {
+        "id": "ig_1",
+        "status": "completed",
+        "type": "image_generation_call"
+       }
+      }
+     },
+     "result": {
+      "result": null
+     },
+     "tool_call_id": "ig_1",
+     "tool_name": "image_generation"
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": {
+      "openai": {
+       "item_id": "fc_1",
+       "raw_item": {
+        "arguments": "{\"path\": \"a\"}",
+        "call_id": "call_1",
+        "id": "fc_1",
+        "name": "no_such_tool",
+        "status": "completed",
+        "type": "function_call"
+       }
+      }
+     },
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "call_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "openai": {
+     "model": "m",
+     "response_id": "resp_1",
+     "status": "completed"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "input_tokens": 5,
+     "input_tokens_details": {
+      "cached_tokens": 0
+     },
+     "output_tokens": 5,
+     "output_tokens_details": {
+      "reasoning_tokens": 0
+     },
+     "total_tokens": 10
+    },
+    "reasoning_tokens": 0
+   }
+  }
+ ],
+ "live_body": [
+  {
+   "id": "ig_1",
+   "type": "item_reference"
+  },
+  {
+   "id": "ig_1",
+   "type": "item_reference"
+  },
+  {
+   "id": "fc_1",
+   "type": "item_reference"
+  }
+ ],
+ "records": [
+  {
+   "content": "",
+   "provider_metadata": {
+    "openai": {
+     "model": "m",
+     "response_id": "resp_1",
+     "status": "completed"
+    }
+   },
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "call_1",
+     "type": "function"
+    }
+   ]
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "call_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "openai": {
+     "model": "m",
+     "response_id": "resp_1",
+     "status": "completed"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "arguments": "{\"path\": \"a\"}",
+   "call_id": "call_1",
+   "name": "no_such_tool",
+   "type": "function_call"
+  }
+ ]
+}

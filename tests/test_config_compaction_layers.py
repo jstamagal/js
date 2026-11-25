@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from js import compaction, memory, persona, settings
-from js.capped_process import CappedProcessResult
-from js.config import Config, from_env
+from session_marks import append_compaction_mark
+
+from js import (
+    compaction,
+    compaction_settings,
+    compaction_summary,
+    context_window,
+    memory,
+    persona,
+    settings,
+)
+from js.config import Config, InvocationSources, from_env
 from js.toolkit.registry import build_default_registry
 
 
@@ -14,14 +23,14 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     global_js = home / ".js"
     global_js.mkdir(parents=True)
     (project / ".js").mkdir(parents=True)
-    (global_js / "jsrc").write_text("set model.id global\nset limits.fetch_timeout_s 20\n", encoding="utf-8")
-    (project / ".js" / "jsrc").write_text("set model.id project\nset limits.max_tool_iterations 9\n", encoding="utf-8")
-    (project / ".js" / "jsrc.local").write_text("set model.id local\n", encoding="utf-8")
+    (global_js / "jsrc").write_text("set MODEL global\nset FETCH_TIMEOUT 20\n", encoding="utf-8")
+    (project / ".js" / "jsrc").write_text("set MODEL project\nset TURN_ROUNDS_MAX 9\n", encoding="utf-8")
+    (project / ".js" / "jsrc.local").write_text("set MODEL local\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("JS_MODEL", "env")
     monkeypatch.chdir(project)
 
-    cfg = from_env(save_session=False, extras=["model.id=cli"])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=("MODEL=cli",)))
 
     assert cfg.model == "cli"
     assert cfg.fetch_timeout_s == 20
@@ -30,24 +39,7 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
         global_js / "agents",
         project / ".js" / "agents",
     )
-    assert cfg.prompt_roots[0].name == "prompts"
-
-
-def test_default_fetch_timeout_and_package_jsrc_cover_limits_and_compact():
-    out = settings.collect_settings(config_paths=[], env={})
-    assert out["limits"]["fetch_timeout_s"] == settings.default_value("limits.fetch_timeout_s")
-    assert out["limits"]["inline_code_timeout_s"] == settings.default_value("limits.inline_code_timeout_s")
-    text = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
-    jsrc_keys = {
-        line.split()[1].lstrip("-")
-        for line in text.splitlines()
-        if line.startswith("set ")
-    }
-    assert {
-        "limits.inline_code_timeout_s",
-        "compact.context_window",
-        "compact.tail_tokens",
-    } <= jsrc_keys
+    assert cfg.prompt_roots[0].name == "agents"
 
 
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
@@ -57,18 +49,16 @@ def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
     (repo / "prompts" / "worker").mkdir(parents=True)
     (home / ".js" / "agents" / "worker").mkdir(parents=True)
     (project / ".js" / "agents" / "worker").mkdir(parents=True)
-    (repo / "prompts" / "worker" / "01.md").write_text("REPO", encoding="utf-8")
-    (home / ".js" / "agents" / "worker" / "01.md").write_text("GLOBAL", encoding="utf-8")
-    (project / ".js" / "agents" / "worker" / "01.md").write_text("PROJECT", encoding="utf-8")
+    (repo / "prompts" / "worker" / "01-prompt.md").write_text("REPO", encoding="utf-8")
+    (home / ".js" / "agents" / "worker" / "01-prompt.md").write_text("GLOBAL", encoding="utf-8")
+    (project / ".js" / "agents" / "worker" / "01-prompt.md").write_text("PROJECT", encoding="utf-8")
     for root, name in [(home / ".js", "GLOBAL"), (project, "PROJECT")]:
         (root / "AGENTS.md").write_text(f"{name} AGENTS", encoding="utf-8")
         (root / "AGENTS.local.md").write_text(f"{name} LOCAL", encoding="utf-8")
 
     spec = persona.load_agent_prompt_spec(
         "worker",
-        repo_prompts_root=repo / "prompts",
-        global_agents_root=home / ".js" / "agents",
-        project_agents_root=project / ".js" / "agents",
+        (repo / "prompts", home / ".js" / "agents", project / ".js" / "agents"),
         agents_files=[home / ".js" / "AGENTS.md", home / ".js" / "AGENTS.local.md", project / "AGENTS.md", project / "AGENTS.local.md"],
     )
 
@@ -83,26 +73,22 @@ def test_agent_discovery_unions_roots_with_project_shadowing(tmp_path):
     proj = tmp_path / "project"
     for root, body in [(repo, "repo"), (glob, "global"), (proj, "project")]:
         (root / "same").mkdir(parents=True)
-        (root / "same" / "01.md").write_text(body, encoding="utf-8")
+        (root / "same" / "01-prompt.md").write_text(body, encoding="utf-8")
     (glob / "global_only").mkdir()
-    (glob / "global_only" / "01.md").write_text("g", encoding="utf-8")
+    (glob / "global_only" / "01-prompt.md").write_text("g", encoding="utf-8")
     (proj / "project_only").mkdir()
-    (proj / "project_only" / "01.md").write_text("p", encoding="utf-8")
+    (proj / "project_only" / "01-prompt.md").write_text("p", encoding="utf-8")
 
     reg = build_default_registry(prompts_root=[repo, glob, proj])
     same = persona.load_agent_prompt_spec(
         "same",
-        repo_prompts_root=repo,
-        global_agents_root=glob,
-        project_agents_root=proj,
+        (repo, glob, proj),
         agents_files=[],
     )
 
     names = set(reg.by_name)
     assert {"same", "global_only", "project_only"} <= names
     assert same.system == "project\n"
-
-
 
 
 def test_compaction_mark_rebuilds_summary_and_safe_tail_without_rewriting(tmp_path):
@@ -116,7 +102,7 @@ def test_compaction_mark_rebuilds_summary_and_safe_tail_without_rewriting(tmp_pa
     for m in msgs:
         memory.append_message(session, m)
     before = session.read_text(encoding="utf-8")
-    memory.append_compaction_mark(session, summary="Summary", keep_from=1)
+    append_compaction_mark(session, summary="Summary", keep_from=1)
     rebuilt = memory.load_messages(session)
 
     assert rebuilt[0] == {"role":"user", "content":"<compaction-summary>\nSummary\n</compaction-summary>"}
@@ -144,7 +130,7 @@ def _compact_test_cfg(tmp_path, compact: dict) -> Config:
         sessions_dir=tmp_path / ".js" / "sessions" / "compact",
         session_file=tmp_path / ".js" / "sessions" / "compact" / "s.jsonl",
         prompts_dir=tmp_path / "prompts",
-        settings={"compact": compact},
+        settings=dict(compact),
     )
 
 
@@ -152,9 +138,9 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
     cfg = _compact_test_cfg(
         tmp_path,
         {
-            "chars_per_token": "bad-ratio",
-            "tail_tokens": "bad-tail",
-            "min_savings_tokens": "bad-min",
+            "COMPACTION_CHARS_PER_TOKEN": "bad-ratio",
+            "COMPACTION_KEEP_RECENT_TOKENS": "bad-tail",
+            "COMPACTION_MIN_SAVINGS_TOKENS": "bad-min",
         },
     )
     messages = [
@@ -164,13 +150,12 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
     async def summarize_stub(*a, **kw):
         return "Summary"
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
 
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert compaction.compacted(result)
     assert messages[0]["content"] == "<compaction-summary>\nSummary\n</compaction-summary>"
-
 
 
 def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
@@ -181,7 +166,7 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
         return SimpleNamespace(text="Summary")
 
     monkeypatch.setattr(compaction.model_client, "stream_model_async", stream_stub)
-    cfg = _compact_test_cfg(tmp_path, {"summary_max_tokens": "bad-max"})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_SUMMARY_TOKENS_MAX": "bad-max"})
     messages = [
         {"role": "user", "content": "old " * 20000},
         {"role": "assistant", "content": "done"},
@@ -190,59 +175,52 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert compaction.compacted(result)
-    assert captured == [settings.default_value("compact.summary_max_tokens")]
+    assert captured == [settings.default_value("COMPACTION_SUMMARY_TOKENS_MAX")]
 
 
-def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_path):
-    calls: list[str] = []
+def test_compact_pre_hook_ignores_malformed_and_blank_values(tmp_path):
+    marker = tmp_path / "ran"
+    for raw in ([f"touch {marker}"], {"cmd": f"touch {marker}"}, 123, "   "):
+        cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": raw})
+        assert compaction_summary.run_pre_hook(cfg) == ""
 
-    def run_stub(cmd, **kwargs):
-        calls.append(cmd)
-        raise AssertionError(f"pre_hook should not run for malformed value: {cmd!r}")
-
-    monkeypatch.setattr(compaction, "_run_capped", run_stub)
-
-    for raw in (["echo hi"], {"cmd": "echo hi"}, 123, "   "):
-        cfg = _compact_test_cfg(tmp_path, {"pre_hook": raw})
-        assert compaction._run_pre_hook(cfg) == ""
-
-    assert calls == []
+    assert not marker.exists(), "pre_hook ran for a malformed value"
 
 
-def test_compact_pre_hook_trims_valid_command(monkeypatch, tmp_path):
-    captured: dict[str, object] = {}
-
-    def run_stub(cmd, **kwargs):
-        captured["cmd"] = cmd
-        captured.update(kwargs)
-        return CappedProcessResult(returncode=0, stdout=b"hook guidance\n", stderr=b"")
-
-    monkeypatch.setattr(compaction, "_run_capped", run_stub)
-    cfg = _compact_test_cfg(tmp_path, {"pre_hook": "  echo guidance  "})
-
-    assert compaction._run_pre_hook(cfg) == "hook guidance"
-    assert captured["cmd"][-2:] == ["-c", "echo guidance"]
-    assert captured["timeout"] == 30
+def _recording_shell(tmp_path):
+    """A shell program that records the arguments it was given, one per
+    line, then runs them with /bin/sh."""
+    shell = tmp_path / "recording-sh"
+    shell.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$0.args"\nexec /bin/sh "$@"\n', encoding="utf-8")
+    shell.chmod(0o755)
+    return shell, tmp_path / "recording-sh.args"
 
 
-def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
-    def run_stub(cmd, **kwargs):
-        assert kwargs["cap"] == 128
-        return CappedProcessResult(
-            returncode=0,
-            stdout=b"x" * 128,
-            stderr=b"",
-            stdout_truncated=True,
-        )
+def test_compact_pre_hook_trims_valid_command(tmp_path):
+    shell, recorded = _recording_shell(tmp_path)
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "  echo 'hook guidance'  ",
+                                       "COMPACTION_HINT_SHELL_PROGRAM": str(shell)})
 
-    monkeypatch.setattr(compaction, "_run_capped", run_stub)
-    cfg = _compact_test_cfg(tmp_path, {"pre_hook": "yes"})
+    assert compaction_summary.run_pre_hook(cfg) == "hook guidance"
+    assert recorded.read_text(encoding="utf-8").splitlines() == ["-c", "echo 'hook guidance'"]
+
+
+def test_compact_pre_hook_is_stopped_at_its_timeout(tmp_path):
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "echo early; exec sleep 60",
+                                       "COMPACTION_HINT_TIMEOUT": 1})
+
+    assert compaction_summary.run_pre_hook(cfg) == ""
+
+
+def test_compact_pre_hook_output_is_capped_and_marked(tmp_path):
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "head -c 1000 /dev/zero | tr '\\0' x"})
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 128})
 
-    actual = compaction._run_pre_hook(cfg)
+    actual = compaction_summary.run_pre_hook(cfg)
 
     assert actual.startswith("x" * 128)
-    assert "[truncated: limits.max_bash_output_bytes (128) reached]" in actual
+    assert "x" * 129 not in actual
+    assert "[truncated: SHELL_OUTPUT_MAX (128) reached]" in actual
 
 def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeypatch, tmp_path):
     seen_models: list[str] = []
@@ -251,10 +229,10 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
         seen_models.append(model)
         return f"Summary from {model}"
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
 
     for raw in (" SAME ", "same", 123):
-        cfg = _compact_test_cfg(tmp_path, {"model": raw})
+        cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": raw})
         messages = [{"role": "user", "content": "old " * 20000},
                     {"role": "assistant", "content": "latest answer"}]
         compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
@@ -269,9 +247,9 @@ def test_compact_now_model_argument_overrides_the_configured_summary_model(monke
         seen_models.append(model)
         return f"Summary from {model}"
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
 
-    cfg = _compact_test_cfg(tmp_path, {"model": "configured-summarizer"})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": "configured-summarizer"})
     messages = [{"role": "user", "content": "old " * 20000},
                 {"role": "assistant", "content": "latest answer"}]
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, model="flag-summarizer")
@@ -282,9 +260,38 @@ def test_compact_now_model_argument_overrides_the_configured_summary_model(monke
 
 def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
     cfg = _compact_test_cfg(tmp_path, {})
-    assert compaction.configured_context_window(cfg, lambda: None) == 1000000
-    assert compaction.configured_context_window(cfg, lambda: 500000) == 500000
-    cfg.settings["compact"]["context_window"] = 750000
-    assert compaction.configured_context_window(cfg, lambda: 500000) == 750000
-    cfg.settings["compact"]["context_window"] = 1000000
-    assert compaction.configured_context_window(cfg, lambda: None) == 1000000
+    assert context_window.configured_context_window(cfg, lambda: None) == 1000000
+    assert context_window.configured_context_window(cfg, lambda: 500000) == 500000
+    cfg.settings["CONTEXT_SIZE"] = 750000
+    assert context_window.configured_context_window(cfg, lambda: 500000) == 750000
+    cfg.settings["CONTEXT_SIZE"] = 1000000
+    assert context_window.configured_context_window(cfg, lambda: None) == 1000000
+
+
+def test_get_bool_always_returns_a_bool(tmp_path):
+    """Garbage returned a non-bool default unchanged."""
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "maybe"})
+    assert compaction_settings.get_bool(cfg, "COMPACTION_AUTO", "not-a-bool") is False
+    assert compaction_settings.get_bool(cfg, "COMPACTION_AUTO", True) is True
+    assert compaction_settings.get_bool(_compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "yes"}), "COMPACTION_AUTO", None) is True
+
+
+def test_config_assembly_supplies_roots_and_display_services(tmp_path):
+    import copy
+
+    from js.config import ConfigAssembly
+
+    root = tmp_path / "agents"
+    prompt = root / "custom"
+    prompt.mkdir(parents=True)
+    (prompt / "prompt.md").write_text("instructions")
+    values = settings.seed_defaults()
+    values["MODEL"] = "offline-test"
+    seen = []
+    cfg = from_env(save_session=False, agent_id="custom", cwd=tmp_path,
+                   assembly=ConfigAssembly(prompt_roots=(root,),
+                       collect=lambda **kwargs: copy.deepcopy(values),
+                       set_banner=lambda value: seen.append("banner"),
+                       bind_formats=lambda values: seen.append("formats")))
+    assert cfg.prompts_dir == (prompt,) and cfg.prompt_roots == (root,)
+    assert seen == ["banner", "formats"]

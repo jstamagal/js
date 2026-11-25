@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import asyncio
 
-from js import runtime
+from test_runtime_cluster_fixes import _cfg, _Recorder
 
-from test_runtime_cluster_fixes import _Recorder, _cfg
+from js import runtime
 
 
 def _cache_key_for(tmp_path, monkeypatch, cfg):

@@ -8,12 +8,12 @@ from dataclasses import replace
 import ai
 import pytest
 from ai.providers.openai.protocol import _messages_to_openai
+from repl_driver import run_async
+from turn_driver import js, one_turn
 
-from js import cli, memory, model_client, runtime
-from js.config import from_env
+from js import history_record, memory, model_client, run_assembly, runtime
+from js.config import InvocationSources, from_env
 from js.toolkit import ToolContext
-from repl_driver import run_blocking
-
 
 _THOUGHT = " first thought\n  keep spacing and Unicode: λ\n"
 
@@ -23,17 +23,17 @@ def replay(monkeypatch, tmp_path):
     cfg = from_env(
         agent_id="replay",
         session="replay",
-        extras=[
-            "model.id=qwen3.8-27b",
-            "provider.id=openai",
-            "provider.base_url=http://llamacpp.test/v1",
-            "provider.api_key=fixture",
-            "model.vision=off",
-            "model.context_window=262144",
-            "model.max_output_tokens=64",
-            "runtime.debug_autolog=off",
-            "runtime.transcript_log=off",
-        ],
+        sources=InvocationSources(extras=(
+            "MODEL=qwen3.8-27b",
+            "PROVIDER=openai",
+            "BASE_URL=http://llamacpp.test/v1",
+            "API_KEY=fixture",
+            "VISION=off",
+            "CONTEXT_SIZE=262144",
+            "OUTPUT_TOKENS_MAX=64",
+            "REQUEST_LOG=off",
+            "TRANSCRIPT_LOG=off",
+        )),
     )
     prompts = tmp_path / ".js" / "agents" / "replay"
     prompts.mkdir(parents=True)
@@ -41,7 +41,7 @@ def replay(monkeypatch, tmp_path):
     cfg = replace(cfg, prompts_dir=prompts, project_dir=tmp_path)
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     wire = []
 
     async def capture(**kwargs):
@@ -64,7 +64,7 @@ def test_live_next_turn_retains_tool_free_reasoning(replay):
     for prompt in (None, "next"):
         if prompt is not None:
             messages.append({"role": "user", "content": prompt})
-        runtime.run_turn(
+        one_turn(
             cfg, "SYSTEM", messages, runtime.Telemetry(None),
             tool_context=context, trace_override=False, suppress_output=True,
         )
@@ -76,7 +76,7 @@ def test_live_next_turn_retains_tool_free_reasoning(replay):
 
 
 @pytest.mark.parametrize("mode", ["prompt", "repl"])
-def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode):
+def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode, monkeypatch, tmp_path):
     cfg, wire, _context = replay
     memory.append_message(cfg.session_file, {"role": "user", "content": "first"})
     memory.append_message(cfg.session_file, {
@@ -84,9 +84,10 @@ def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode):
     })
     original = cfg.session_file.read_bytes()
     if mode == "prompt":
-        assert cli._run_prompt("next") == 0
+        monkeypatch.chdir(tmp_path)
+        assert js(monkeypatch, "-p", "next") == 0
     else:
-        run_blocking(cfg, ["next", "exit"])
+        run_async(monkeypatch, cfg, ["next", "exit"], wait=True)
     prior = next(m for m in wire[0] if m["role"] == "assistant")
     assert prior["reasoning"] == _THOUGHT
     assert prior["content"] == "answer"
@@ -107,7 +108,7 @@ def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode):
     ("deepseek", False), ("anthropic", False), ("openai-responses", False),
 ])
 def test_reasoning_replay_policy_is_transport_specific(provider_id, full_replay):
-    messages = model_client.history_to_ai_messages("SYSTEM", [
+    messages = history_record.history_to_ai_messages("SYSTEM", [
         {"role": "assistant", "content": "answer", "reasoning_content": _THOUGHT},
         {"role": "assistant", "content": "", "reasoning_content": _THOUGHT,
          "tool_calls": [{"id": "call_1", "type": "function",

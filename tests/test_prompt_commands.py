@@ -4,10 +4,14 @@ $1 / $@ / ${N:-default} filled from its arguments, and Tab completes the name.""
 from __future__ import annotations
 
 import pytest
+from repl_driver import output_of, record_turns, stub_screen, turn_stub, type_into_js
 
-from js import cli, pastes
-from js import prompt_commands as pc
-from js.replcomplete import JsCompleter
+from js import (
+    cli,
+    conversation,
+    prompt_commands as pc,
+    text_layout,
+)
 
 SESSION = "cmds"
 
@@ -91,43 +95,47 @@ def test_expand_names_only_known_commands(dirs, tmp_path):
     assert pc.expand("review x", found) is None
 
 
-def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path, monkeypatch):
+def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path):
     global_dir, _ = dirs
     command = global_dir / "review.md"
     command.write_text("Review $1\n", encoding="utf-8")
-    loads: list[str] = []
-    real_load = pc._load
-    monkeypatch.setattr(pc, "_load", lambda path: loads.append(path.name) or real_load(path))
 
-    pc.discover(tmp_path / "project")
-    pc.discover(tmp_path / "project")
-    assert loads == ["review.md"]
+    first = pc.discover(tmp_path / "project")["review"]
+    assert pc.discover(tmp_path / "project")["review"] is first
 
     command.write_text("Review $1 closely\n", encoding="utf-8")
     found = pc.discover(tmp_path / "project")
     assert found["review"].body.strip() == "Review $1 closely"
-    assert loads == ["review.md", "review.md"]
+    assert found["review"] is not first
 
 
 # --- completion and help -----------------------------------------------------------
 
 
-def test_tab_completes_a_command_file_name(dirs):
+def test_tab_completes_a_command_file_name(dirs, monkeypatch):
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("Review $1", encoding="utf-8")
-    completer = JsCompleter(commands=lambda: cli._command_completions({}))
+    built: dict = {}
+    assert type_into_js(monkeypatch, [], screen_parts=built) == 0
+    completer = built["completer"]
 
     assert "/review" in completer.candidates("/rev")[0]
     assert "/review" in completer.candidates("rev")[0]
 
 
-def test_help_lists_command_files(dirs, capsys):
+def test_help_lists_command_files(dirs, capsys, monkeypatch):
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 500)
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
+    record_turns(monkeypatch)
+    shown: list[str] = []
 
-    cli._cmd_help("", {}, None)
+    async def lines(enter):
+        shown.append(await output_of(enter, capsys, "/help"))
 
-    assert any("/review" in line and "Review a file" in line for line in capsys.readouterr().out.splitlines())
+    assert type_into_js(monkeypatch, lines) == 0
+
+    assert any("/review" in line and "Review a file" in line for line in shown[0].splitlines())
 
 
 # --- the REPL sends the expanded text -------------------------------------------------
@@ -136,32 +144,26 @@ def test_help_lists_command_files(dirs, capsys):
 @pytest.fixture
 def repl(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):
         sent.append(str(messages[-1]["content"]))
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
     def run(lines):
-        class PromptSessionStub:
-            def __init__(self, history, **kwargs):
-                self.lines = iter(lines)
-
-            def prompt(self, *_args, **_kwargs):
-                try:
-                    return next(self.lines)
-                except StopIteration:
-                    raise EOFError from None
-
-        monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-        cli.main(["--blocking", "--session", SESSION])
+        stub_screen(monkeypatch, lines, wait=True)
+        cli.main(["--session", SESSION])
         return sent
 
     commands = tmp_path / ".js" / "commands"
@@ -187,11 +189,43 @@ def test_a_built_in_command_wins_over_a_file_of_the_same_name(repl, capsys):
     assert sent == []
 
 
-def test_the_blocking_repl_sends_a_collapsed_paste_in_full(repl):
+def test_an_unknown_slash_command_is_refused_and_a_path_is_still_prose(repl):
     run, _commands = repl
-    text = "\n".join(f"row {i}" for i in range(30))
-    token = pastes.keep(text, 10)
 
-    sent = run([f"summarize {token}"])
+    sent = run(["/effort", "/usr/bin/python is broken"])
 
-    assert sent == [f"summarize {text}"]
+    assert sent == ["/usr/bin/python is broken"]
+
+
+def test_apostrophe_inside_a_word_does_not_open_a_quote():
+    assert pc.split_args("don't break it") == ["don't", "break", "it"]
+    assert pc.split_args("it's 'a group' here") == ["it's", "a group", "here"]
+
+
+def test_unclosed_quote_is_literal_not_rest_of_line():
+    assert pc.split_args("'open and more") == ["'open", "and", "more"]
+
+
+def test_all_arguments_keep_line_breaks_and_indentation():
+    from pathlib import Path
+
+    commands = {"review": pc.PromptCommand(name="review", path=Path("review.md"), description="", body="Review:\n$@")}
+    out = pc.expand("/review def f():\n    return 1", commands)
+    assert out == "Review:\ndef f():\n    return 1"
+
+
+def test_double_dollar_is_a_literal_dollar():
+    assert pc.substitute("awk '{print $$1}' costs $$5.00 for $1", ["X"]) == "awk '{print $1}' costs $5.00 for X"
+
+
+def test_adjacent_quoted_and_unquoted_pieces_join_into_one_word():
+    assert pc.split_args('"a b"suffix tail') == ["a bsuffix", "tail"]
+    assert pc.split_args('"a""b" tail') == ["ab", "tail"]
+    assert pc.split_args("pre'x y' z") == ["pre'x", "y'", "z"]
+
+
+def test_raw_arguments_keep_the_first_line_indentation():
+    from pathlib import Path
+
+    commands = {"review": pc.PromptCommand(name="review", path=Path("r.md"), description="", body="Code:\n$@")}
+    assert pc.expand("/review     def f():\n    return 1", commands) == "Code:\n    def f():\n    return 1"

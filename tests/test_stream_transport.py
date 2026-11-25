@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 import gc
 import json
 import logging
+from contextlib import suppress
 
 import ai
 import pytest

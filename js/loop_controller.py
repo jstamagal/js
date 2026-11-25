@@ -1,0 +1,134 @@
+"""Repeat complete CLI invocations as fresh, isolated processes."""
+from __future__ import annotations
+
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from . import command_line, messages as msgs, settings as _settings, snippets
+
+_DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
+
+
+def parse_limit(value: str) -> tuple[int | None, float | None]:
+    if value == "":
+        return None, None
+    if value.isdecimal() and int(value) > 0:
+        return int(value), None
+    match = _DURATION.fullmatch(value)
+    if match:
+        return None, int(match[1]) * (60 if match[2].lower() == "m" else 3600)
+    raise ValueError(msgs.LOOP_LOOP_EXPECTS_A_POSITIVE_TURN_COUNT_MINUTES.format())
+
+
+def child_argv(argv: list[str]) -> list[str]:
+    """`argv` without its --loop options: the command of one run of the loop."""
+    return command_line.words([arg for arg in command_line.read(argv) if arg.dest != "loop"])
+
+
+def _detached_descendant_groups(root_pid: int) -> set[int]:
+    """Process groups currently below our child, including new sessions."""
+    children: dict[int, list[tuple[int, int]]] = {}
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return set()
+    with entries:
+        for entry in entries:
+            if not entry.name.isdecimal():
+                continue
+            try:
+                stat = Path(entry.path, "stat").read_text()
+                fields = stat[stat.rfind(")") + 2:].split()
+                parent, group = int(fields[1]), int(fields[2])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(parent, []).append((int(entry.name), group))
+    groups: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        for pid, group in children.get(pending.pop(), ()):
+            pending.append(pid)
+            if group > 0 and group not in {root_pid, os.getpgrp()}:
+                groups.add(group)
+    return groups
+
+
+def _stop_child(child: subprocess.Popen) -> None:
+    group = child.pid
+    detached = _detached_descendant_groups(group)
+    for sig, grace in ((signal.SIGINT, 3), (signal.SIGTERM, 2)):
+        detached.update(_detached_descendant_groups(group))
+        for owned_group in (group, *detached):
+            try:
+                os.killpg(owned_group, sig)
+            except ProcessLookupError:
+                pass
+        try:
+            child.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            if sig == signal.SIGTERM:
+                time.sleep(0.2)
+    detached.update(_detached_descendant_groups(group))
+    for owned_group in (group, *detached):
+        try:
+            os.killpg(owned_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    child.wait()
+
+
+def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
+        child_command: list[str] | None = None, settings: dict | None = None) -> int:
+    count, seconds = parse_limit(limit)
+    command = list(child_command or [sys.executable, "-m", "js"])
+    args = child_argv(argv)
+    stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
+    if (prompt is None and bench is None and not stdin_data
+            and "--commit" not in args):
+        args += ["-p", snippets.render("fresh-session")]
+    deadline = time.monotonic() + seconds if seconds is not None else None
+    completed = failures = attempts = 0
+    max_attempts = count * int(_settings.knob(settings, "LOOP_ATTEMPTS_MULTIPLIER")) if count is not None else None
+    failure_limit = int(_settings.knob(settings, "LOOP_FAILURES_MAX"))
+    backoff_max = int(_settings.knob(settings, "LOOP_BACKOFF_MAX"))
+    try:
+        while (count is None or completed < count) and (deadline is None or time.monotonic() < deadline):
+            if max_attempts is not None and attempts >= max_attempts:
+                print(msgs.LOOP_ATTEMPTS_EXHAUSTED.words(completed=completed, attempts=attempts), file=sys.stderr)
+                return 1
+            attempts += 1
+            print(msgs.LOOP_ATTEMPT.words(attempts=attempts, completed=completed, value=count or msgs.LOOP_UNLIMITED), flush=True)
+            child = subprocess.Popen(command + args, start_new_session=True,
+                                     stdin=subprocess.PIPE if stdin_data is not None else None)
+            try:
+                child.communicate(input=stdin_data)
+                code = child.returncode
+            except BaseException:
+                _stop_child(child)
+                raise
+            if code == 0:
+                completed += 1
+                failures = 0
+                continue
+            if code == 130:
+                return 130
+            failures += 1
+            if count is not None or failures >= failure_limit:
+                print(msgs.LOOP_CHILD_STOPPED.words(code=code, completed=completed), file=sys.stderr)
+                return code or 1
+            delay = min(2 ** (failures - 1), backoff_max)
+            print(msgs.LOOP_CHILD_RETRY.format(code=code, delay=delay, failures=failures, failure_limit=failure_limit), file=sys.stderr)
+            if deadline is not None and time.monotonic() + delay >= deadline:
+                return code or 1
+            time.sleep(delay)
+    except KeyboardInterrupt:
+        print(msgs.LOOP_STOPPED.words(), file=sys.stderr)
+        return 130
+    return 0

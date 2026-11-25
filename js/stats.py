@@ -7,10 +7,15 @@ A "turn" is one user prompt run to completion; it makes one or more model calls
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
+
+from . import messages as msgs
 
 # CSV column order; JSON rows carry the same keys (plus any caller extras).
 ROW_FIELDS = (
@@ -31,8 +36,8 @@ ROW_FIELDS = (
 )
 
 
-def _round(value: float | None, places: int = 4) -> float | None:
-    return round(value, places) if isinstance(value, (int, float)) else None
+def _round(value: float | None) -> float | None:
+    return round(value, 4) if isinstance(value, (int, float)) else None
 
 
 def summarize_calls(call_stats: list[dict], *, wall_s: float | None = None) -> dict[str, Any]:
@@ -63,17 +68,50 @@ def summarize_calls(call_stats: list[dict], *, wall_s: float | None = None) -> d
     }
 
 
+@contextlib.contextmanager
+def _staging(path: str | Path):
+    target = Path(path).resolve(strict=False)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=".stats-", suffix=".tmp")
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        yield temporary
+        if target.exists():
+            temporary.chmod(target.stat().st_mode & 0o7777)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def write_json(path: str | Path, payload: dict) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    with _staging(path) as temporary:
+        temporary.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
 
 
 def write_csv(path: str | Path, rows: list[dict]) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(ROW_FIELDS), extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k) for k in ROW_FIELDS})
+    with _staging(path) as temporary:
+        with open(temporary, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(ROW_FIELDS), extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k) for k in ROW_FIELDS})
+
+
+def write_requested(json_path, csv_path, payload, rows, *, announce: bool = False) -> bool:
+    """``payload`` written to ``json_path`` and ``rows`` to ``csv_path``,
+    each when it is set; a file that cannot be written is reported on stderr.
+    False when one was not written."""
+    ok = True
+    for path, writer, data in ((json_path, write_json, payload), (csv_path, write_csv, rows)):
+        if not path:
+            continue
+        try:
+            writer(path, data)
+        except OSError as exc:
+            msgs.warn(msgs.FAILED, error=f"stats output {path}: {exc}")
+            ok = False
+        else:
+            if announce:
+                msgs.warn(msgs.STATS_WRITTEN, path=path)
+    return ok

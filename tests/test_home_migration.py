@@ -14,8 +14,7 @@ import string
 import time
 from pathlib import Path
 
-from js import cli, config, home, paths, session_store
-from js import messages as msgs
+from js import cli, config, home, messages as msgs, paths, session_store
 from js.memory import append_message, load_replay_messages
 
 
@@ -41,7 +40,7 @@ def _old_layout(tmp_path: Path) -> Path:
     legacy = _legacy()
     nfs = tmp_path / "nfs" / "research"
     _write(nfs / "01-prompt.md", "remote agent\n")
-    _write(legacy["config"] / "jsrc", "set model.id old-model\n")
+    _write(legacy["config"] / "jsrc", "set MODEL old-model\n")
     _write(legacy["config"] / "logins.toml", "[x]\n")
     _write(legacy["config"] / "agents" / "mine" / "01-prompt.md", "mine\n")
     os.symlink(nfs, legacy["config"] / "agents" / "research")
@@ -61,7 +60,7 @@ def test_first_run_moves_every_old_location_into_the_layout(tmp_path):
     steps = home.migrate_once(out)
 
     js = paths.home()
-    assert (js / "jsrc").read_text(encoding="utf-8") == "set model.id old-model\n"
+    assert (js / "jsrc").read_text(encoding="utf-8") == "set MODEL old-model\n"
     assert (paths.login_store_dir() / "logins.toml").is_file()
     assert (paths.global_agents_dir() / "mine" / "01-prompt.md").is_file()
     assert (paths.global_skills_dir() / "s" / "SKILL.md").is_file()
@@ -87,7 +86,7 @@ def test_first_run_moves_every_old_location_into_the_layout(tmp_path):
 def _unused_entries() -> list[Path]:
     legacy = _legacy()
     return [
-        _write(legacy["config"] / "jsrc.bak", "set model.id older\n"),
+        _write(legacy["config"] / "jsrc.bak", "set MODEL older\n"),
         _write(legacy["config"] / "workspace" / "scratch.md", "w\n"),
         _write(legacy["data"] / "sessions2" / "defaultagent" / "s.jsonl", '{"role":"user","content":"x"}\n'),
         _write(legacy["data"] / "logs2" / "debug.log", "l\n"),
@@ -112,7 +111,7 @@ def test_entries_js_does_not_use_are_left_in_place_and_named(tmp_path):
         assert len([line for line in lines if home._short(path) in line]) == 1
     assert config.is_dir() and data.is_dir()
     # What js reads still moved, and the inbox became ~/.js/work.
-    assert paths.global_config_file().read_text(encoding="utf-8") == "set model.id old-model\n"
+    assert paths.global_config_file().read_text(encoding="utf-8") == "set MODEL old-model\n"
     assert (paths.work_dir() / "design.md").is_file()
     assert not os.path.lexists(_legacy()["inbox"])
 
@@ -152,13 +151,13 @@ def test_it_never_moves_twice(tmp_path):
     _old_layout(tmp_path)
     home.migrate_once(io.StringIO())
     # An old location that reappears later is left alone by the startup migration.
-    _write(_legacy()["config"] / "jsrc", "set model.id reappeared\n")
+    _write(_legacy()["config"] / "jsrc", "set MODEL reappeared\n")
     out = io.StringIO()
 
     assert home.migrate_once(out) == []
     assert out.getvalue() == ""
     assert (_legacy()["config"] / "jsrc").is_file()
-    assert (paths.global_config_file()).read_text(encoding="utf-8") == "set model.id old-model\n"
+    assert (paths.global_config_file()).read_text(encoding="utf-8") == "set MODEL old-model\n"
 
 
 def test_nothing_to_move_touches_nothing(tmp_path):
@@ -167,15 +166,15 @@ def test_nothing_to_move_touches_nothing(tmp_path):
 
 
 def test_a_target_with_different_content_is_refused_and_the_source_kept(tmp_path):
-    source = _write(_legacy()["config"] / "jsrc", "set model.id old\n")
-    _write(paths.global_config_file(), "set model.id new\n")
+    source = _write(_legacy()["config"] / "jsrc", "set MODEL old\n")
+    _write(paths.global_config_file(), "set MODEL new\n")
     out = io.StringIO()
 
     steps = home.migrate_once(out)
 
     assert [step.kind for step in steps] == ["refuse"]
-    assert source.read_text(encoding="utf-8") == "set model.id old\n"
-    assert paths.global_config_file().read_text(encoding="utf-8") == "set model.id new\n"
+    assert source.read_text(encoding="utf-8") == "set MODEL old\n"
+    assert paths.global_config_file().read_text(encoding="utf-8") == "set MODEL new\n"
     assert str(paths.global_config_file().name) in out.getvalue()
 
 
@@ -261,7 +260,7 @@ def test_dry_run_reports_what_apply_does_when_old_entries_share_a_target(tmp_pat
 def test_an_entry_that_cannot_be_compared_is_refused_and_the_rest_still_moves(tmp_path, monkeypatch):
     config = _legacy()["config"]
     _write(config / "JS.md", "context\n")
-    _write(config / "jsrc", "set model.id old\n")
+    _write(config / "jsrc", "set MODEL old\n")
     clash = _write(config / "agents" / "a" / "01-prompt.md", "old\n")
     _write(paths.global_agents_dir() / "a" / "01-prompt.md", "new\n")
 
@@ -276,7 +275,7 @@ def test_an_entry_that_cannot_be_compared_is_refused_and_the_rest_still_moves(tm
 
     assert [step.source for step in steps if step.kind == "refuse"] == [clash]
     assert clash.is_file()
-    assert paths.global_config_file().read_text(encoding="utf-8") == "set model.id old\n"
+    assert paths.global_config_file().read_text(encoding="utf-8") == "set MODEL old\n"
     assert (paths.home() / "JS.md").is_file()
     assert len(out.getvalue().splitlines()) == len(steps)
     assert paths.home_migration_marker().is_file()
@@ -363,9 +362,9 @@ def test_js_startup_migrates_and_then_lists_the_moved_session(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     _write(_legacy()["data"] / "sessions" / "defaultagent" / "old.jsonl", '{"role":"user","content":"hi"}\n')
 
-    assert cli.main(["--list", "--json"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
 
-    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    records = json.loads(capsys.readouterr().out)
     assert [(item["agent"], item["name"]) for item in records] == [("defaultagent", "old")]
 
 
@@ -407,11 +406,11 @@ def test_no_module_outside_paths_names_the_old_locations():
 
 
 def test_a_fresh_working_directory_is_left_empty_by_plans_and_snapshots(tmp_path, monkeypatch):
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, plan
 
     work = tmp_path / "fresh"
     work.mkdir()
-    meta.plan(plan_name="p", version="v1", content="x", context=ToolContext(cwd=work))
+    plan.plan(plan_name="p", version="v1", content="x", context=ToolContext(cwd=work))
 
     assert list(work.iterdir()) == []
     assert (paths.plans_dir() / "p-v1.md").is_file()
@@ -427,14 +426,16 @@ def test_one_start_converts_moved_agents_and_prints_what_it_dropped(tmp_path, mo
     _write(agents / "builder" / "01-prompt.md", "BUILD\n")
     _write(agents / "helper" / "01-prompt.md", "HELP\n")
 
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
 
     builder = paths.global_agents_dir() / "builder"
     assert not (builder / "00-tools.yaml").exists()
-    assert persona.load_prompt_spec(builder).tool_selectors == ("read:eager", "helper:eager", "wiki_*:eager")
+    assert persona.load_prompt_spec(builder).tool_selectors == (
+        "read:eager", "helper:eager", "wiki_*:eager", "artifact_*:eager")
     printed = [line for line in capsys.readouterr().err.splitlines() if _is(msgs.HOME_DROPPED, line)]
     assert len(printed) == 1
-    assert "multi_patch" in printed[0] and "artifact_*" in printed[0] and "builder" in printed[0]
+    # Plain dead names drop; a glob is kept even when it matches nothing today.
+    assert "multi_patch" in printed[0] and "artifact_*" not in printed[0] and "builder" in printed[0]
 
 
 def test_the_dry_run_names_the_conversion_and_changes_nothing(tmp_path):
@@ -473,7 +474,7 @@ def test_a_moved_relative_symlink_still_reaches_what_it_reached(tmp_path):
 def test_every_start_lays_out_the_whole_home(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
 
     names = {entry.name for entry in paths.home().iterdir() if entry.is_dir()}
     assert names >= {"agents", "skills", "toolbox", "logins", "sessions", "state", "logs",
@@ -541,8 +542,8 @@ def test_old_sessions_are_filed_by_start_directory_and_keep_their_names(tmp_path
     assert config.resolve_session_file(session_store.folder_for(tmp_path), generated.stem) == filed
     assert config.resolve_session_file(session_store.folder_for(tmp_path), "3ea7213") == filed
     assert config.resolve_session_file(session_store.folder_for(tmp_path), "merrygoround") == folder / "merrygoround.jsonl"
-    # --last finds the session latest.json named.
-    assert cli._latest_session_name("defaultagent") == str(filed)
+    # latest.json, where --last looks, names the filed session.
+    assert session_store.read_latest(paths.state_root() / "defaultagent") == filed
 
 
 def test_a_migrated_session_has_an_id_and_a_parent_on_every_record(tmp_path):
@@ -587,3 +588,21 @@ def test_the_dry_run_names_the_filing_and_moves_no_session(tmp_path, capsys):
     assert any(_is(msgs.HOME_WOULD_REFILE, line) for line in out)
     assert old.read_bytes() == before
     assert not paths.home().exists()
+
+
+def test_registered_tmp_age_changes_which_entries_are_swept(tmp_path):
+    stale = paths.tmp_dir() / "stale"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("temporary")
+    os.utime(stale, (90, 90))
+    assert home.sweep_tmp(now=100, settings={"TMP_AGE_MAX": 5}) == [stale]
+    assert not stale.exists()
+
+
+def test_startup_migration_delivers_steps_to_its_caller(tmp_path, capsys):
+    _old_layout(tmp_path)
+    seen = []
+    done = home.migrate_once(on_step=seen.append)
+    assert done and seen == done
+    assert paths.home_migration_marker().is_file()
+    assert capsys.readouterr().err == ""

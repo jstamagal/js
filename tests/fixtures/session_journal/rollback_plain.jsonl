@@ -1,0 +1,6 @@
+{"kind":"message","message":{"role":"user","content":"one"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"two"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"user","content":"aborted"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"mark","marker":"rollback_to:2","ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"message","message":{"role":"user","content":"retry"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"assistant","content":"ok"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}

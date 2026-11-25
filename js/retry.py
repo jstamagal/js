@@ -11,17 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import math
 import random
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import ai
 
-from . import messages as msgs
-from . import settings as _settings
-from . import stream_transport
+from . import output, settings as _settings, stream_transport
+
 
 @dataclass(frozen=True)
 class Budget:
@@ -30,28 +30,57 @@ class Budget:
 
     attempts: int
     max_wait: float
+    backoff_start: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_START"))
+    backoff_multiplier: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_MULTIPLIER"))
+    backoff_max: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_MAX"))
+    backoff_jitter: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_JITTER"))
+
 
     @classmethod
     def from_settings(cls, settings: dict | None) -> Budget:
         return cls(
-            attempts=int(_settings.knob(settings, "runtime.retry_attempts") or 0),
-            max_wait=float(_settings.knob(settings, "runtime.retry_max_wait_seconds") or 0),
+            backoff_start=float(_settings.knob(settings, "RETRY_BACKOFF_START")),
+            backoff_multiplier=float(_settings.knob(settings, "RETRY_BACKOFF_MULTIPLIER")),
+            backoff_max=float(_settings.knob(settings, "RETRY_BACKOFF_MAX")),
+            backoff_jitter=float(_settings.knob(settings, "RETRY_BACKOFF_JITTER")),
+            attempts=int(_settings.knob(settings, "RETRY_COUNT_MAX") or 0),
+            max_wait=float(_settings.knob(settings, "RETRY_WAIT_MAX") or 0),
         )
 
     def too_long(self, wait: float | None) -> bool:
+        # 0 means "honour any wait", but not one that never ends: an infinite
+        # or NaN Retry-After would sleep the turn forever.
+        if wait is not None and not math.isfinite(wait):
+            return True
         return wait is not None and 0 < self.max_wait < wait
 
 
-def idle_seconds(settings: dict | None) -> float | None:
-    """runtime.stream_idle_seconds as `stream_model_async` takes it: None for
-    no watchdog."""
-    return float(_settings.knob(settings, "runtime.stream_idle_seconds") or 0) or None
+@dataclass(frozen=True)
+class StreamLimits:
+    """The clocks one model request runs under, in seconds; None is no limit.
+    `connect` bounds the TCP and TLS handshake (CONNECT_TIMEOUT), `first_byte`
+    the silence from sending the request to the first response byte, prefill
+    included (FIRST_BYTE_TIMEOUT), and `idle` the silence between two response
+    bytes after the first (STREAM_IDLE_TIMEOUT)."""
+
+    connect: float | None = None
+    first_byte: float | None = None
+    idle: float | None = None
+
+    @classmethod
+    def from_settings(cls, settings: dict | None) -> StreamLimits:
+        def seconds(key: str) -> float | None:
+            return float(_settings.knob(settings, key) or 0) or None
+
+        return cls(connect=seconds("CONNECT_TIMEOUT"), first_byte=seconds("FIRST_BYTE_TIMEOUT"),
+                   idle=seconds("STREAM_IDLE_TIMEOUT"))
 
 
-def backoff(attempt: int) -> float:
-    """Exponential with jitter: 1s, 2s, 4s ... capped."""
-    base = min(2 ** attempt, 16)
-    return base + random.uniform(0, 1)
+def backoff(attempt: int, budget: Budget | None = None) -> float:
+    """Configured capped backoff with jitter; defaults to a flat 8s."""
+    budget = budget if budget is not None else Budget.from_settings(None)
+    base = min(budget.backoff_start * budget.backoff_multiplier ** attempt, budget.backoff_max)
+    return min(base + random.uniform(0, budget.backoff_jitter), budget.backoff_max)
 
 
 def _error_chain(exc: BaseException) -> list[BaseException]:
@@ -85,12 +114,14 @@ def retry_after_seconds(exc: BaseException) -> float | None:
             continue
         if millis:
             try:
-                return max(0.0, float(millis) / 1000)
+                wait = float(millis) / 1000
+                return max(0.0, wait) if math.isfinite(wait) else wait
             except ValueError:
                 pass
         if after:
             try:
-                return max(0.0, float(after))
+                wait = float(after)
+                return max(0.0, wait) if math.isfinite(wait) else wait
             except ValueError:
                 pass
             try:
@@ -104,12 +135,43 @@ def retry_after_seconds(exc: BaseException) -> float | None:
 
 
 def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
-    """The network-channel line for retry `n`. A wait of 10s or more shows at
-    level 1, so a long Retry-After does not look like a hang."""
-    stream_transport.say_for_caller(
-        1 if delay >= 10 else 3,
-        msgs.RETRY_WAIT.text(n=n, of=budget.attempts, seconds=delay,
-                             failure=stream_transport.describe_failure(exc)))
+    """Tell the sink which retry will wait, and the failure it follows."""
+    output.emit(output.event("retry_wait", n=n, attempts=budget.attempts, delay=delay,
+                             error=exc, label=stream_transport._role.get().label))
+
+
+def gave_up(retries: int, exc: BaseException) -> None:
+    """Tell the sink the caller stopped retrying a retryable failure, and
+    which failure was the last. The give-up line names it, so the role's
+    held failure line is dropped."""
+    hold = stream_transport._role.get().hold
+    if hold is not None:
+        hold.pending = None
+    output.emit(output.event("retry_gave_up", n=retries, error=exc, label=stream_transport._role.get().label))
+
+
+_sleep = asyncio.sleep
+
+
+async def wait(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
+    """Announce retry `n` and wait `delay` seconds before it, a `retry_tick`
+    with the seconds left after each second of it. Every retry of a model
+    call waits here; ^C ends the wait like any other."""
+    announce(n, budget, delay, exc)
+    status = stream_transport._role.get().status
+    if status is not None:
+        status.retry_wait(n, budget.attempts, delay)
+    left = delay
+    try:
+        while left > 0:
+            step = min(1.0, left)
+            await _sleep(step)
+            left -= step
+            output.emit(output.event("retry_tick", left=left))
+    finally:
+        if status is not None:
+            status.retry_done()
+        output.emit(output.event("retry_done"))
 
 
 async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
@@ -120,10 +182,12 @@ async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
         try:
             return await request()
         except ai.ProviderAPIError as exc:
-            wait = retry_after_seconds(exc)
-            if not exc.is_retryable or retries >= budget.attempts or budget.too_long(wait):
+            asked = retry_after_seconds(exc)
+            if not exc.is_retryable:
                 raise
-            delay = wait if wait is not None else backoff(retries)
+            if retries >= budget.attempts or budget.too_long(asked):
+                gave_up(retries, exc)
+                raise
+            delay = asked if asked is not None else backoff(retries, budget)
             retries += 1
-            announce(retries, budget, delay, exc)
-            await asyncio.sleep(delay)
+            await wait(retries, budget, delay, exc)

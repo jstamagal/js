@@ -7,23 +7,24 @@ start.
 
 from __future__ import annotations
 
-import copy
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from repl_driver import output_of, record_turns, type_into_js
+from turn_driver import one_turn
 
-from js import cli, setcmd, settings
+from js import cli, jsrc_save, setcmd, setting_layers, settings
 from js.config import Config, from_env
-from js.toolkit import ToolContext, kernel
+from js.toolkit import ToolContext, python_kernel
 
 REPO = Path(__file__).resolve().parents[1]
 
 
 def _set_lines(text: str) -> list[str]:
-    return [line.split()[1] for line in text.splitlines() if line.startswith("set ")]
+    return [line.split()[1] for line in text.splitlines() if line.startswith(("set ", "fset "))]
 
 
 def _package_copy(tmp_path: Path, monkeypatch, **changes: str) -> Path:
@@ -68,35 +69,32 @@ def test_seeded_settings_are_what_package_jsrc_sets():
         assert setcmd.apply_config_line(applied, line).error is None
 
     assert seeded == applied
-    seeded["limits"]["max_read_lines"] = -1
-    assert settings.default_value("limits.max_read_lines") != -1
+    seeded["READ_LINES_MAX"] = -1
+    assert settings.default_value("READ_LINES_MAX") != -1
 
 
 def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch, tmp_path, capsys):
-    _package_copy(tmp_path, monkeypatch, **{"kernel.wait_seconds": "9", "limits.max_read_lines": "17"})
+    _package_copy(tmp_path, monkeypatch, **{"PYTHON_KERNEL_WAIT": "9", "READ_LINES_MAX": "17"})
     project = _isolated_home(monkeypatch, tmp_path)
 
     context = ToolContext(cwd=tmp_path)
-    assert kernel.wait_seconds(context) == 9.0
+    assert python_kernel.wait_seconds(context) == 9.0
     assert context.max_read_lines == 17
 
     cfg = from_env(save_session=False, cwd=project)
     assert cfg.kernel_wait_seconds == 9
     assert cfg.max_read_lines == 17
 
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
-    capsys.readouterr()
-    assert cli._handle_command("/show kernel.wait_seconds", state, cfg) is True
-    shown = capsys.readouterr().out.splitlines()[0]
-    assert shown.split("=", 1)[1].split()[0] == "9"
+    printed = _type(monkeypatch, project, capsys, ["/show PYTHON_KERNEL_WAIT"])
+    assert _show_value(printed["/show PYTHON_KERNEL_WAIT"]) == "9"
 
 
 def test_user_jsrc_layers_over_package_jsrc(monkeypatch, tmp_path):
-    _package_copy(tmp_path, monkeypatch, **{"limits.fetch_timeout_s": "44", "limits.max_read_lines": "17"})
+    _package_copy(tmp_path, monkeypatch, **{"FETCH_TIMEOUT": "44", "READ_LINES_MAX": "17"})
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
+    user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
 
     cfg = from_env(save_session=False, cwd=project)
 
@@ -127,54 +125,35 @@ def test_missing_package_jsrc_stops_startup_with_one_line_naming_the_path(tmp_pa
     assert str(missing) in lines[0]
 
 
-def test_bad_line_in_package_jsrc_names_the_file_and_line(monkeypatch, tmp_path):
-    path = tmp_path / "jsrc"
-    path.write_text("set model.id m\nset limits.max_read_lines lots\n", encoding="utf-8")
-    monkeypatch.setattr(settings, "PACKAGE_JSRC", path)
-
-    with pytest.raises(SystemExit) as raised:
-        settings.seed_defaults()
-
-    assert f"{path}:2" in str(raised.value)
-
-
-def test_first_run_writes_a_user_jsrc_with_every_setting_and_leaves_an_existing_one(monkeypatch, tmp_path):
+def test_a_start_writes_no_jsrc_and_leaves_an_existing_one_alone(monkeypatch, tmp_path):
     project = _isolated_home(monkeypatch, tmp_path)
     monkeypatch.chdir(project)
     user = tmp_path / "home" / ".js" / "jsrc"
 
-    assert cli.main(["--list"]) == 0
-    written = user.read_text(encoding="utf-8")
-    assert sorted(key.lstrip("-") for key in _set_lines(written)) == sorted(spec.key for spec in settings.REGISTRY)
-    assert settings.collect_settings(config_paths=[user], env={}) == settings.seed_defaults()
+    assert cli.main(["--list-sessions", "--json"]) == 0
+    assert not user.exists()
 
-    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
-    assert cli.main(["--list"]) == 0
-    assert user.read_text(encoding="utf-8") == "set limits.max_read_lines 33\n"
+    user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
+    assert cli.main(["--list-sessions", "--json"]) == 0
+    assert user.read_text(encoding="utf-8") == "set READ_LINES_MAX 33\n"
 
 
-def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypatch, tmp_path):
-    lines = [
-        line for line in settings.PACKAGE_JSRC.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("set limits.max_read_lines ")
-    ]
-    path = tmp_path / "jsrc"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(settings, "PACKAGE_JSRC", path)
+def _type(monkeypatch, project, capsys, lines) -> dict[str, str]:
+    """Type `lines` into js started in `project`: what each printed, by line."""
+    monkeypatch.chdir(project)
+    printed: dict[str, str] = {}
 
-    with pytest.raises(SystemExit) as raised:
-        settings.seed_defaults()
+    async def typing(enter):
+        for line in lines:
+            printed[line] = await output_of(enter, capsys, line)
 
-    message = str(raised.value)
-    assert len(message.splitlines()) == 1
-    assert str(path) in message
-    assert "limits.max_read_lines" in message
+    assert type_into_js(monkeypatch, typing) == 0
+    return printed
 
 
-def _show_value(cfg, state, key: str, capsys) -> str:
-    capsys.readouterr()
-    assert cli._handle_command(f"/show {key}", state, cfg) is True
-    return capsys.readouterr().out.splitlines()[0].split("=", 1)[1].split()[0]
+def _show_value(printed: str) -> str:
+    """The value a `/show KEY` line printed."""
+    return printed.splitlines()[0].split(": ", 1)[1].split()[0]
 
 
 def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, tmp_path, capsys):
@@ -182,22 +161,23 @@ def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, t
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        "set runtime.trace off\nset limits.max_read_lines 33\nset runtime.allow_inline_code off\n"
-        "set -runtime.trace\nset -limits.max_read_lines\nset -runtime.allow_inline_code\n",
+        "set TRANSCRIPT_LOG off\nset READ_LINES_MAX 33\nset INLINE_CODE off\n"
+        "set -TRANSCRIPT_LOG\nset -READ_LINES_MAX\nset -INLINE_CODE\n",
         encoding="utf-8",
     )
 
     cfg = from_env(save_session=False, cwd=project)
-    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
 
-    assert cfg.trace is settings.default_value("runtime.trace")
-    assert cfg.max_read_lines == settings.default_value("limits.max_read_lines")
-    assert cfg.allow_inline_code is settings.default_value("runtime.allow_inline_code")
-    assert _show_value(cfg, state, "runtime.trace", capsys) == (
-        "on" if cfg.trace else "off"
+    assert cfg.transcript_log is settings.default_value("TRANSCRIPT_LOG")
+    assert cfg.max_read_lines == settings.default_value("READ_LINES_MAX")
+    assert cfg.allow_inline_code is settings.default_value("INLINE_CODE")
+    printed = _type(monkeypatch, project, capsys,
+                    ["/show TRANSCRIPT_LOG", "/show READ_LINES_MAX", "/show INLINE_CODE"])
+    assert _show_value(printed["/show TRANSCRIPT_LOG"]) == (
+        "on" if cfg.transcript_log else "off"
     )
-    assert _show_value(cfg, state, "limits.max_read_lines", capsys) == str(cfg.max_read_lines)
-    assert _show_value(cfg, state, "runtime.allow_inline_code", capsys) == (
+    assert _show_value(printed["/show READ_LINES_MAX"]) == str(cfg.max_read_lines)
+    assert _show_value(printed["/show INLINE_CODE"]) == (
         "on" if cfg.allow_inline_code else "off"
     )
 
@@ -208,35 +188,40 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
-    cfg = from_env(save_session=False, cwd=project)
-    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
+    user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/set limits.max_read_lines 5", state, cfg) is True
-    assert cli._handle_command("/set -limits.max_read_lines", state, cfg) is True
+    printed = _type(monkeypatch, project, capsys, [
+        "/set READ_LINES_MAX 5", "/set -READ_LINES_MAX", "/show READ_LINES_MAX", "/save", "hello",
+    ])
 
-    assert _show_value(cfg, state, "limits.max_read_lines", capsys) == "33"
-    assert cli._cfg_for_live_state(cfg, state).max_read_lines == 33
-    assert cli._handle_command("/save", state, cfg) is True
+    assert _show_value(printed["/show READ_LINES_MAX"]) == "33"
+    [turn] = turns
+    assert turn.cfg.max_read_lines == 33
     reloaded = from_env(save_session=False, cwd=project)
     assert reloaded.max_read_lines == 33
 
 
-def test_save_writes_one_line_per_setting_and_reloads_to_the_same_values(tmp_path):
-    live = settings.seed_defaults()
-    setcmd.set_command(live, "-limits.max_read_lines")
-    setcmd.set_command(live, "limits.fetch_timeout_s 77")
+def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path):
     target = tmp_path / "jsrc"
+    template = Path(settings.__file__).with_name("jsrc.template").read_text(encoding="utf-8")
+    target.write_text(template + "# my note\n", encoding="utf-8")
+    before = target.read_text(encoding="utf-8").splitlines()
+    live = settings.seed_defaults()
+    setcmd.set_command(live, "FETCH_TIMEOUT 77")
+    setcmd.set_command(live, "PROVIDER deepseek")
 
-    count, _backup = settings.save_settings_to_jsrc(target, live, stamp="t")
-    reloaded = settings.collect_settings(config_paths=[target], env={})
-    expected = settings.seed_defaults()
-    expected["limits"]["fetch_timeout_s"] = 77
+    assert jsrc_save.save_settings_to_jsrc(target, live, keys=["FETCH_TIMEOUT", "PROVIDER"]) == 2
+    after = target.read_text(encoding="utf-8").splitlines()
+    changed = {before[i]: after[i] for i in range(len(before)) if before[i] != after[i]}
 
-    assert count == len(settings.REGISTRY)
-    assert sorted(key.lstrip("-") for key in _set_lines(target.read_text(encoding="utf-8"))) == sorted(
-        spec.key for spec in settings.REGISTRY)
-    assert reloaded == expected
+    assert len(after) == len(before)
+    assert changed == {
+        f"#set FETCH_TIMEOUT {settings.default_value('FETCH_TIMEOUT')}": "set FETCH_TIMEOUT 77",
+        "#set -PROVIDER": "set PROVIDER deepseek",
+    }
+    assert setting_layers.collect_settings(config_paths=[target], env={}) == live
+    assert [path.name for path in tmp_path.glob("jsrc*")] == ["jsrc"]
 
 
 def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
@@ -245,14 +230,14 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
 
     from js import runtime
     from js.model_client import ModelStreamResult
-    from js.toolkit import build_default_registry
+    from js.toolkit.registry import build_default_registry
 
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        "set tools.user_agent knob-agent/3\nset tools.terminal_cols 71\nset tools.terminal_rows 29\n"
-        "set shell.program zsh\n",
+        "set HTTP_USER_AGENT knob-agent/3\nset TERMINAL_COLUMNS 71\nset TERMINAL_ROWS 29\n"
+        "set SHELL_PROGRAM zsh\n",
         encoding="utf-8",
     )
     cfg = from_env(save_session=False, cwd=project)
@@ -264,7 +249,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: reply)
     context = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(
+    one_turn(
         cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
         trace_override=False, tool_registry=build_default_registry().select([]),
         tool_context=context, suppress_output=True,
@@ -279,7 +264,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
 def test_config_and_tool_context_defaults_come_from_package_jsrc(monkeypatch, tmp_path):
     _package_copy(
         tmp_path, monkeypatch,
-        **{"limits.browse_timeout_s": "61", "shell.wait_seconds": "31", "tools.terminal_cols": "70"},
+        **{"BROWSE_TIMEOUT": "61", "SHELL_WAIT": "31", "TERMINAL_COLUMNS": "70"},
     )
     d = tmp_path / "sessions"
     cfg = Config(
@@ -299,7 +284,7 @@ def test_config_and_tool_context_defaults_come_from_package_jsrc(monkeypatch, tm
 
 
 def test_fetch_sends_the_configured_user_agent(monkeypatch, tmp_path):
-    from js.toolkit import process_net
+    from js.toolkit import fetch
 
     seen = {}
 
@@ -323,29 +308,33 @@ def test_fetch_sends_the_configured_user_agent(monkeypatch, tmp_path):
         seen["agent"] = req.get_header("User-agent")
         return Response()
 
-    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
     context = ToolContext(cwd=tmp_path, user_agent="knob-agent/2")
 
-    process_net.fetch("https://example.test/", context=context)
+    fetch.fetch("https://example.test/", context=context)
 
     assert seen["agent"] == "knob-agent/2"
 
 
-def test_text_attachment_cap_follows_its_knob(monkeypatch, tmp_path):
+def test_text_attachment_room_follows_its_setting(monkeypatch, tmp_path):
     from js import attach
 
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set limits.max_text_attachment_bytes 10\n", encoding="utf-8")
+    # 1000 tokens, all of it before compaction, a share of 1/400: 10 bytes.
+    user.write_text("set CONTEXT_SIZE 1000\nset COMPACTION_START_AT 1.0\nset COMPACTION_WARN_AT 0.5\n"
+                    "set COMPACTION_FORCE_AT 1.0\nset COMPACTION_HEADROOM_TOKENS 0\n"
+                    "set COMPACTION_REPLY_RESERVE_TOKENS 0\nset COMPACTION_CHARS_PER_TOKEN 4.0\n"
+                    "set ATTACHMENT_CONTEXT_MAX 0.0025\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
     (project / "a.txt").write_text("q" * 100, encoding="utf-8")
 
-    bundle = attach.build_user_message("look", ["a.txt"], cfg, cwd=project)
+    content = attach.build_user_message("look", ["a.txt"], cfg, cwd=project)["content"]
 
-    assert "q" * 10 in bundle.history_message["content"]
-    assert "q" * 11 not in bundle.history_message["content"]
+    assert "q" * 10 in content
+    assert "q" * 11 not in content
 
 
 @pytest.mark.parametrize(("max_files", "reattached"), [("0", False), ("5", True)])
@@ -360,13 +349,13 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        f"set model.id offline-test-model\nset compact.rehydrate_max_files {max_files}\n", encoding="utf-8",
+        f"set MODEL offline-test-model\nset COMPACTION_REATTACH_FILES_MAX {max_files}\n", encoding="utf-8",
     )
     cfg = replace(from_env(save_session=False, cwd=project), session_file=tmp_path / "s.jsonl")
     source = project / "kept.py"
     source.write_text("print('rehydrated-marker')\n", encoding="utf-8")
     context = ToolContext(cwd=project)
-    context.read_paths = {source}
+    context.reads.remember(source, "read")
 
     async def stream_stub(**_kwargs):
         return SimpleNamespace(text="Summary")
@@ -381,3 +370,13 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
 
     assert cli.compaction.compacted(result)
     assert any("rehydrated-marker" in str(m.get("content")) for m in messages) is reattached
+
+
+def test_collect_settings_can_preserve_operator_formats():
+    from js import fset, settings
+
+    settings.seed_defaults()
+    fset.set_entry("MODEL_SET", "custom")
+    before = dict(fset.overrides())
+    setting_layers.collect_settings(config_paths=[], env={}, reset_formats=lambda: None)
+    assert dict(fset.overrides()) == before

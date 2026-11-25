@@ -64,6 +64,63 @@ def nb(tmp_path):
     return path, ToolContext(cwd=tmp_path)
 
 
+@pytest.mark.parametrize("first_mode", ["insert", "delete"])
+def test_old_cell_ids_survive_structural_edits(tmp_path, first_mode):
+    path = tmp_path / "old.ipynb"
+    notebook = old_notebook()
+    write_notebook(path, notebook)
+    before = path.read_bytes()
+    context = ToolContext(cwd=tmp_path)
+    tool("read", context, file_path=str(path))
+    assert path.read_bytes() == before
+    kwargs = {"edit_mode": first_mode, "cell_id": "cell-1"}
+    if first_mode == "insert":
+        kwargs.update(new_source="inserted", cell_type="markdown")
+    first = tool("notebook_edit", context, file_path=str(path), **kwargs)
+    assert not first.startswith("ERROR"), first
+    second = tool("notebook_edit", context, file_path=str(path), cell_id="cell-2", new_source="last changed")
+    assert not second.startswith("ERROR"), second
+    cells = cells_of(path)
+    assert "".join(cells[-1]["source"]) == "last changed"
+    assert cells[-1]["id"] == "cell-2"
+    assert len({cell["id"] for cell in cells}) == len(cells)
+    assert json.loads(path.read_text())["nbformat_minor"] >= 5
+    if first_mode == "delete":
+        refused = tool("notebook_edit", context, file_path=str(path), cell_id="cell-1", new_source="wrong")
+        assert refused.startswith("ERROR")
+
+
+def test_synthetic_id_does_not_shadow_explicit_id(nb):
+    from js.toolkit.notebook import cell_ids
+
+    path, context = nb
+    notebook = modern_notebook()
+    notebook["cells"] = notebook["cells"][:2]
+    notebook["cells"][0]["id"] = "cell-1"
+    del notebook["cells"][1]["id"]
+    write_notebook(path, notebook)
+    ids = cell_ids(notebook["cells"])
+    assert len(set(ids)) == 2
+    view = tool("read", context, file_path=str(path))
+    assert all(f"id={cell_id}" in view for cell_id in ids)
+    result = tool("notebook_edit", context, file_path=str(path), cell_id=ids[1], new_source="second")
+    assert not result.startswith("ERROR"), result
+    assert "".join(cells_of(path)[1]["source"]) == "second"
+    assert cells_of(path)[0]["source"] == notebook["cells"][0]["source"]
+
+
+def test_bom_notebook_reads_and_edits(nb):
+    path, context = nb
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    original = path.read_bytes()
+    view = tool("read", context, file_path=str(path))
+    assert "id=a1" in view
+    assert path.read_bytes() == original
+    result = tool("notebook_edit", context, file_path=str(path), cell_id="a1", new_source="changed")
+    assert not result.startswith("ERROR"), result
+    assert "".join(cells_of(path)[0]["source"]) == "changed"
+
+
 def test_read_shows_cells_with_ids_and_summarised_outputs(nb):
     path, context = nb
 
@@ -178,7 +235,9 @@ def test_notebook_without_ids_uses_positions(tmp_path):
     cells = cells_of(path)
     assert "".join(cells[3]["source"]) == "fixed"
     assert "".join(cells[1]["source"]) == "text"
-    assert all("id" not in cell for cell in cells)
+    assert [cells[index]["id"] for index in (0, 2, 3)] == ["cell-0", "cell-1", "cell-2"]
+    assert len({cell["id"] for cell in cells}) == len(cells)
+    assert json.loads(path.read_text())["nbformat_minor"] == 5
 
 
 def test_unknown_cell_id_is_refused_and_lists_the_ids(nb):
@@ -191,6 +250,17 @@ def test_unknown_cell_id_is_refused_and_lists_the_ids(nb):
     assert result.startswith("ERROR")
     assert "a1" in result and "c3" in result
     assert path.read_bytes() == before
+
+
+def test_positional_id_cannot_delete_a_cell_with_a_real_id(nb):
+    path, context = nb
+    tool("read", context, file_path=str(path))
+    before = path.read_bytes()
+
+    result = tool("notebook_edit", context, file_path=str(path), cell_id="cell-0", edit_mode="delete")
+
+    assert path.read_bytes() == before
+    assert result.startswith("ERROR")
 
 
 def test_edit_without_a_read_is_refused(nb):
@@ -240,6 +310,17 @@ def test_a_notebook_view_read_does_not_authorize_a_raw_patch(nb):
     assert result.startswith("ERROR")
 
 
+def test_edit_notebook_with_maximum_length_filename(nb):
+    path, context = nb
+    path = path.rename(path.with_name("n" * 249 + ".ipynb"))
+    tool("read", context, file_path=str(path))
+
+    result = tool("notebook_edit", context, file_path=str(path), cell_id="a1", new_source="replacement")
+
+    assert not result.startswith("ERROR"), result
+    assert cells_of(path)[0]["source"] == ["replacement"]
+
+
 def test_undo_restores_the_notebook(nb):
     path, context = nb
     before = path.read_bytes()
@@ -266,3 +347,18 @@ def test_insert_needs_a_cell_type(nb):
     tool("read", context, file_path=str(path))
 
     assert tool("notebook_edit", context, file_path=str(path), new_source="x", edit_mode="insert").startswith("ERROR")
+
+
+def test_registered_setting_can_preserve_cell_outputs(nb):
+    from types import SimpleNamespace
+
+    from js import turn_settings
+
+    path, context = nb
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"NOTEBOOK_CLEAR_OUTPUTS": False})))
+    tool("read", context, file_path=str(path))
+    before = json.loads(path.read_text())["cells"][0]
+    tool("notebook_edit", context, file_path=str(path), cell_id="a1", new_source="x = 1")
+    after = json.loads(path.read_text())["cells"][0]
+    assert after["outputs"] == before["outputs"]
+    assert after["execution_count"] == before["execution_count"]

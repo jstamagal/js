@@ -17,14 +17,31 @@
   it expands the prompt.
 
   Rebuilds automatically when this file is newer than the cached binary.
-  Set CC to pick a compiler.  ENVCTX_HIST=n changes the shell-history count.
+  Set CC to pick a compiler, ENVCTX_BIN to keep the binary elsewhere.  ENVCTX_HIST=n changes the shell-history count;
+  ENVCTX_HIST=0 leaves shell history out entirely.
+
+  The scrubber reads its key prefixes and entropy rules from the file named
+  by JS_SECRET_PATTERNS, which js exports.  Unset, it is
+  ~/.js/secret-patterns when that exists, else defaults/secret-patterns
+  beside tools/.
 //
 set -e
+JS_HOME=${JS_HOME:-$HOME/.js}
+export JS_HOME
 _src=$0
-_cache=$HOME/.js/cache
-_bin=$_cache/envctx.bin
+if [ -z "$JS_SECRET_PATTERNS" ]; then
+  case $_src in *[/]*) _dir=${_src%[/]*} ;; *) _dir=. ;; esac
+  if [ -f "$JS_HOME/secret-patterns" ]; then
+    JS_SECRET_PATTERNS=$JS_HOME/secret-patterns
+  else
+    JS_SECRET_PATTERNS=$_dir/../defaults/secret-patterns
+  fi
+  export JS_SECRET_PATTERNS
+fi
+_cache=$JS_HOME/cache
+_bin=${ENVCTX_BIN:-$_cache/envctx.bin}
 if [ ! -x "$_bin" ] || [ "$_src" -nt "$_bin" ]; then
-  mkdir -p "$_cache"
+  mkdir -p "${_bin%/*}"
   ${CC:-cc} -O2 -o "$_bin.$$" -x c "$_src" 2>/dev/null && mv -f "$_bin.$$" "$_bin" || {
     rm -f "$_bin.$$"; echo "envctx: build failed" >&2; exit 1; }
 fi
@@ -144,16 +161,182 @@ static void human(double bytes, char *out, size_t cap) {
 
 /* ---------- secret scrubbing ------------------------------------------
    Hand-rolled because importing scrubadub costs ~1.5s; this costs ~0us.
-   Token-wise redaction: emails, IPs, phones, known key prefixes, JWTs,
-   URL userinfo, KEY=secret pairs, and long high-entropy blobs.           */
+   Token-wise redaction: emails, IPs, phones, URL userinfo, KEY=secret
+   pairs, and the key prefixes and entropy rules of the secret-patterns
+   file named by $JS_SECRET_PATTERNS (format documented at its top).      */
 
-static const char *KEY_PREFIX[] = {
-    "sk-",   "sk_live_", "sk_test_", "rk_live_", "pk_live_",    "ghp_",
-    "gho_",  "ghu_",     "ghs_",     "ghr_",     "github_pat_", "glpat-",
-    "xoxb-", "xoxp-",    "xoxa-",    "xapp-",    "AKIA",        "ASIA",
-    "AIza",  "ya29.",    "hf_",      "r8_",      "sbp_",        "dop_v1_",
-    "npm_",  "pypi-",    "SG.",      "shpat_",   "anthropic-",  "Bearer",
-    NULL};
+#define PAT_MAX 128
+
+struct charset {
+  char name[32];
+  unsigned char in[256];
+};
+struct prefix_rule {
+  char prefix[64];
+  size_t min, max;
+  int cls;
+};
+struct entropy_rule {
+  size_t min;
+  int kinds, cls;
+};
+struct exempt_rule {
+  size_t len;
+  int cls;
+};
+
+static struct charset CLASSES[PAT_MAX];
+static struct prefix_rule PREFIXES[PAT_MAX];
+static struct entropy_rule ENTROPY[PAT_MAX];
+static struct exempt_rule EXEMPT[PAT_MAX];
+static int NCLASSES, NPREFIXES, NENTROPY, NEXEMPT;
+
+static void pattern_error(const char *path, int line, const char *what,
+                          const char *field) {
+  if (line)
+    fprintf(stderr, "envctx: %s:%d: %s%s%s\n", path, line, what,
+            field ? ": " : "", field ? field : "");
+  else
+    fprintf(stderr, "envctx: %s: %s\n", path, what);
+  exit(1);
+}
+
+static size_t pattern_number(const char *path, int line, const char *f) {
+  if (!f)
+    pattern_error(path, line, "missing number", NULL);
+  char *end;
+  long v = strtol(f, &end, 10);
+  if (!isdigit((unsigned char)*f) || *end || v < 0 || v > 1 << 20)
+    pattern_error(path, line, "not a number", f);
+  return (size_t)v;
+}
+
+static int pattern_class(const char *path, int line, const char *f) {
+  if (!f)
+    pattern_error(path, line, "missing class name", NULL);
+  for (int i = 0; i < NCLASSES; i++)
+    if (!strcmp(CLASSES[i].name, f))
+      return i;
+  pattern_error(path, line, "unknown class", f);
+  return -1;
+}
+
+static void load_patterns(void) {
+  const char *path = getenv("JS_SECRET_PATTERNS");
+  if (!path || !*path)
+    pattern_error("JS_SECRET_PATTERNS", 0, "not set", NULL);
+  FILE *f = fopen(path, "r");
+  if (!f)
+    pattern_error(path, 0, "cannot read the secret-patterns file", NULL);
+  char raw[LINE];
+  int ln = 0;
+  while (fgets(raw, sizeof raw, f)) {
+    ln++;
+    chomp(raw);
+    char *kind = strtok(raw, " \t");
+    if (!kind || *kind == '#')
+      continue;
+    char *a = strtok(NULL, " \t"), *b = strtok(NULL, " \t");
+    char *c = strtok(NULL, " \t"), *d = strtok(NULL, " \t");
+    char *extra = NULL;
+    if (!strcmp(kind, "class")) {
+      if (!a || !b)
+        pattern_error(path, ln, "class needs NAME CHARS", NULL);
+      extra = c;
+      if (NCLASSES >= PAT_MAX || strlen(a) >= sizeof CLASSES[0].name)
+        pattern_error(path, ln, "too many classes or name too long", a);
+      struct charset *cs = &CLASSES[NCLASSES++];
+      memset(cs, 0, sizeof *cs);
+      snprintf(cs->name, sizeof cs->name, "%s", a);
+      for (size_t i = 0; b[i]; i++) {
+        unsigned char lo = (unsigned char)b[i];
+        if (b[i + 1] == '-' && b[i + 2]) {
+          unsigned char hi = (unsigned char)b[i + 2];
+          if (hi < lo)
+            pattern_error(path, ln, "backwards range", b);
+          for (unsigned ch = lo; ch <= hi; ch++)
+            cs->in[ch] = 1;
+          i += 2;
+        } else
+          cs->in[lo] = 1;
+      }
+    } else if (!strcmp(kind, "prefix")) {
+      if (!a || NPREFIXES >= PAT_MAX ||
+          strlen(a) >= sizeof PREFIXES[0].prefix)
+        pattern_error(path, ln, "prefix needs PREFIX MIN MAX CLASS", a);
+      struct prefix_rule *r = &PREFIXES[NPREFIXES++];
+      snprintf(r->prefix, sizeof r->prefix, "%s", a);
+      r->min = pattern_number(path, ln, b);
+      r->max = pattern_number(path, ln, c);
+      r->cls = pattern_class(path, ln, d);
+      extra = strtok(NULL, " \t");
+    } else if (!strcmp(kind, "entropy")) {
+      if (NENTROPY >= PAT_MAX)
+        pattern_error(path, ln, "too many entropy rules", NULL);
+      struct entropy_rule *r = &ENTROPY[NENTROPY++];
+      r->min = pattern_number(path, ln, a);
+      r->kinds = (int)pattern_number(path, ln, b);
+      r->cls = pattern_class(path, ln, c);
+      extra = d;
+    } else if (!strcmp(kind, "exempt")) {
+      if (NEXEMPT >= PAT_MAX)
+        pattern_error(path, ln, "too many exempt rules", NULL);
+      struct exempt_rule *r = &EXEMPT[NEXEMPT++];
+      r->len = pattern_number(path, ln, a);
+      r->cls = pattern_class(path, ln, b);
+      extra = c;
+    } else
+      pattern_error(path, ln, "unknown rule", kind);
+    if (extra)
+      pattern_error(path, ln, "extra field", extra);
+  }
+  fclose(f);
+}
+
+static int all_in(const char *t, int cls) {
+  for (const unsigned char *p = (const unsigned char *)t; *p; p++)
+    if (!CLASSES[cls].in[*p])
+      return 0;
+  return 1;
+}
+
+/* the longest prefix rule that matches `t`, or NULL */
+static const char *match_prefix(const char *t) {
+  const char *best = NULL;
+  size_t bl = 0, n = strlen(t);
+  for (int i = 0; i < NPREFIXES; i++) {
+    const struct prefix_rule *r = &PREFIXES[i];
+    size_t pl = strlen(r->prefix);
+    if (pl <= bl || strncmp(t, r->prefix, pl))
+      continue;
+    size_t rest = n - pl;
+    if (rest >= r->min && rest <= r->max && all_in(t + pl, r->cls)) {
+      best = r->prefix;
+      bl = pl;
+    }
+  }
+  return best;
+}
+
+static int match_entropy(const char *t) {
+  size_t n = strlen(t);
+  for (int i = 0; i < NEXEMPT; i++)
+    if (n == EXEMPT[i].len && all_in(t, EXEMPT[i].cls))
+      return 0;
+  int lo = 0, up = 0, dg = 0;
+  for (const char *p = t; *p; p++) {
+    lo |= islower((unsigned char)*p) != 0;
+    up |= isupper((unsigned char)*p) != 0;
+    dg |= isdigit((unsigned char)*p) != 0;
+  }
+  if (!dg)
+    return 0;
+  for (int i = 0; i < NENTROPY; i++)
+    if (n >= ENTROPY[i].min && lo + up + dg >= ENTROPY[i].kinds &&
+        all_in(t, ENTROPY[i].cls))
+      return 1;
+  return 0;
+}
 
 static const char *SECRET_KEY[] = {
     "password", "passwd",     "secret",      "token", "apikey",
@@ -211,38 +394,6 @@ static int looks_phone(const char *t) {
   return digits >= 10 && digits <= 13 && seps >= 1;
 }
 
-/* long mixed-case+digit run with no path/word structure => probably a secret */
-static int looks_blob(const char *t) {
-  size_t n = strlen(t);
-  if (n < 28)
-    return 0;
-  int lo = 0, up = 0, dg = 0, other = 0, hex = 1;
-  for (const char *p = t; *p; p++) {
-    if (islower((unsigned char)*p))
-      lo++;
-    else if (isupper((unsigned char)*p))
-      up++;
-    else if (isdigit((unsigned char)*p))
-      dg++;
-    else if (*p == '_' || *p == '-' || *p == '+' || *p == '/' || *p == '=')
-      other++;
-    else
-      return 0; /* contains . / : etc -> path or url, leave it */
-    if (!(isdigit((unsigned char)*p) || (*p >= 'a' && *p <= 'f')))
-      hex = 0;
-  }
-  if (!dg)
-    return 0;
-  /* full git SHA1: pure lowercase hex, exactly 40 chars. Common in shell
-     history and not a secret. 64-hex stays redacted: too many real tokens
-     share that shape, and a scrubber errs toward redaction. */
-  if (hex && n == 40)
-    return 0;
-  if (n >= 40 && dg && (lo || up))
-    return 1;
-  return up && lo && dg && n >= 32;
-}
-
 static void scrub_token(const char *t, char *out, size_t cap) {
   /* KEY=VALUE with a sensitive-looking key */
   const char *eq = strchr(t, '=');
@@ -258,14 +409,9 @@ static void scrub_token(const char *t, char *out, size_t cap) {
         return;
       }
   }
-  for (int i = 0; KEY_PREFIX[i]; i++)
-    if (!strncmp(t, KEY_PREFIX[i], strlen(KEY_PREFIX[i])) &&
-        strlen(t) > strlen(KEY_PREFIX[i]) + 6) {
-      snprintf(out, cap, "<key:%s..>", KEY_PREFIX[i]);
-      return;
-    }
-  if (!strncmp(t, "eyJ", 3) && strlen(t) > 24) {
-    snprintf(out, cap, "<jwt>");
+  const char *pre = match_prefix(t);
+  if (pre) {
+    snprintf(out, cap, "<key:%s..>", pre);
     return;
   }
   const char *at = strchr(t, '@');
@@ -301,7 +447,7 @@ static void scrub_token(const char *t, char *out, size_t cap) {
     snprintf(out, cap, "<phone>");
     return;
   }
-  if (looks_blob(t)) {
+  if (match_entropy(t)) {
     snprintf(out, cap, "<secret:%zub>", strlen(t));
     return;
   }
@@ -410,11 +556,32 @@ static void build_skiplist(void) {
   }
 }
 
+/* a leading NAME=value word, as in `JS_PROVIDER=x js -p foo` */
+static int is_assignment(const char *w, size_t n) {
+  if (!n || !(isalpha((unsigned char)*w) || *w == '_'))
+    return 0;
+  for (size_t i = 1; i < n; i++) {
+    if (w[i] == '=')
+      return 1;
+    if (!(isalnum((unsigned char)w[i]) || w[i] == '_'))
+      return 0;
+  }
+  return 0;
+}
+
 static int skip_cmd(const char *cmd) {
-  while (*cmd == ' ' || *cmd == '\t')
-    cmd++;
+  for (;;) {
+    while (*cmd == ' ' || *cmd == '\t')
+      cmd++;
+    size_t w = 0;
+    while (cmd[w] && cmd[w] != ' ' && cmd[w] != '\t')
+      w++;
+    if (!is_assignment(cmd, w))
+      break;
+    cmd += w;
+  }
   size_t n = 0;
-  while (cmd[n] && cmd[n] != ' ')
+  while (cmd[n] && cmd[n] != ' ' && cmd[n] != '\t')
     n++;
   char first[128];
   if (n > sizeof first - 1)
@@ -530,6 +697,11 @@ static const char *pkgmgr(void) {
 }
 
 int main(void) {
+  const char *noenv = getenv("JS_NOENV");
+  if (noenv && (!strcasecmp(noenv, "true") || !strcasecmp(noenv, "on") ||
+                !strcasecmp(noenv, "yes") || !strcmp(noenv, "1")))
+    return 0;
+  load_patterns();
   setvbuf(stdout, malloc(1 << 16), _IOFBF, 1 << 16);
   char buf[1 << 16], b2[LINE], b3[LINE];
 
@@ -551,7 +723,7 @@ int main(void) {
   double up = 0;
   if (slurp("/proc/uptime", buf, sizeof buf))
     up = strtod(buf, NULL);
-  printf("### ENV %s | host=%s up=%dd%dh\n", ts, un.nodename, (int)(up / 86400),
+  printf("ENV %s host=%s up=%dd%dh\n", ts, un.nodename, (int)(up / 86400),
          (int)(up / 3600) % 24);
 
   /* ---- os ---- */
@@ -600,10 +772,19 @@ int main(void) {
       while (*p && *p != '\n' && i < sizeof cpumodel - 1)
         cpumodel[i++] = *p++;
       cpumodel[i] = 0;
-      /* trim marketing noise */
+      /* trim marketing noise: " with ...", " Processor", " 16-Core" */
       char *cut = strstr(cpumodel, " with ");
       if (cut)
         *cut = 0;
+      if ((cut = strstr(cpumodel, " Processor")))
+        *cut = 0;
+      if ((cut = strstr(cpumodel, "-Core"))) {
+        char *sp = cut;
+        while (sp > cpumodel && sp[-1] != ' ')
+          sp--;
+        if (sp > cpumodel && !cut[5])
+          sp[-1] = 0;
+      }
     }
   }
   long mt = -1, ma = -1;
@@ -613,15 +794,7 @@ int main(void) {
   }
   char load[64] = "?";
   if (slurp("/proc/loadavg", buf, sizeof buf)) {
-    sscanf(buf, "%63[^\n]", load);
-    char *third = load;
-    int sp = 0;
-    for (char *p = load; *p; p++)
-      if (*p == ' ' && ++sp == 3) {
-        *p = 0;
-        break;
-      }
-    (void)third;
+    sscanf(buf, "%63s", load); /* 1-minute average */
   }
   human((double)mt * 1024, b2, sizeof b2);
   human((double)ma * 1024, b3, sizeof b3);
@@ -636,9 +809,8 @@ int main(void) {
 
   /* ---- session ---- */
   /* js exports JS_SHELL: the shell its shell tool runs commands in
-     (shell.program), which need not be the operator's login $SHELL. */
-  const char *sh = getenv("JS_SHELL"), *term = getenv("TERM"),
-             *venv = getenv("VIRTUAL_ENV");
+     (SHELL_PROGRAM), which need not be the operator's login $SHELL. */
+  const char *sh = getenv("JS_SHELL"), *venv = getenv("VIRTUAL_ENV");
   if (!sh || !*sh)
     sh = getenv("SHELL");
   /* js exports JS_JAIL under `js -C DIR`: the directory the tools are kept in */
@@ -646,19 +818,9 @@ int main(void) {
   char jb[1024] = "";
   if (jail && *jail)
     tilde(jail, jb, sizeof jb);
-  int pathdirs = 0, envn = 0;
-  const char *P = getenv("PATH");
-  if (P)
-    for (const char *p = P; *p; p++)
-      if (*p == ':')
-        pathdirs++;
-  extern char **environ;
-  for (char **e = environ; *e; e++)
-    envn++;
   const char *jsmode = getenv("JS_MODE");
-  printf("user=%s shell=%s term=%s pkg=%s path=%d env=%d%s%s%s%s%s%s%s%s%s\n",
-         getenv("USER") ? getenv("USER") : "?", sh ? sh : "?",
-         term ? term : "-", pkgmgr(), pathdirs + 1, envn,
+  printf("user=%s shell=%s pkg=%s%s%s%s%s%s%s%s%s%s\n",
+         getenv("USER") ? getenv("USER") : "?", sh ? sh : "?", pkgmgr(),
          jsmode ? " mode=" : "", jsmode ? jsmode : "",
          jb[0] ? " confined=" : "", jb,
          venv ? " venv=" : "",
@@ -829,9 +991,23 @@ int main(void) {
       printf("git branch=%s", branch);
       if (upstream[0])
         printf(" <-%s", upstream);
-      if (ab[0])
+      if (ab[0] && strcmp(ab, "+0 -0"))
         printf(" %s", ab);
-      printf(" head=%s dirty=%dM/%dA/%dD/%d?", head, mod, add, del, unt);
+      /* last_commit carries the hash; head= only when there is none */
+      if (!logline[0])
+        printf(" head=%s", head);
+      if (mod || add || del || unt) {
+        printf(" dirty=");
+        if (mod)
+          printf("%dM", mod);
+        if (add)
+          printf("%dA", add);
+        if (del)
+          printf("%dD", del);
+        if (unt)
+          printf("%d?", unt);
+      } else
+        printf(" clean");
       if (cfl)
         printf(" CONFLICTS=%d", cfl);
       if (stg)
@@ -842,7 +1018,13 @@ int main(void) {
         printf(" unmerged=%s", unmerged);
       if (remote[0]) {
         scrub(remote, b2, sizeof b2);
-        printf(" remote=%s", b2);
+        char *r = b2;
+        if (!strncmp(r, "https://", 8))
+          r += 8;
+        size_t rl = strlen(r);
+        if (rl > 4 && !strcmp(r + rl - 4, ".git"))
+          r[rl - 4] = 0;
+        printf(" remote=%s", r);
       }
       /* in-progress operations are high-signal for an agent */
       char p[1536];
@@ -886,9 +1068,9 @@ int main(void) {
                                   "rustc",   "go",   "uv",     "just",
                                   "rg",      "jq",   "docker", "fd",
                                   NULL};
-    char fp[2048];
-    fp[0] = 0;
-    size_t fl = 0;
+    /* "v2;" is the rendered-line format; bumping it orphans old cache files */
+    char fp[2048] = "v2;";
+    size_t fl = strlen(fp);
     for (int i = 0; TOOLS[i]; i++) {
       /* search $PATH, not just the system bindirs: the version line below is
          produced by `command -v`, so anything it can find must be fingerprinted
@@ -908,7 +1090,11 @@ int main(void) {
       hash = hash * 33u + (unsigned char)*p;
 
     char cachedir[900], cachefile[1024];
-    snprintf(cachedir, sizeof cachedir, "%s/.js/cache", HOMEDIR);
+    const char *js_home = getenv("JS_HOME");
+    if (js_home && *js_home)
+      snprintf(cachedir, sizeof cachedir, "%s/cache", js_home);
+    else
+      snprintf(cachedir, sizeof cachedir, "%s/.js/cache", HOMEDIR);
     snprintf(cachefile, sizeof cachefile, "%s/envctx.tools.%lx", cachedir,
              hash);
 
@@ -928,7 +1114,6 @@ int main(void) {
       tools[0] = 0;
       if (t) {
         char line[256];
-        int col = 0;
         while (fgets(line, sizeof line, t)) {
           chomp(line);
           if (!line[0])
@@ -959,8 +1144,6 @@ int main(void) {
                                   (int)nl, line, j ? num : eq + 1);
           } else
             o += (size_t)snprintf(tools + o, sizeof tools - o, " %s", line);
-          if (++col % 6 == 0)
-            o += (size_t)snprintf(tools + o, sizeof tools - o, "\n     ");
           if (o >= sizeof tools - 80)
             break;
         }
@@ -987,22 +1170,23 @@ int main(void) {
   }
 
   /* ---- recent shell commands, scrubbed ---- */
-  {
+  /* ENVCTX_HIST=0 drops the whole block */
+  for (int once = 1; once; once = 0) {
     int want = 5;
     const char *hn = getenv("ENVCTX_HIST");
     if (hn) {
       want = atoi(hn);
-      if (want < 1)
-        want = 1;
+      if (want < 0)
+        want = 0;
       if (want > HIST_MAX)
         want = HIST_MAX;
     }
+    if (!want)
+      break;
     build_skiplist();
     struct hist h[HIST_MAX];
     int n = read_history(h, want);
-    printf("recent_shell(scrubbed, oldest first):\n");
-    if (!n)
-      printf("  (unavailable)\n");
+    printf("recent_shell(scrubbed, oldest first):%s\n", n ? "" : " -");
     for (int i = 0; i < n; i++) {
       scrub(h[i].cmd, b2, sizeof b2);
       char age[32] = "";
@@ -1010,32 +1194,25 @@ int main(void) {
         long dt = (long)now - h[i].ts;
         if (dt < 0)
           dt = 0;
-        if (dt < 3600)
-          snprintf(age, sizeof age, "%ldm", dt / 60);
+        if (dt < 60)
+          snprintf(age, sizeof age, "now ");
+        else if (dt < 3600)
+          snprintf(age, sizeof age, "-%ldm ", dt / 60);
         else if (dt < 86400)
-          snprintf(age, sizeof age, "%ldh", dt / 3600);
+          snprintf(age, sizeof age, "-%ldh ", dt / 3600);
         else
-          snprintf(age, sizeof age, "%ldd", dt / 86400);
+          snprintf(age, sizeof age, "-%ldd ", dt / 86400);
       }
-      printf("  %d%s%s%s %.180s%s\n", i + 1, age[0] ? " (-" : "", age,
-             age[0] ? ")" : "", b2, strlen(b2) > 180 ? ".." : "");
+      printf("  %s%.180s%s\n", age, b2, strlen(b2) > 180 ? ".." : "");
     }
   }
 
   /* ---- standing rules for the agent reading this context ---- */
-  /* js sets JS_MODE itself (repl or headless), so trust it rather than
-     guessing from the parent chain. Absent means envctx ran outside js. */
-  const char *jm = getenv("JS_MODE");
-  if (!jm || strcmp(jm, "repl"))
-    printf("rule: js is%s in one-shot mode (not interactive chat): "
-           "NEVER end the turn on a question — end on doing it.\n",
-           jm ? "" : " possibly");
   const char *jd = getenv("JS_JAIL");
   if (jd && *jd) {
     char jt[1024];
-    printf("rule: you are confined to %s (js -C): commands run in a jail where "
-           "the home directory is hidden and /tmp is private, and file tools "
-           "refuse paths outside %s and its bound paths.\n",
+    printf("rule: confined to %s (js -C): jailed commands, home hidden, /tmp "
+           "private; file tools refuse paths outside %s and its bound paths.\n",
            tilde(jd, jt, sizeof jt), jt);
   }
   return 0;

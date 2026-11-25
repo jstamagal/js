@@ -13,10 +13,12 @@
 
 set dotenv-load
 
-# Playwright publishes glibc Linux wheels but no musllinux wheels. Keep its
-# browser backend automatic everywhere it is installable without breaking the
-# rest of js on Alpine and other musl systems.
-browser-extra := `if ldd --version 2>&1 | grep -qi musl; then true; else printf '%s' '--extra browser'; fi`
+# Every install carries the kernel, vision and browser extras. Playwright
+# publishes no musllinux wheels, so a musl system goes without `browser`.
+# Termux gets the base packages only.
+termux := `if [ -n "${TERMUX_VERSION:-}" ]; then printf true; else case "${PREFIX:-}" in /data/*/com.termux/files/usr|/data/*/com.termux/files/usr/) printf true ;; *) printf false ;; esac; fi`
+musl := `if ldd --version 2>&1 | grep -qi musl; then printf true; else printf false; fi`
+extras := if termux == "true" { "" } else if musl == "true" { "--extra kernel --extra vision" } else { "--extra kernel --extra vision --extra browser" }
 
 # show all recipes (default when `just` is called with no argument)
 default:
@@ -29,7 +31,7 @@ default:
 # run js — no args opens the REPL; any js flags/args pass through.
 [positional-arguments]
 run *args:
-    uv run {{ browser-extra }} js "$@"
+    uv run {{ extras }} js "$@"
 
 # Commit workflow is deliberately plain: run `js --commit` from repo root.
 # Do not pass -p, a target path, or a message; the commit agent inspects/stages/messages.
@@ -37,23 +39,22 @@ run *args:
 # just parses them as more recipes to run.)
 # run the commit agent (`js --commit`) — takes no arguments.
 commit:
-    uv run {{ browser-extra }} js --commit
+    uv run {{ extras }} js --commit
 
 # ── env / deps ───────────────────────────────────────────────────────────────
 
-# sync the project env from uv.lock, including the test extra. idempotent —
-# run after a fresh clone, after pulling changed deps, or any time the env
-# feels off. Also fetches the Chromium build, since a synced env whose
-# browser_probe cannot launch is not actually synced.
+# sync the project env from uv.lock, including the test extra. Also fetches the
+# Chromium build and js's CLI binaries, since a synced env whose tools cannot
+# run is not actually synced.
 # rebuild the env from uv.lock — the real fix for a broken venv.
 sync:
-    uv sync --extra test {{ browser-extra }}
+    uv sync --inexact --extra test {{ extras }}
     just install-browser
     just install-tool-binaries
 
 # drop into a shell with the project env active (uv owns the venv).
 shell:
-    uv run {{ browser-extra }} bash
+    uv run {{ extras }} bash
 
 # set js up on this box with one command; a rerun asks only about what is
 # still missing. `js` on PATH is a launcher in ~/.local/bin that brings this
@@ -81,12 +82,18 @@ install:
         exit 1
     fi
     repo="$(pwd -P)"
-    uv_bin="$(command -v uv)"
     bin="$HOME/.local/bin"
     launcher="$bin/js"
+    wiki="$bin/wiki"
     marker="# js launcher written by just install"
+    if [ -e "$wiki" ] || [ -L "$wiki" ]; then
+        if [ ! -L "$wiki" ] || [ "$(readlink "$wiki")" != "$repo/tools/wiki" ]; then
+            echo "!! $wiki is not this checkout's wiki symlink — remove it and rerun" >&2
+            exit 1
+        fi
+    fi
     # large wheels over a flaky link: retry the transfer before giving up.
-    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --inexact {{ browser-extra }}
+    UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --no-dev --inexact {{ extras }}
     # the uv tool install this recipe used to make; its shim sits where the
     # launcher goes.
     if uv tool list 2>/dev/null | grep -q '^js '; then
@@ -102,14 +109,23 @@ install:
     #!/bin/sh
     $marker in $repo.
     # Brings the checkout's venv in line with uv.lock, then runs its js.
-    "$uv_bin" sync --quiet --inexact --project "$repo" {{ browser-extra }} ||
+    # uv is looked up on PATH on every start.
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "js launcher: uv not found on PATH" >&2
+        exit 1
+    fi
+    uv sync --quiet --no-dev --inexact --project "$repo" {{ extras }} ||
         echo "js launcher: uv sync failed; starting the venv as it stands" >&2
     exec "$repo/.venv/bin/js" "\$@"
     EOF
     chmod 755 "$tmp"
     mv -f "$tmp" "$launcher"
-    ln -sf "$repo/tools/wiki" "$bin/wiki"
-    just install-tool-binaries
+    ln -sf "$repo/tools/wiki" "$wiki"
+    # Termux has no verified obscura release: there the installer
+    # names what it could not provide and the install goes on.
+    if ! just install-tool-binaries; then
+        [ "{{ termux }}" = true ] || exit 1
+    fi
     just install-browser
     # put the managed binaries on the operator's PATH too. js itself resolves
     # them by absolute path, but fd/bat/fzf are downloaded for a human and for
@@ -159,29 +175,28 @@ install:
     fi
     "$repo/.venv/bin/python" -m js.install
 
-# Download js's pinned, checksummed subprocess binaries into tools/bin. The
-# managed aria2c performs transfers after urllib bootstraps it.
-# download js's pinned, checksummed CLI binaries into tools/bin.
+# Install CLI binaries into tools/bin: native pkg tools on Termux, otherwise
+# pinned, checksummed downloads bootstrapped by managed aria2c.
 install-tool-binaries:
-    uv run {{ browser-extra }} python -m js.tool_binaries
+    uv run {{ extras }} python -m js.tool_binaries
 
-# Provision managed binaries even when system copies exist; never use a package manager.
+# Provision managed binaries, using Termux packages on Android.
 ensure-tools: install-tool-binaries
 
 # The `browser` extra installs the playwright PYTHON package; the browser
 # itself is a separate ~114MB download into ~/.cache/ms-playwright. Without it
 # browser_probe fails at runtime with "Executable doesn't exist" even though
 # the import succeeds. Idempotent: re-running with the browser present exits
-# immediately. Skipped on musl, where the extra is not installed at all.
+# immediately. Skipped on musl and Termux, where the extra is not installed.
 # download the Chromium build browser_probe drives.
 install-browser:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "{{ browser-extra }}" ]; then
-        echo "musl system: browser extra not installed, skipping chromium download"
-        exit 0
-    fi
-    uv run {{ browser-extra }} python -m playwright install chromium
+    case " {{ extras }} " in
+        *" browser "*) ;;
+        *) echo "browser extra not installed on this system, skipping the Chromium download"; exit 0 ;;
+    esac
+    uv run {{ extras }} python -m playwright install chromium
 
 # remove the js launcher and the wiki symlink `just install` made, and a uv
 # tool install of js from before the launcher.
@@ -194,7 +209,10 @@ uninstall:
     if uv tool list 2>/dev/null | grep -q '^js '; then
         uv tool uninstall js
     fi
-    rm -f "$HOME/.local/bin/wiki"
+    wiki="$HOME/.local/bin/wiki"
+    if [ -L "$wiki" ] && [ "$(readlink "$wiki")" = "$(pwd -P)/tools/wiki" ]; then
+        rm -f "$wiki"
+    fi
 
 # ── testing ─────────────────────────────────────────────────────────────────
 
@@ -203,48 +221,62 @@ uninstall:
 # and e2e (live end-to-end paths).
 # offline suite — skips the live markers. Cached per tree state: an unchanged
 # tree replays the last run. `just test --force` reruns.
+[positional-arguments]
 test *args:
-    scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cache_args=()
+    pytest_args=()
+    for arg in "$@"; do
+        if [[ "$arg" == "--force" ]]; then
+            cache_args=(--force)
+        else
+            pytest_args+=("$arg")
+        fi
+    done
+    scripts/cached-test.sh "${cache_args[@]}" uv run --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal "${pytest_args[@]}"
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
+[positional-arguments]
 test-file file:
-    uv run {{ browser-extra }} --extra test pytest -q {{ file }}
+    uv run --extra test pytest -q "$1"
 
 # run tests by pytest marker. e.g. just test-mark "not ai_provider"
+[positional-arguments]
 test-mark marker:
-    uv run {{ browser-extra }} --extra test pytest -q -m "{{ marker }}"
+    uv run --extra test pytest -q -m "$1"
 
 # live ai_provider suite — needs configured provider creds or a local
 # OpenAI-compatible endpoint. e.g. AI_GATEWAY_API_KEY=... just test-live
 # live ai_provider suite — needs provider creds or a local endpoint.
 test-live:
-    uv run {{ browser-extra }} --extra test pytest -q -m "ai_provider or live" tests/test_real_integrations.py tests/test_browse_obscura.py tests/test_browse_http_status.py tests/test_browse_delayed.py
+    uv run --extra test pytest -q -m "ai_provider or live" tests/test_real_integrations.py tests/test_browse_obscura.py tests/test_browse_http_status.py tests/test_browse_delayed.py
 
 # live vision suite — needs ollama + a pulled vision model. default gemma4:e4b,
 # override with JS_VISION_TEST_MODEL=<tag>. e.g. just test-vision
 # live vision suite — needs ollama with a vision model pulled.
 test-vision:
-    uv run {{ browser-extra }} --extra test pytest -q -m vision tests/test_real_integrations.py
+    uv run --extra test pytest -q -m vision tests/test_real_integrations.py
 
 # focused suites — mirror the groups in docs/testing-and-development.md
 # tool descriptions + per-agent tool surface
 test-tools:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
+    uv run --extra test pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
 # runtime loop: offline integration, tool runtime smoke, and the turn_* modules
 test-runtime:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py tests/test_turn_stream.py tests/test_turn_surface.py tests/test_turn_budget.py tests/test_turn_call.py
+    uv run --extra test pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py tests/test_turn_stream.py tests/test_turn_surface.py tests/test_turn_budget.py tests/test_turn_call.py
 # subagent isolation
 test-subagents:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_subagent_isolation.py
+    uv run --extra test pytest -q tests/test_subagent_isolation.py
 # -p prompt mode + REPL harness
 test-cli:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_cli_prompt_mode.py tests/test_repl_harness.py
+    uv run --extra test pytest -q tests/test_cli_prompt_mode.py tests/test_repl_harness.py
 # memory + config harness
 test-memory:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_memory_config_harness.py
+    uv run --extra test pytest -q tests/test_memory_config_harness.py
 # wiki agents' deterministic native tools
 test-wiki:
-    uv run {{ browser-extra }} --extra test pytest -q tests/test_wiki_native_tools.py
+    uv run --extra test pytest -q tests/test_wiki_native_tools.py
 
 # ── quality ─────────────────────────────────────────────────────────────────
 # ruff lives in the dev dependency-group, so `uv sync` installs it and it's on
@@ -261,21 +293,21 @@ deps-stale-days := "14"
 
 # ruff check: errors + pyflakes (defaults) + pyupgrade.
 lint:
-    uv run {{ browser-extra }} ruff check .
+    uv run {{ extras }} ruff check .
 
 # apply ruff's safe auto-fixes (dequote annotations, deprecated-import updates,
 # lru_cache->cache, etc.). does NOT remove unused imports (those may be
 # re-exports — needs --unsafe-fixes + your judgment) and does NOT reformat.
 # apply ruff's safe auto-fixes only — no import removal, no reformat.
 fix:
-    uv run {{ browser-extra }} ruff check --fix .
+    uv run {{ extras }} ruff check --fix .
 
 # ruff format in place. one-time full-repo adoption: rewrites ~110 files and
 # collapses intentional comment alignment — run deliberately, review the diff,
 # only if you want ruff's formatting.
 # ruff format the whole repo in place — deliberate; review the diff.
 format:
-    uv run {{ browser-extra }} ruff format .
+    uv run {{ extras }} ruff format .
 
 # fail once uv.lock has gone deps-stale-days without changing.
 deps-fresh:
@@ -303,21 +335,24 @@ check: lint deps-fresh
 
 # per-tool byte cost of model-facing descriptions and parameter schemas.
 # forwards args: just tool-bytes --surface shell
+[positional-arguments]
 tool-bytes *args:
-    uv run {{ browser-extra }} python -m js.tooldiag {{ args }}
+    uv run {{ extras }} python -m js.tooldiag "$@"
 
 # move agents from 00-tools.yaml / 00*.md frontmatter to agent.yaml and drop
 # tools entries that match no tool, also from existing agent.yaml files. dry
 # run unless --apply; --show prints each agent.yaml. default root: the global
 # agents dir. just migrate-agents --apply ~/.js/agents .js/agents
+[positional-arguments]
 migrate-agents *args:
-    uv run {{ browser-extra }} python scripts/migrate_agents.py {{ args }}
+    uv run {{ extras }} python scripts/migrate_agents.py "$@"
 
 # move the old js config, data and inbox directories into ~/.js, convert the
 # moved agents and file the old sessions by start directory. dry run unless
 # --apply. js does this once by itself on first start.
+[positional-arguments]
 migrate-home *args:
-    uv run python -m js.home {{ args }}
+    uv run python -m js.home "$@"
 
 # ── build / lockfile / housekeeping ─────────────────────────────────────────
 
@@ -347,7 +382,7 @@ tools-outdated:
 tools-upgrade:
     uv run python scripts/refresh_tool_releases.py
 
-# show what moved upstream in each built-in skill (js/skills/*) since the commit
+# show what moved upstream in each built-in skill (defaults/skills/*) since the commit
 # its SOURCE: line names. upstream is a git checkout of that repo.
 #   just skills-diff                 # ~/matt-skills
 #   just skills-diff /path/to/skills
@@ -360,7 +395,7 @@ skills-diff upstream=(env_var('HOME') / "matt-skills"):
         exit 1
     fi
     echo "upstream: $up at $(git -C "$up" rev-parse --short HEAD)"
-    for skill_md in js/skills/*/SKILL.md; do
+    for skill_md in defaults/skills/*/SKILL.md; do
         name=$(basename "$(dirname "$skill_md")")
         source=$(sed -n 's/^SOURCE: //p' "$skill_md" | head -n 1)
         if [ -z "$source" ]; then
@@ -398,17 +433,21 @@ toolbench-image:
     docker build -t js-toolbench:latest -f bench/toolbench/Dockerfile bench/toolbench
 
 # mine and print the tasks each suite repo yields; no model, no sandbox
+[positional-arguments]
 toolbench-mine *args:
-    uv run python bench/toolbench/run.py --mine {{ args }}
+    uv run python bench/toolbench/run.py --mine "$@"
 
 # prove the plumbing: RepoRacer's fake agents through the sandbox on one task
+[positional-arguments]
 toolbench-smoke *args:
-    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click {{ args }}
+    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click "$@"
 
 # the A/B: default agents (slim vs stock js) on every suite repo
+[positional-arguments]
 toolbench *args:
-    uv run python bench/toolbench/run.py {{ args }}
+    uv run python bench/toolbench/run.py "$@"
 
 # rebuild the summary of a finished run: just toolbench-report bench/toolbench/results/<stamp>
+[positional-arguments]
 toolbench-report dir:
-    uv run python bench/toolbench/run.py --report {{ dir }}
+    uv run python bench/toolbench/run.py --report "$1"

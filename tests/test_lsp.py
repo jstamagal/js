@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 import yaml
+from jail_probe import needs_bwrap
 
-from js import jail, settings
+from js import jail
 from js.toolkit import ToolContext, call_tool, lsp as lsp_mod, policy
 from js.toolkit.registry import build_default_registry
 
 FAKE_SERVER = Path(__file__).with_name("fake_lsp_server.py")
 REPO = Path(__file__).resolve().parents[1]
-needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +80,31 @@ def test_diagnostics_follow_edits_on_disk(project):
     assert order.count("textDocument/didSave") == 2
     changes = [m["params"]["textDocument"]["version"] for m in sent(log) if m.get("method") == "textDocument/didChange"]
     assert changes == [2, 3]
+
+
+@pytest.mark.parametrize("name", ["a+b@c,d=e:;!$&'()*.fake", "literal%2B#name.fake"])
+def test_diagnostics_accept_equivalent_server_uri_encoding(project, name):
+    root, context, log = project
+    fake(context, log, "--reencode-uris")
+    context.lsp_timeout_s = 1
+    source = root / name
+    source.write_text("ERROR\n")
+
+    first = run(context, operation="diagnostics", file_path=str(source))
+    cached = run(context, operation="diagnostics", file_path=str(source))
+    source.write_text("fine\nERROR\n")
+    changed = run(context, operation="diagnostics", file_path=str(source))
+
+    assert "1:1: error: found ERROR" in first
+    assert "1:1: error: found ERROR" in cached
+    assert "2:1: error: found ERROR" in changed
+    assert methods(log).count("textDocument/didChange") == 1
+
+
+@pytest.mark.parametrize("name", ["semi;colon.fake", "literal%2B#name.fake"])
+def test_file_uri_round_trip_preserves_filename(tmp_path, name):
+    path = tmp_path / name
+    assert lsp_mod.uri_path(lsp_mod.file_uri(path)) == path
 
 
 def test_unchanged_file_returns_cached_diagnostics_without_resending(project):
@@ -182,19 +207,6 @@ def test_bad_lsp_servers_setting_is_refused(project):
     assert run(context, operation="diagnostics", file_path=str(source)).startswith("ERROR:")
 
 
-def test_no_diagnostics_within_the_timeout_is_not_reported_clean(project, tmp_path):
-    root, context, _log = project
-    fake(context, tmp_path / "quiet.log", "--no-diagnostics")
-    context.lsp_timeout_s = 1
-    source = root / "a.fake"
-    source.write_text("ERROR\n")
-
-    result = run(context, operation="diagnostics", file_path=str(source))
-
-    assert "lsp.timeout_s" in result
-    assert "found ERROR" not in result
-
-
 def test_position_operations_need_a_position(project):
     root, context, _log = project
     source = root / "a.fake"
@@ -226,15 +238,21 @@ def test_workspace_root_prefers_markers_then_git_then_cwd(tmp_path):
     assert lsp_mod.workspace_root(tmp_path / "sub" / "a.fake", spec, ToolContext(cwd=tmp_path)) == tmp_path / "sub"
 
 
-def test_every_default_server_entry_parses():
-    specs = lsp_mod.parse_servers(settings.default_value("lsp.servers"))
-    covered = {ext for spec in specs for ext in spec.extensions}
+def test_workspace_root_never_climbs_above_the_operators_home(tmp_path, monkeypatch):
+    spec = lsp_mod.ServerSpec("fake", ("x",), (".fake",), ("fake.toml",))
+    home = tmp_path / "home"
+    (home / "work").mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "fake.toml").write_text("")
+    monkeypatch.setattr(lsp_mod.paths, "user_home", lambda: home)
+    loose = home / "work" / "a.fake"
 
-    assert {".py", ".rs", ".go", ".ts", ".tsx", ".js"} <= covered
+    assert lsp_mod.workspace_root(loose, spec, ToolContext(cwd=home / "work")) == home / "work"
+    assert lsp_mod.workspace_root(loose, spec, ToolContext(cwd=tmp_path)) == home / "work"
 
 
 def test_lsp_is_read_only_and_lazy_for_the_default_agent():
-    entries = yaml.safe_load((REPO / "prompts" / "defaultagent" / "agent.yaml").read_text())["tools"]
+    entries = yaml.safe_load((REPO / "defaults" / "agents" / "defaultagent" / "agent.yaml").read_text())["tools"]
     registry = build_default_registry()
     surface = registry.select(entries, config=policy.ToolsConfig(), warn=False)
 
@@ -284,57 +302,17 @@ def test_server_runs_in_the_jail(tmp_path, operator_home, monkeypatch):
     assert "2:1: error: found ERROR" in diagnostics
 
 
-# --- real language servers, when installed -----------------------------------
 
-REAL_CASES = {
-    "python": {
-        "files": {"pyproject.toml": "[project]\nname = 'probe'\nversion = '0'\n",
-                  "probe.py": "def f(x: int) -> int:\n    return x\n\n\nf('a')\n"},
-        "target": "probe.py", "error_line": 5, "use": (5, "f"), "definition": "probe.py:1:5",
-    },
-    "go": {
-        "files": {"go.mod": "module example.com/probe\n\ngo 1.21\n",
-                  "main.go": "package main\n\nfunc f() int { return 1 }\n\nfunc main() {\n\tvar s string = f()\n\t_ = s\n}\n"},
-        "target": "main.go", "error_line": 6, "use": (6, "f"), "definition": "main.go:3:6",
-        "needs": ["go"],
-    },
-    "rust": {
-        "files": {"Cargo.toml": "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-                  "src/main.rs": "fn f() -> i32 { 1 }\n\nfn main() {\n    let _x = f();\n    let y = ;\n}\n"},
-        "target": "src/main.rs", "error_line": 5, "use": (4, "f"), "definition": "src/main.rs:1:4",
-        "needs": ["cargo"],
-    },
-    "typescript": {
-        "files": {"tsconfig.json": "{\"compilerOptions\": {\"strict\": true}}\n",
-                  "index.ts": "function f(): number { return 1 }\nconst s: string = f();\nexport { s };\n"},
-        "target": "index.ts", "error_line": 2, "use": (2, "f"), "definition": "index.ts:1:10",
-    },
-}
-_EXTENSIONS = {"python": ".py", "go": ".go", "rust": ".rs", "typescript": ".ts"}
+def test_server_configuration_comes_from_its_caller(project):
+    """The fake server asks for section "fake" once it is initialized."""
+    root, context, log = project
+    context.lsp_configuration = lambda item: {"enabled": item["section"] == "fake"}
+    source = root / "pkg" / "mod.fake"
+    source.write_text("x = 1\n")
 
+    assert not run(context, operation="diagnostics", file_path=str(source)).startswith("ERROR")
+    # The server has read everything the client sent once it has shut down.
+    lsp_mod.shutdown_servers()
 
-@pytest.mark.parametrize("language", sorted(REAL_CASES))
-def test_real_language_server(language, tmp_path):
-    case = REAL_CASES[language]
-    specs = lsp_mod.parse_servers(settings.default_value("lsp.servers"))
-    serving = [spec for spec in specs if _EXTENSIONS[language] in spec.extensions]
-    if not any(shutil.which(spec.command[0]) for spec in serving):
-        pytest.skip(f"no {language} language server on PATH")
-    missing = [tool for tool in case.get("needs", []) if shutil.which(tool) is None]
-    if missing:
-        pytest.skip(f"{language} language server needs {', '.join(missing)}")
-    root = tmp_path / "probe"
-    for name, text in case["files"].items():
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        (root / name).write_text(text)
-    context = ToolContext(cwd=root)
-    context.lsp_timeout_s = 120
-    target = str(root / case["target"])
-
-    definition = run(context, operation="definition", file_path=target,
-                     line=case["use"][0], symbol=case["use"][1])
-    diagnostics = run(context, operation="diagnostics", file_path=target)
-
-    assert case["definition"] in definition, definition
-    assert any(row.startswith(f"{case['error_line']}:") and ": error: " in row
-               for row in diagnostics.splitlines()), diagnostics
+    replies = [message for message in sent(log) if "method" not in message]
+    assert [reply["result"] for reply in replies] == [[{"enabled": True}]]

@@ -8,6 +8,7 @@ dies with the turn when ^C cancels it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import threading
 import time
@@ -16,15 +17,14 @@ from dataclasses import replace
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import run_async, thread_event
 
 from js import cli, runtime
 from js.config import Config, from_env
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext
-from js.toolkit import process_net
+from js.toolkit import ToolContext, shell
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
-from repl_driver import run_async
 
 
 def _cfg(tmp_path):
@@ -111,8 +111,7 @@ def test_second_line_is_processed_while_a_tool_runs(monkeypatch, tmp_path):
 
     async def script(on_line):
         await on_line("first")
-        while not started.is_set():
-            await asyncio.sleep(0.01)
+        await thread_event(started, "the turn to reach the nap tool")
         await asyncio.wait_for(on_line("second"), timeout=10)
         seen["tool_finished_before_second_line"] = finished.is_set()
         release.set()
@@ -137,7 +136,7 @@ def test_shell_command_does_not_read_the_operators_terminal(tmp_path):
     os.dup2(read_end, 0)
     try:
         started = time.monotonic()
-        out = process_net.shell("cat", timeout=5, context=ToolContext(cwd=tmp_path))
+        out = shell.shell("cat", timeout=5, context=ToolContext(cwd=tmp_path))
         elapsed = time.monotonic() - started
     finally:
         os.dup2(saved, 0)
@@ -153,15 +152,28 @@ def test_shell_command_does_not_read_the_operators_terminal(tmp_path):
         os.close(write_end)
 
 
-def test_cancelling_a_turn_kills_the_running_shell_command(monkeypatch, tmp_path):
+@pytest.mark.parametrize("late_register", [False, True])
+def test_cancelling_a_turn_kills_the_running_shell_command(monkeypatch, tmp_path, late_register):
     marker = tmp_path / "pid"
     command = f"echo $$ > {marker}; exec sleep 60"
+    if late_register:
+        # The cancel lands after the command started but before its call
+        # registered it as killable: under load that gap is real.
+        registered = shell.blocking_command
+
+        @contextlib.contextmanager
+        def late(context, command, process):
+            time.sleep(0.5)
+            with registered(context, command, process):
+                yield
+
+        monkeypatch.setattr(shell, "blocking_command", late)
 
     async def model(**kwargs):
         return _call("run", f'{{"command": "{command}", "timeout": 60}}', "call_sleep")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
-    shell_tool = next(tool for tool in process_net.tools() if tool.name == "shell")
+    shell_tool = next(tool for tool in shell.tools() if tool.name == "shell")
     # Published under its own name so the turn surface does not defer it.
     shell_only = ToolRegistry(tools=(replace(shell_tool, name="run"),), aliases={})
     ctx = ToolContext(cwd=tmp_path)

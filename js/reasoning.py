@@ -1,15 +1,18 @@
-"""The reasoning knob: one js effort dial, mapped to what each model accepts.
+"""The effort setting: one word, sent as typed, translated where js knows the model.
 
-js exposes a single thinking-effort knob with a seven-stop ladder:
+`EFFORT` (`-r`) takes any word and every request carries it. When the model
+name matches a family below and the word is on the effort ladder
 
     none < minimal < low < medium < high < xhigh < max
 
-No endpoint accepts every stop, and the stops a model serves are an API
-contract that models.dev does not encode — gateways and direct vendor
-endpoints disagree (opencode-go's gateway takes ``max`` on glm; Xiaomi's
-direct endpoint 400s on anything outside ``low|medium|high``). So rather than
-forward a stop a model rejects, treat the request as a *dial* and snap it to
-the nearest stop that endpoint actually serves.
+(``off`` is ``none``), the word is snapped to the nearest stop that family
+serves. Any other word, or a model no table names, gets the word verbatim and
+the endpoint answers for it. The banner shows what was sent.
+
+Sending the word as typed is deliberate, not a bug: custom chat templates
+define their own levels, so js never filters or maps an unknown word. An
+endpoint that rejects the word (HTTP 400 for `off`, `default`, ...) is the
+expected result.
 
 The supported sets below are ground-truthed by live probe (2026-06-30) against
 the endpoints js targets, not vendor docs:
@@ -18,11 +21,6 @@ the endpoints js targets, not vendor docs:
     kimi  (moonshot/opencode)  minimal, low, medium, high        (none/xhigh/max 400)
     glm   (zhipu/opencode-go)  none, low, medium, high, xhigh, max
     deepseek                   low, medium, high, xhigh, max     (none/minimal 400)
-    codex (gpt-5.x Responses)  minimal, low, medium, high, xhigh
-
-A model family absent from the table is left untouched (passthrough): the
-server either self-normalizes (deepseek-direct, glm) or ignores the knob
-(minimax/kimi-instruct), so the endpoint stays the single source of truth.
 """
 
 from __future__ import annotations
@@ -30,10 +28,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from . import settings as _settings
+
 EFFORT_LADDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _RANK: dict[str, int] = {name: i for i, name in enumerate(EFFORT_LADDER)}
-
-CODEX_EFFORTS: frozenset[str] = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 # Ordered most-specific-first so e.g. "kimi" wins before a looser match.
 _FAMILY_EFFORTS: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
@@ -41,6 +39,9 @@ _FAMILY_EFFORTS: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
     (("kimi",), frozenset({"minimal", "low", "medium", "high"})),
     (("glm",), frozenset({"none", "low", "medium", "high", "xhigh", "max"})),
     (("deepseek",), frozenset({"low", "medium", "high", "xhigh", "max"})),
+    # MiniMax text-generation guide: MiniMax-M3.1-Flash takes low..max and
+    # always thinks; "none" is a 400.
+    (("minimax-m3.1-flash",), frozenset({"low", "medium", "high", "xhigh", "max"})),
 )
 
 
@@ -85,35 +86,38 @@ def snap_effort(effort: str | None, allowed: frozenset[str] | None) -> str | Non
     return min(allowed, key=lambda stop: (abs(_RANK[stop] - target), _RANK[stop]))
 
 
+def ladder_stop(effort: str | None) -> str | None:
+    """The ladder stop ``effort`` names (``off`` is ``none``), or None for a
+    word that is not on the ladder."""
+    if effort is None:
+        return None
+    word = effort.strip().lower()
+    word = "none" if word == "off" else word
+    return word if word in _RANK else None
+
+
+def translate_effort(effort: str, allowed: frozenset[str] | None) -> str:
+    """The word to send for ``effort`` to a model whose family serves
+    ``allowed``: a ladder word snapped to its nearest served stop, any other
+    word (or any word when ``allowed`` is None) as typed."""
+    stop = ladder_stop(effort)
+    if allowed is None or stop is None:
+        return effort
+    return snap_effort(stop, allowed) or effort
+
+
 # --- The Anthropic Messages wire -------------------------------------------
 #
 # The anthropic SDK provider (api.anthropic.com, and every provider or login
-# whose sdk is anthropic) takes thinking in one of two request shapes, chosen by
-# model (Anthropic model docs, 2026-09):
-#
-#   adaptive   Claude 4.6 and later, Fable, Mythos. ``thinking`` is
-#              ``{"type": "adaptive"}`` and depth is ``output_config.effort``;
-#              ``budget_tokens`` is a 400 on 4.7 and later.
-#   budget     Every other model on the wire: Claude 4.5 and earlier, and the
-#              non-Claude models behind Anthropic-compatible endpoints (MiniMax,
-#              opencode-go). ``thinking`` is ``{"type": "enabled",
-#              "budget_tokens": N}`` with N below ``max_tokens``.
+# whose sdk is anthropic) carries the effort as ``output_config.effort``.
+# Every Claude model takes ``thinking`` as ``{"type": "adaptive"}`` with that
+# effort, and ``off`` as thinking disabled (Anthropic model docs, 2026-09).
+# Every other model on the wire gets the effort word as typed. ``thinking``
+# carries a token budget only when `THINKING_BUDGET` sets one.
 
-ANTHROPIC_THINKING_BUDGETS: dict[str, int] = {
-    "minimal": 1024,
-    "low": 2048,
-    "medium": 8192,
-    "high": 16384,
-    "xhigh": 24576,
-    "max": 32000,
-}
-# The API's smallest budget, and the tokens a budget always leaves for the answer.
-ANTHROPIC_MIN_BUDGET = 1024
-ANTHROPIC_ANSWER_ROOM = 1024
-# max_tokens above the budget when the model's output cap is unknown.
-ANTHROPIC_UNKNOWN_CAP_ANSWER = 8192
-
-_CLAUDE_VERSION = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d{1,2}))?(?!\d)")
+# claude-opus-5-5, claude-fable-5-2, claude-6, claude-sonnet-6.1-high: the
+# version after `claude-` and an optional family word.
+_CLAUDE_VERSION = re.compile(r"claude-(?:[a-z]+-)?(\d+)(?:[-.](\d{1,2}))?(?!\d)")
 _ADAPTIVE_4_6_EFFORTS = frozenset({"low", "medium", "high", "max"})
 _ADAPTIVE_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
@@ -124,23 +128,20 @@ class AnthropicThinking:
 
     thinking: dict | None       # the request's ``thinking`` object, or None to omit it
     effort: str | None          # ``output_config.effort``, or None to omit it
-    max_tokens: int | None      # ``max_tokens`` the request needs, or None to keep the caller's
 
 
 def _claude_version(name: str) -> tuple[int, int] | None:
     match = _CLAUDE_VERSION.search(name)
     if match is None:
         return None
-    return int(match.group(2)), int(match.group(3) or 0)
+    return int(match.group(1)), int(match.group(2) or 0)
 
 
 def anthropic_adaptive(model_name: str) -> bool:
-    """True when the model takes adaptive thinking with an effort level."""
+    """True when the model takes adaptive thinking with an effort level:
+    every Claude model, whatever provider prefix it carries."""
     name = model_name.lower()
-    if "fable" in name or "mythos" in name:
-        return True
-    version = _claude_version(name)
-    return version is not None and version >= (4, 6)
+    return "claude" in name or "fable" in name or "mythos" in name
 
 
 def _anthropic_rejects_disabled(name: str) -> bool:
@@ -151,49 +152,64 @@ def _anthropic_rejects_disabled(name: str) -> bool:
     return version is not None and version >= (5, 5)
 
 
-def anthropic_thinking(model_name: str, effort: str | None,
-                       max_output_tokens: int | None,
-                       budget: int | None = None) -> AnthropicThinking | None:
-    """The thinking fields for ``effort`` on this model, or None to send none.
+def anthropic_thinking(model_name: str, effort: str | None, budget: int | None = None,
+                       *, settings: dict | None = None) -> AnthropicThinking | None:
+    """The thinking fields for ``effort`` on this model, or None when no
+    effort is set. ``budget`` (`THINKING_BUDGET`) makes ``thinking`` a
+    budget of that many tokens."""
+    # settings reads EFFORT_LADDER from this module as it loads, so this
+    # module reads settings only when called.
 
-    ``budget`` (``model.thinking_budget``) replaces the effort's budget on the
-    models that take one."""
-    if effort is None or effort not in _RANK:
+    if effort is None:
         return None
     name = model_name.lower()
-    if anthropic_adaptive(name):
-        if effort == "none":
-            if _anthropic_rejects_disabled(name):
-                return AnthropicThinking(thinking=None, effort="low", max_tokens=None)
-            return AnthropicThinking(thinking={"type": "disabled"}, effort=None, max_tokens=None)
-        version = _claude_version(name)
-        allowed = _ADAPTIVE_4_6_EFFORTS if version == (4, 6) else _ADAPTIVE_EFFORTS
-        return AnthropicThinking(
-            thinking={"type": "adaptive", "display": "summarized"},
-            effort=snap_effort(effort, allowed),
-            max_tokens=None,
-        )
-    if effort == "none":
+    budgeted = {"type": "enabled", "budget_tokens": budget} if budget else None
+    if not anthropic_adaptive(name):
+        return AnthropicThinking(thinking=budgeted, effort=effort)
+    if ladder_stop(effort) == "none":
+        if _anthropic_rejects_disabled(name):
+            return AnthropicThinking(thinking=None, effort=_settings.knob(settings, "ANTHROPIC_REQUIRED_EFFORT"))
+        return AnthropicThinking(thinking={"type": "disabled"}, effort=None)
+    allowed = _ADAPTIVE_4_6_EFFORTS if _claude_version(name) == (4, 6) else _ADAPTIVE_EFFORTS
+    thinking = budgeted or {"type": "adaptive", "display": _settings.knob(settings, "ANTHROPIC_THINKING_DISPLAY")}
+    return AnthropicThinking(thinking=thinking, effort=translate_effort(effort, allowed))
+
+
+# --- MiniMax's own Anthropic-compatible endpoint ----------------------------
+#
+# The `minimax` provider (platform.minimax.io/docs/api-reference/text-anthropic-api):
+# MiniMax-M3.1-Flash always thinks, with depth in ``output_config.effort``
+# (low..max) and ``thinking: disabled`` or effort ``none`` a 400. MiniMax-M3
+# does not think unless ``thinking`` is ``{"type": "adaptive"}``, and
+# ``disabled`` keeps it off. Other models get the effort word as typed.
+
+_MINIMAX_M3 = re.compile(r"minimax-m3(?![.\d])")
+
+
+def minimax_thinking(model_name: str, effort: str | None,
+                     budget: int | None = None) -> AnthropicThinking | None:
+    """The thinking fields for ``effort`` on the minimax provider, or None
+    when no effort is set. ``budget`` (`THINKING_BUDGET`) makes ``thinking``
+    a budget of that many tokens."""
+    if effort is None:
         return None
-    budget = max(budget, ANTHROPIC_MIN_BUDGET) if budget else ANTHROPIC_THINKING_BUDGETS[effort]
-    if max_output_tokens is None:
-        max_tokens = budget + ANTHROPIC_UNKNOWN_CAP_ANSWER
-    else:
-        max_tokens = max_output_tokens
-        budget = min(budget, max_output_tokens - ANTHROPIC_ANSWER_ROOM)
-        if budget < ANTHROPIC_MIN_BUDGET:
-            return None
-    return AnthropicThinking(
-        thinking={"type": "enabled", "budget_tokens": budget},
-        effort=None,
-        max_tokens=max_tokens,
-    )
+    name = model_name.lower()
+    budgeted = {"type": "enabled", "budget_tokens": budget} if budget else None
+    allowed = supported_efforts(name)
+    if allowed is not None:
+        return AnthropicThinking(thinking=budgeted or {"type": "adaptive"},
+                                 effort=translate_effort(effort, allowed))
+    if _MINIMAX_M3.search(name):
+        if ladder_stop(effort) == "none":
+            return AnthropicThinking(thinking={"type": "disabled"}, effort=None)
+        return AnthropicThinking(thinking=budgeted or {"type": "adaptive"}, effort=effort)
+    return AnthropicThinking(thinking=budgeted, effort=effort)
 
 
 # --- Signed reasoning replay -----------------------------------------------
 #
-# Anthropic thinking blocks carry a signature, and Codex reasoning items carry
-# encrypted content. Both are valid only for the model that produced them, so a
+# Anthropic thinking blocks carry a signature, and OpenAI Responses reasoning
+# items carry encrypted content. Both are valid only for the model that produced them, so a
 # history record keeps them with the provider and model they came from and they
 # are replayed only to that same provider and model. Anywhere else the record's
 # plain ``reasoning_content`` follows the rules above.

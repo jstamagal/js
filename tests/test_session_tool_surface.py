@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 
-from js import memory, runtime
+from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import config, one_turn, run
+
+from js import debug_trace, memory, runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 def test_loaded_tools_survive_next_turn_and_fresh_context(tmp_path, monkeypatch):
@@ -25,7 +27,7 @@ def test_loaded_tools_survive_next_turn_and_fresh_context(tmp_path, monkeypatch)
     registry = build_default_registry().select(['shell:lazy'])
     for prompt in ('load it', 'use it'):
         messages = [{'role': 'user', 'content': prompt}]
-        runtime.run_turn(cfg, 'system', messages, runtime.Telemetry(None),
+        one_turn(cfg, 'system', messages, runtime.Telemetry(None),
                          tool_registry=registry, tool_context=ToolContext(cwd=tmp_path))
     assert 'shell' not in emitted[0]
     assert 'shell' in emitted[2]
@@ -39,7 +41,7 @@ def test_unloaded_calls_explain_recovery_without_spending_retry_budget(monkeypat
     ])
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(results))
     messages = [{'role': 'user', 'content': 'run'}]
-    runtime.run_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(['shell:lazy']),
                      tool_context=ToolContext(cwd=tmp_path))
     errors = [m['content'] for m in messages if m.get('role') == 'tool']
@@ -58,12 +60,12 @@ def test_tool_surface_reset_and_policy_reduction(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', stream)
     cfg = _cfg(tmp_path)
     for selectors in (['shell:lazy'], ['read:lazy']):
-        runtime.run_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
+        one_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
                          tool_registry=build_default_registry().select(selectors),
                          tool_context=ToolContext(cwd=tmp_path))
     assert 'shell' not in emitted[2]
     memory.append_mark(cfg.session_file, 'session_reset')
-    runtime.run_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
+    one_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(['shell:lazy']),
                      tool_context=ToolContext(cwd=tmp_path))
     assert 'shell' not in emitted[3]
@@ -75,7 +77,7 @@ def test_sessionless_loading_does_not_fsync_devnull(tmp_path, monkeypatch):
     results = iter([_result(('load', 'tool_discovery', '{"load":"native:shell"}')), _result(text='done')])
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(results))
     messages = [{'role': 'user', 'content': 'load'}]
-    runtime.run_turn(replace(_cfg(tmp_path), session_file=Path('/dev/null')), 'system', messages,
+    one_turn(replace(_cfg(tmp_path), session_file=Path('/dev/null')), 'system', messages,
                      runtime.Telemetry(None), tool_registry=build_default_registry().select(['shell:lazy']),
                      tool_context=ToolContext(cwd=tmp_path))
     result = next(m['content'] for m in messages if m.get('role') == 'tool')
@@ -93,18 +95,17 @@ def test_surface_marks_survive_compaction_but_not_reset(tmp_path):
     assert memory.load_tool_surface(path) is None
 
 
-def test_unavailable_errors_distinguish_denied_unknown_and_alias(tmp_path):
-    surface = build_default_registry().select(['shell:lazy']).aliased({'shell': 'Run'}).lazy_surface(tmp_path)
-    frozen = surface.dispatch_registry()
-    for registry in (surface, frozen):
-        for name, expected in [('Run', 'native:shell'), ('read', 'not allowed'), ('imaginary', 'unknown tool')]:
-            tracker = runtime.ToolErrorTracker()
-            _, error = runtime._dispatch(name, '{}', runtime.Telemetry(None), 4096,
-                                         registry=registry, tool_context=ToolContext(cwd=tmp_path),
-                                         error_tracker=tracker)
-            assert expected in error
-            assert '<retry>' not in error
-            assert not tracker.limit_reached()
+def test_unavailable_errors_distinguish_denied_unknown_and_alias(tmp_path, monkeypatch):
+    cfg = config(tmp_path, {'TOOL_ALIASES': [{'match': ['offline'], 'aliases': {'shell': 'Run'}}]})
+    expected = {'Run': 'native:shell', 'read': 'not allowed', 'imaginary': 'unknown tool'}
+    turn = run(tmp_path, monkeypatch, build_default_registry().select(['shell:lazy']),
+               [[(name, name, '{}') for name in expected]], cfg=cfg)
+    results = turn.results()
+    for name, wanted in expected.items():
+        assert wanted in results[name]
+        assert '<retry>' not in results[name]
+    assert not any(m.get('steered') for m in turn.messages)
+    assert turn.messages[-1]['content'] == 'done'
 
 
 def test_unknown_tool_error_names_only_tools_the_agent_has(tmp_path):
@@ -130,7 +131,7 @@ def test_load_does_not_authorize_sibling_and_next_call_can_recover(tmp_path, mon
     ])
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(responses))
     messages = [{'role': 'user', 'content': 'run'}]
-    runtime.run_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(['shell:lazy']), tool_context=ToolContext(cwd=tmp_path))
     results = {m['tool_call_id']: m['content'] for m in messages if m.get('role') == 'tool'}
     assert 'same response' in results['early']
@@ -139,7 +140,7 @@ def test_load_does_not_authorize_sibling_and_next_call_can_recover(tmp_path, mon
 
 
 def test_restored_native_tools_obey_new_alias_profile(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path, {'tools': {'alias_profiles': [{'match': ['offline'], 'aliases': {'shell': 'Run'}}]}})
+    cfg = _cfg(tmp_path, {"TOOL_ALIASES": [{'match': ['offline'], 'aliases': {'shell': 'Run'}}]})
     memory.append_tool_surface(cfg.session_file, {'version': 1, 'agent_id': cfg.agent_id,
         'cwd': str(tmp_path.resolve()), 'ids': ['native:shell'], 'mcp_sources': []})
     seen = []
@@ -147,7 +148,7 @@ def test_restored_native_tools_obey_new_alias_profile(tmp_path, monkeypatch):
         seen.extend(tool.name for tool in kwargs['tools'])
         return _result(text='ready')
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', stream)
-    runtime.run_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
+    one_turn(cfg, 'system', [{'role': 'user', 'content': 'hi'}], runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(['shell:lazy']), tool_context=ToolContext(cwd=tmp_path))
     assert seen == ['Run', 'tool_discovery']
 
@@ -155,6 +156,7 @@ def test_restored_native_tools_obey_new_alias_profile(tmp_path, monkeypatch):
 def test_cancelled_mcp_restore_closes_owned_host(tmp_path, monkeypatch):
     import asyncio
     from dataclasses import replace
+
     from js.mcp import host as host_module
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
     server = MCPServer('example', 'example', 'stdio', command='unused')
@@ -184,9 +186,11 @@ def test_cancelled_mcp_restore_closes_owned_host(tmp_path, monkeypatch):
 
 def test_mcp_restore_reconnects_loaded_sources_and_obeys_policy(tmp_path):
     import asyncio
+
+    from test_mcp_runtime import FakeClient
+
     from js.mcp.host import MCPHost
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
-    from test_mcp_runtime import FakeClient
     servers = (MCPServer('Alpha', 'alpha', 'stdio', command='fake'),
                MCPServer('Unused', 'unused', 'stdio', command='fake'))
     async def run():
@@ -214,11 +218,12 @@ def test_mcp_restore_reconnects_loaded_sources_and_obeys_policy(tmp_path):
 
 def test_every_request_trace_lists_published_names():
     import io
+
     from js import model_client
     tools = model_client.tool_specs_to_ai_tools(build_default_registry().select(['shell:lazy']).openai_specs())
     for schemas in (True, False):
         sink = io.StringIO()
-        model_client._emit_request_trace(sink=sink, model_id='offline', provider_id=None,
+        debug_trace.emit_request_trace(sink=sink, model_id='offline', provider_id=None,
             provider_base_url=None, params=None, messages=[], tools=tools,
             dump_schemas=schemas, dump_from=0)
         output = sink.getvalue()
@@ -228,6 +233,7 @@ def test_every_request_trace_lists_published_names():
 
 def test_skill_restore_retains_activated_native_tools_without_rereading_body(tmp_path):
     import asyncio
+
     from test_lazy_tool_discovery import _skill_file
     path = _skill_file(tmp_path / '.agents' / 'skills', 'inspect')
     path.write_text('---\ndescription: Inspect\ntools:\n  - shell\n---\nDo inspection.\n')

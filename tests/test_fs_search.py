@@ -6,17 +6,18 @@ real `rg` binary, which the box provides and `just install` provisions.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import fs
-from js.toolkit.fs import _iter_files, fs_read, fs_search
-
+from js.toolkit import ToolContext, file_bytes, file_search
+from js.toolkit.file_search import fs_search
+from js.toolkit.fs import fs_read
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 
@@ -36,6 +37,25 @@ def _call_with_timeout(fn, *args, timeout=10.0, **kwargs):
     t.join(timeout)
     assert not t.is_alive(), f"{getattr(fn, '__name__', fn)} did not return within {timeout}s (hang)"
     return box["result"]
+
+
+def test_rg_stream_drains_large_walk_diagnostics_without_losing_hits():
+    diagnostic_line = b"rg: blocked: Permission denied (os error 13)\n"
+    diagnostic = diagnostic_line * 8192
+    script = (
+        "import sys; "
+        f"sys.stderr.buffer.write({diagnostic_line!r} * 8192); "
+        "sys.stderr.flush(); "
+        "print('match.txt:1:needle'); sys.exit(2)"
+    )
+    lines, code, stderr, timed_out = file_search._rg_stream(
+        [sys.executable, "-c", script], want=100, timeout=2,
+    )
+
+    assert not timed_out
+    assert code == 2
+    assert lines == ["match.txt:1:needle"]
+    assert stderr.encode() == diagnostic
 
 
 @requires_rg
@@ -405,21 +425,11 @@ def test_fs_search_explicit_fifo_path_refuses_without_hanging(tmp_path):
 def test_fs_search_missing_rg_binary_degrades_cleanly(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
-    monkeypatch.setattr(fs, "resolve_binary", lambda _cmd: None)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _cmd: None)
 
     actual = fs_search("needle", path=".", context=context)
 
-    assert actual == fs._RG_MISSING
-
-
-def test_iter_files_skips_fifo_and_yields_regular_only(tmp_path):
-    (tmp_path / "real.txt").write_text("x\n", encoding="utf-8")
-    os.mkfifo(tmp_path / "pipe")
-
-    found = _call_with_timeout(lambda: list(_iter_files(tmp_path)), timeout=10.0)
-
-    names = {p.name for p in found}
-    assert names == {"real.txt"}
+    assert actual == file_search._RG_MISSING
 
 
 def test_fs_read_of_fifo_refuses_without_hanging(tmp_path):
@@ -440,7 +450,7 @@ def test_fs_read_empty_file_message_uses_resolved_path(tmp_path):
     # target, never the literal "None" that file_path holds on this path.
     actual = fs_read(path="empty.txt", context=context)
 
-    assert actual == f"{empty} is empty (hash {fs._hash_bytes(b'')})"
+    assert actual == f"{empty} is empty (hash {file_bytes.hash_bytes(b'')})"
 
 
 def _hidden_tree(tmp_path):
@@ -528,28 +538,51 @@ def test_fs_search_explicit_hidden_path_still_searches_it(tmp_path):
     assert str(tmp_path / ".hidden.txt") in matched
 
 
-def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
-    assert fs._glob_asks_for_hidden(".env")
-    assert fs._glob_asks_for_hidden("**/.github/*")
-    assert not fs._glob_asks_for_hidden("!.env")
-    assert not fs._glob_asks_for_hidden("!.git/**")
-    assert not fs._glob_asks_for_hidden("*.py")
-    assert not fs._glob_asks_for_hidden("./src/*.py")
-    assert not fs._glob_asks_for_hidden("../lib/**")
-    assert not fs._glob_asks_for_hidden(None)
+@pytest.mark.parametrize("glob,asks", [
+    (".env", True),
+    ("**/.github/*", True),
+    ("!.env", False),
+    ("!.git/**", False),
+    ("*.py", False),
+    ("./src/*.py", False),
+    ("../lib/**", False),
+    (None, False),
+])
+def test_glob_asks_for_hidden_reads_only_dot_prefixed_components(tmp_path, monkeypatch, glob, asks):
+    calls = tmp_path / "calls"
+    rg = tmp_path / "fake-rg"
+    rg.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"with open({str(calls)!r}, 'a') as out:\n"
+        "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1)\n"
+    )
+    rg.chmod(0o755)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: str(rg))
+    file_search.fs_search("needle", path=str(tmp_path), glob=glob, output_mode="content",
+                          context=ToolContext(cwd=tmp_path))
+
+    [argv] = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert ("--hidden" in argv) is asks
 
 
 def test_fs_search_stays_on_one_file_system_in_every_mode(tmp_path, monkeypatch):
-    seen: list[list[str]] = []
-
-    def fake_stream(argv, *args, **kwargs):
-        seen.append(list(argv))
-        return [], 1, "", False
-
-    monkeypatch.setattr(fs, "_rg_stream", fake_stream)
+    calls = tmp_path / "calls"
+    rg = tmp_path / "fake-rg"
+    rg.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"with open({str(calls)!r}, 'a') as out:\n"
+        "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1)\n"
+    )
+    rg.chmod(0o755)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: str(rg))
     context = ToolContext(cwd=tmp_path)
     for mode in ("files", "files_with_matches", "content", "count"):
-        fs.fs_search("needle", path=str(tmp_path), output_mode=mode, context=context)
+        file_search.fs_search("needle", path=str(tmp_path), output_mode=mode, context=context)
 
+    seen = [json.loads(line) for line in calls.read_text().splitlines()]
     assert len(seen) == 4
     assert all("--one-file-system" in argv for argv in seen)

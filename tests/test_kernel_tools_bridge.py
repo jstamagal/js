@@ -2,8 +2,7 @@
 
 These start real kernels. A cell's tool calls run in the js process through
 the registry the kernel call was dispatched through, with the live
-ToolContext, so the tests go through runtime._dispatch the way a model's
-call does.
+ToolContext, so the tests make each call the model's, in a turn.
 """
 
 from __future__ import annotations
@@ -13,8 +12,8 @@ import json
 from dataclasses import replace
 
 import pytest
+from turn_driver import Turn, run as run_turn
 
-from js import runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
@@ -37,16 +36,21 @@ def ctx(tmp_path):
         session.shutdown()
 
 
+def turn(context: ToolContext, batches, registry=None, **options) -> Turn:
+    """A turn in which the model makes the calls ``batches``, one batch per
+    model call; ``options`` are further arguments of the turn."""
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        return run_turn(context.cwd.parent, monkeypatch, registry or build_default_registry(), batches,
+                        context=context, **options)
+
+
 def dispatch(name: str, context: ToolContext, registry=None, **args) -> str:
-    _, result = runtime._dispatch(
-        name, json.dumps(args), runtime.Telemetry(None), cap_bytes=256 * 1024,
-        registry=registry or build_default_registry(), tool_context=context,
-    )
-    return result
+    """What the model's call of tool ``name`` with ``args`` returned."""
+    return turn(context, [[("call", name, json.dumps(args))]], registry).results()["call"]
 
 
-def cell(code: str, context: ToolContext, registry=None) -> str:
-    return dispatch("kernel", context, registry, code=code)
+def cell(code: str, context: ToolContext, registry=None, **options) -> str:
+    return turn(context, [[kernel_cell("call", code)]], registry, **options).results()["call"]
 
 
 @needs_kernel
@@ -76,7 +80,7 @@ def test_a_read_from_a_cell_counts_as_read_for_patch(ctx):
     cell("tools.read(file_path='code.py')", ctx)
     patched = dispatch("patch", ctx, file_path="code.py", old_string="x = 1", new_string="x = 2")
 
-    assert ctx.resolve_path("code.py") in ctx.read_paths
+    assert ctx.resolve_path("code.py") in ctx.reads.paths()
     assert not patched.startswith("ERROR"), patched
     assert target.read_text() == "x = 2\n"
 
@@ -184,10 +188,10 @@ def test_tools_survive_a_restart(ctx):
 
 @needs_kernel
 def test_a_kernel_called_outside_dispatch_refuses_tool_calls(ctx):
-    from js.toolkit import kernel as kmod
+    from js.toolkit import python_kernel
 
     (ctx.cwd / "notes.txt").write_text("undispatched-7310\n")
-    result = kmod.kernel(
+    result = python_kernel.kernel(
         code="try:\n"
              "    print(tools.read('notes.txt'))\n"
              "except tools.ToolError:\n"
@@ -200,7 +204,7 @@ def test_a_kernel_called_outside_dispatch_refuses_tool_calls(ctx):
 
 
 @needs_kernel
-def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving(ctx):
+def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving_in_a_turn(ctx):
     import os
 
     os.mkdir(os.fsencode(ctx.cwd / "names"))
@@ -225,18 +229,10 @@ def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving(ctx):
 @needs_kernel
 def test_a_cell_tool_call_is_logged_like_a_direct_call(ctx):
     (ctx.cwd / "notes.txt").write_text("logged\n")
-    events: list[tuple[str, dict]] = []
-    telemetry = runtime.Telemetry(None)
-    telemetry.event = lambda kind, **fields: events.append((kind, fields))
 
-    runtime._dispatch(
-        "kernel", json.dumps({"code": "tools.read('notes.txt')"}), telemetry,
-        cap_bytes=256 * 1024, registry=build_default_registry(), tool_context=ctx,
-    )
+    events = turn(ctx, [[("call", "kernel", json.dumps({"code": "tools.read('notes.txt')"}))]]).events("tool_ok")
 
-    assert ("tool_ok", "read", "kernel") in [
-        (kind, fields.get("tool"), fields.get("via")) for kind, fields in events
-    ]
+    assert ("read", "kernel") in [(fields.get("tool"), fields.get("via")) for fields in events]
 
 
 @needs_kernel
@@ -261,7 +257,7 @@ def bridge():
     import tempfile
     from pathlib import Path
 
-    from js.toolkit.kernel_bridge import ToolBridge
+    from js.toolkit.python_kernel_bridge import ToolBridge
 
     folder = Path(tempfile.mkdtemp(prefix="jsb-"))
     served = ToolBridge(folder / "tools.sock")
@@ -336,7 +332,6 @@ def _guard_refusing(tool_name: str, seen: list[tuple[str, str]]):
 @needs_kernel
 def test_a_tool_call_guard_refuses_a_cells_call(ctx):
     seen: list[tuple[str, str]] = []
-    ctx.tool_call_hooks = _guard_refusing("write", seen)
     (ctx.cwd / "in.txt").write_text("kept\n")
 
     result = cell(
@@ -345,7 +340,7 @@ def test_a_tool_call_guard_refuses_a_cells_call(ctx):
         "    tools.write(file_path='out.txt', content='x\\n')\n"
         "except tools.ToolError as exc:\n"
         "    print('REFUSED', exc)\n",
-        ctx,
+        ctx, event_hooks=_guard_refusing("write", seen),
     )
 
     assert "READ kept" in result
@@ -353,6 +348,27 @@ def test_a_tool_call_guard_refuses_a_cells_call(ctx):
     assert not (ctx.cwd / "out.txt").exists()
     assert ("tool_call", "read") in seen and ("tool_result", "read") in seen
     assert ("tool_call", "write") in seen and ("tool_result", "write") not in seen
+
+
+@needs_kernel
+def test_a_tool_call_handler_rewrites_a_cells_arguments(ctx):
+    from js import events
+
+    hooks = events.EventHooks()
+
+    def dispatch(hook, emission):
+        if emission.event == "tool_call" and emission.payload.get("name") == "write":
+            arguments = json.loads(emission.payload["arguments"])
+            arguments["content"] = "rewritten\n"
+            return events.EventHandlerResult(hook=hook, arguments=json.dumps(arguments))
+        return events.EventHandlerResult(hook=hook)
+
+    hooks.set_dispatcher(dispatch)
+    hooks.add("tool_call", "rewrite")
+
+    cell("tools.write(file_path='out.txt', content='original\\n')\n", ctx, event_hooks=hooks)
+
+    assert (ctx.cwd / "out.txt").read_text() == "rewritten\n"
 
 
 @needs_kernel
@@ -373,41 +389,38 @@ def test_a_read_of_content_starting_with_error_is_a_value(ctx):
     assert "MISSING RAISED" in result
 
 
-
-def model_read(context: ToolContext, call_id: str, file_path: str) -> str:
+def model_read(call_id: str, file_path: str) -> tuple[str, str, str]:
     """A read the model makes as call ``call_id``."""
-    _, result = runtime._dispatch(
-        "read", json.dumps({"file_path": file_path, "show_line_numbers": False}),
-        runtime.Telemetry(None), cap_bytes=256 * 1024, registry=build_default_registry(),
-        tool_context=context, call_id=call_id,
-    )
-    return result
+    return call_id, "read", json.dumps({"file_path": file_path, "show_line_numbers": False})
+
+
+def kernel_cell(call_id: str, code: str) -> tuple[str, str, str]:
+    """A kernel cell the model runs as call ``call_id``."""
+    return call_id, "kernel", json.dumps({"code": code})
 
 
 @needs_kernel
 def test_a_cell_read_of_lines_the_model_already_saw_returns_the_lines(ctx):
     (ctx.cwd / "notes.txt").write_text("alpha\nbeta\n")
-    shown = model_read(ctx, "r1", "notes.txt")
-    ctx.settle_reads()
-    ctx.keep_shown_reads({"r1": shown})
-    assert "r1" in model_read(ctx, "r2", "notes.txt")
-    ctx.settle_reads()
 
-    result = cell(
-        "text = tools.read('notes.txt', show_line_numbers=False)\n"
-        "print('LINES', text.splitlines())\n",
-        ctx,
-    )
+    results = turn(ctx, [
+        [model_read("r1", "notes.txt")],
+        [model_read("r2", "notes.txt")],
+        [kernel_cell("cell", "text = tools.read('notes.txt', show_line_numbers=False)\n"
+                             "print('LINES', text.splitlines())\n")],
+    ]).results()
 
-    assert "LINES ['alpha', 'beta']" in result
+    assert "r1" in results["r2"]
+    assert "LINES ['alpha', 'beta']" in results["cell"]
 
 
 @needs_kernel
 def test_a_cell_read_does_not_count_as_shown_to_the_model(ctx):
     (ctx.cwd / "notes.txt").write_text("alpha\nbeta\n")
-    cell("tools.read('notes.txt', show_line_numbers=False)", ctx)
-    ctx.settle_reads()
 
-    again = model_read(ctx, "r2", "notes.txt")
+    results = turn(ctx, [
+        [kernel_cell("cell", "tools.read('notes.txt', show_line_numbers=False)")],
+        [model_read("r2", "notes.txt")],
+    ]).results()
 
-    assert again.splitlines() == ["alpha", "beta"]
+    assert results["r2"].splitlines() == ["alpha", "beta"]

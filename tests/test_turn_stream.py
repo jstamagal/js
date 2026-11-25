@@ -16,7 +16,7 @@ class _Display:
         self.log = log
         self.log.append(("open", markdown))
 
-    def mark(self, text):
+    def speaker(self, mark, indent):
         pass
 
     def chunk(self, kind, text):
@@ -65,7 +65,7 @@ def _sink(log, *, suppress=False, reasoning=2, sink=None, transcript=False):
     telemetry = _telemetry(log, transcript=transcript)
     events = TurnEvents(None, sink, telemetry, model="m", provider_id="p")
     return StreamSink(telemetry, TurnStatus(), events,
-                      settings={"ui": {"reasoning": reasoning, "markdown": False}},
+                      settings={"REASONING_DISPLAY": reasoning, "MARKDOWN": False},
                       suppress_output=suppress)
 
 
@@ -150,6 +150,26 @@ def test_a_new_call_opens_new_displays():
     assert log.count(("open", False)) == 2
 
 
+def test_stream_channel_end_events_are_emitted_once_per_open_channel():
+    from test_output import _Sink
+
+    telemetry = _telemetry([])
+    telemetry.sink = events = _Sink()
+    sink = StreamSink(telemetry, TurnStatus(), TurnEvents(None, None, telemetry, model="m", provider_id="p"),
+                      settings={"REASONING_DISPLAY": 2}, suppress_output=False)
+    sink.reasoning("thought")
+    sink.text("answer")
+    sink.close()
+    sink.close()
+    sink.close_reasoning()
+    assert len(events.named("answer_end")) == len(events.named("reasoning_end")) == 1
+
+    sink.text("next")
+    sink.close()
+    assert len(events.named("answer_end")) == 2
+    assert len(events.named("reasoning_end")) == 1
+
+
 # --------------------------------------------------------------------------
 # TurnEvents
 # --------------------------------------------------------------------------
@@ -179,6 +199,35 @@ def test_a_failing_event_sink_never_breaks_the_turn():
     events = TurnEvents(None, broken, _telemetry(log), model="m", provider_id="p")
     assert events.emit("stream", text="x") is None
     assert log == [("telemetry", "event_sink_error")]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("observer failed"), BrokenPipeError("closed")])
+def test_usage_observer_failure_preserves_tally_and_hook_boundary(failure):
+    observed, hooks, telemetry = [], [], []
+
+    def sink(event, payload):
+        observed.append((event, payload))
+        if event == "usage":
+            raise failure
+
+    class Hooks:
+        def emit(self, event, **payload):
+            hooks.append((event, payload))
+            return SimpleNamespace(event=event, results=[])
+
+    events = TurnEvents(Hooks(), sink, _telemetry(telemetry), model="m", provider_id="p")
+    call = usage_mod.CallUsage(model="m", provider="p", input_tokens=10, output_tokens=2)
+    session = usage_mod.UsageTotals()
+    events.on_usage(call, session)
+    expected = usage_mod.Tally()
+    expected.add(call)
+    assert events.usage.as_dict() == expected.as_dict()
+    assert observed == [("usage", {**call.as_dict(), "session": session.as_dict()})]
+    assert telemetry == [("telemetry", "event_sink_error")]
+    assert hooks == []
+    events.start(3)
+    assert hooks == [("turn_start", {"model": "m", "provider_id": "p", "message_count": 3})]
+    assert observed[-1] == hooks[-1]
 
 
 def test_hooks_see_the_payload_without_the_sink_extras():

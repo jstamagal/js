@@ -24,7 +24,7 @@ from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
-from .. import paths
+from .. import paths, snippets, supervisor
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5
@@ -66,11 +66,13 @@ class TaskJob:
         with self._lock:
             self._cancel = cancel
             kill = self._kill_requested
-        if kill:
+        if kill and not self.future.done():
             cancel()
 
     def kill(self) -> None:
         with self._lock:
+            if self.future.done():
+                return
             self._kill_requested = True
             cancel = self._cancel
         if cancel is not None:
@@ -143,9 +145,12 @@ def _settle(job: TaskJob, outcome: concurrent.futures.Future | asyncio.Future,
         job.future.cancel()
     else:
         error = outcome.exception()
-        text = f"ERROR {type(error).__name__}: {error}" if error is not None else str(outcome.result())
-        _save(job, text)
-        job.future.set_result(text)
+        if isinstance(error, snippets.SnippetError):
+            job.future.set_exception(error)
+        else:
+            text = f"ERROR {type(error).__name__}: {error}" if error is not None else str(outcome.result())
+            _save(job, text)
+            job.future.set_result(text)
     if on_done is not None:
         with contextlib.suppress(Exception):
             on_done()
@@ -162,14 +167,13 @@ def start(
     owner: str,
     on_done: Callable[[], None] | None = None,
     on_loop: bool = False,
+    schedule: Callable | None = None,
 ) -> TaskJob:
     """Start the fan-out in the background and return its job at once.
 
     ``on_loop`` means the caller is a coroutine on the supervisor's loop;
     otherwise the caller is a thread off any loop.
     """
-    from ..supervisor import get_current
-
     job_id = _next_id()
     result_path = paths.tool_results_dir() / f"task-{job_id}-{secrets.token_hex(4)}.txt"
     job = TaskJob(job_id, agent_id, len(indexed_items), depth, result_path, owner)
@@ -182,6 +186,8 @@ def start(
                 results[idx - 1] = await coro_factory(idx, item)
             except asyncio.CancelledError:
                 raise
+            except snippets.SnippetError:
+                raise
             except Exception as exc:  # noqa: BLE001 - one worker's failure is its result
                 results[idx - 1] = f"ERROR {type(exc).__name__}: {exc}"
             job.workers_done += 1
@@ -192,7 +198,11 @@ def start(
     with _JOBS_LOCK:
         _JOBS[job.id] = job
     label = f"task {job.id} (background)"
-    sup = get_current()
+    if schedule is not None:
+        cancel = schedule(run_all(), label, lambda done: _settle(job, done, on_done))
+        job.set_cancel(cancel)
+        return job
+    sup = supervisor.get_current()
     if sup is not None and on_loop:
         tracked = sup.spawn(run_all(), kind="subagent", label=label)
         tracked.task.add_done_callback(lambda done: _settle(job, done, on_done))
@@ -207,10 +217,24 @@ def start(
             try:
                 task = loop.create_task(run_all())
                 task.add_done_callback(lambda done: _settle(job, done, on_done))
-                job.set_cancel(lambda: loop.call_soon_threadsafe(task.cancel))
+                def cancel() -> None:
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        if not (loop.is_closed() and job.future.done()):
+                            raise
+
+                job.set_cancel(cancel)
                 with contextlib.suppress(BaseException):
                     loop.run_until_complete(task)
             finally:
+                # A worker that failed the gather leaves its siblings running;
+                # they end here, so each lets go of what it holds.
+                left = asyncio.all_tasks(loop)
+                for pending in left:
+                    pending.cancel()
+                with contextlib.suppress(BaseException):
+                    loop.run_until_complete(asyncio.gather(*left, return_exceptions=True))
                 loop.close()
 
         threading.Thread(target=runner, daemon=True, name=f"js-task-{job.id}").start()
@@ -218,15 +242,12 @@ def start(
 
 
 def started_text(job: TaskJob) -> str:
-    plural = "task" if job.count == 1 else "tasks"
+    plural = 'task' if job.count == 1 else 'tasks'
     return "\n".join([
-        f"task running in the background (handle {job.id}): {job.count} {plural} for agent "
-        f"`{job.agent_id}`. It keeps running while you work.",
-        f"Poll it with action=\"poll\", handle=\"{job.id}\", action=\"wait\", handle=\"{job.id}\", "
-        f"timeout=N to block for it, or action=\"kill\", handle=\"{job.id}\" to stop it.",
-        f"When it finishes its result is written to {job.result_path}, and the next user "
-        "message says so unless you have read it by then.",
-        f"HANDLE {job.id} RUNNING",
+        f'task running in the background (handle {job.id}): {job.count} {plural} for agent `{job.agent_id}`. It keeps running while you work.',
+        f'Poll it with action="poll", handle="{job.id}", action="wait", handle="{job.id}", timeout=N to block for it, or action="kill", handle="{job.id}" to stop it.',
+        f'When it finishes its result is written to {job.result_path}, and the next user message says so unless you have read it by then.',
+        f'HANDLE {job.id} RUNNING',
     ])
 
 
@@ -240,19 +261,18 @@ def report(job: TaskJob, action: str, *, was_running: bool = False) -> str:
     was asked for."""
     if action == "kill" and was_running and (job.running() or job.cancelled()):
         job.delivered = True
-        return f"killed task {job.id} after {job.elapsed():.0f}s"
+        return f'killed task {job.id} after {job.elapsed():.0f}s'
     if job.running():
         return "\n".join([
-            f"task {job.id} still running after {job.elapsed():.0f}s "
-            f"({job.workers_done} of {job.count} done).",
-            f"HANDLE {job.id} RUNNING",
+            f'task {job.id} still running after {job.elapsed():.0f}s ({job.workers_done} of {job.count} done).',
+            f'HANDLE {job.id} RUNNING',
         ])
     job.delivered = True
     if job.cancelled():
-        return f"task {job.id} was cancelled after {job.elapsed():.0f}s; it has no result"
-    where = f"; the result is also at {job.result_path}" if job.saved else ""
-    prefix = f"task {job.id} had already finished" if action == "kill" else f"task {job.id} finished"
-    return f"{prefix} after {job.elapsed():.0f}s{where}\n{job.result()}"
+        return f'task {job.id} was cancelled after {job.elapsed():.0f}s; it has no result'
+    where = f'; the result is also at {job.result_path}' if job.saved else ""
+    prefix = f'task {job.id} had already finished' if action == 'kill' else f'task {job.id} finished'
+    return f'{prefix} after {job.elapsed():.0f}s{where}\n{job.result()}'
 
 
 def wait(job: TaskJob, timeout: float | None) -> None:
@@ -284,16 +304,15 @@ def completion_notes(owner: str) -> list[str]:
         if job.depth != 0 or job.running() or job.delivered or job.noted:
             continue
         job.noted = True
+        if not job.cancelled() and isinstance(job.future.exception(), snippets.SnippetError):
+            raise job.future.exception()
         if job.cancelled():
-            notes.append(f"<js-reminder>Background task {job.id} (agent `{job.agent_id}`) was "
-                         f"cancelled after {job.elapsed():.0f}s and has no result.</js-reminder>")
+            notes.append(f'<js-reminder>Background task {job.id} (agent `{job.agent_id}`) was cancelled after {job.elapsed():.0f}s and has no result.</js-reminder>')
             continue
-        where = (f"Its result is at {job.result_path}" if job.saved
-                 else "Its result could not be saved to a file")
+        where = (f'Its result is at {job.result_path}' if job.saved
+                 else 'Its result could not be saved to a file')
         notes.append(
-            f"<js-reminder>Background task {job.id} (agent `{job.agent_id}`, {job.count} "
-            f"{'task' if job.count == 1 else 'tasks'}) finished after {job.elapsed():.0f}s. "
-            f"{where}; read it, or call task with action=\"poll\", handle=\"{job.id}\".</js-reminder>"
+            snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id)
         )
     _prune()
     return notes

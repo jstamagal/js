@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+import inspect
+import threading
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from typing import Any
 
+from . import messages as msgs
 
 CANONICAL_EVENT_NAMES: tuple[str, ...] = (
     "input",
@@ -20,6 +25,7 @@ CANONICAL_EVENT_NAMES: tuple[str, ...] = (
     "mcp_progress",
     "mcp_resource_updated",
     "mcp_catalog_collision",
+    "mcp_server_error",
     "error",
     "cancel",
     "session_start",
@@ -29,7 +35,8 @@ CANONICAL_EVENT_NAMES: tuple[str, ...] = (
 )
 
 # The one event whose handlers can refuse what it announces: a refused tool
-# call never runs, and the model reads the refusal as its result.
+# call never runs, and the model reads the refusal as its result. Its handlers
+# can also rewrite the call's arguments before it runs.
 REFUSABLE_EVENTS = frozenset({"tool_call"})
 
 _EVENT_SET = frozenset(CANONICAL_EVENT_NAMES)
@@ -48,6 +55,8 @@ class EventHandlerResult:
     error: str | None = None
     # Set when the handler refused the event: the one line the model reads.
     refusal: str | None = None
+    # Set when the handler rewrote a tool call's arguments: the new JSON text.
+    arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,11 +74,12 @@ EventHandlerDispatcher = Callable[[EventHook, EventEmission], EventHandlerResult
 @dataclass
 class HandlerCall:
     """The handler running now: its hook, the emission it answers, and the
-    refusal it records, if any."""
+    refusal or argument rewrite it records, if any."""
 
     hook: EventHook
     emission: EventEmission
     refusal: str | None = None
+    arguments: str | None = None
 
 
 _CURRENT_CALL: ContextVar[HandlerCall | None] = ContextVar("js_event_handler_call", default=None)
@@ -87,6 +97,18 @@ def refusal_of(emission: object) -> str | None:
         if refusal:
             return refusal
     return None
+
+
+def arguments_of(emission: object) -> str | None:
+    """The arguments a handler of ``emission`` rewrote the call to, as JSON
+    text; None when no handler rewrote them. Handlers run in order and each
+    reads the arguments the one before it left, so the last rewrite wins."""
+    rewritten = None
+    for result in getattr(emission, "results", ()) or ():
+        arguments = getattr(result, "arguments", None)
+        if arguments is not None:
+            rewritten = arguments
+    return rewritten
 
 
 def normalize_event_name(raw: str) -> str | None:
@@ -107,13 +129,16 @@ class EventHooks:
 
     Handlers are raw command text. A caller can install a dispatcher to interpret
     that text; emit catches dispatcher failures and records them on the returned
-    emission so handler errors never abort the runtime event source.
+    emission so handler errors never abort the runtime event source. ``admit``
+    returns why a hook may not join the table, or None when it may.
     """
 
-    def __init__(self, dispatcher: EventHandlerDispatcher | None = None) -> None:
+    def __init__(self, dispatcher: EventHandlerDispatcher | None = None,
+                 admit: Callable[[EventHook], str | None] | None = None) -> None:
         self._hooks: dict[str, list[EventHook]] = {event: [] for event in CANONICAL_EVENT_NAMES}
         self._dispatcher = dispatcher
-        self._dispatch_depth = 0
+        self._admit = admit
+        self._dispatch_depth: ContextVar[int] = ContextVar("js_event_dispatch_depth", default=0)
 
     def set_dispatcher(self, dispatcher: EventHandlerDispatcher | None) -> None:
         self._dispatcher = dispatcher
@@ -122,11 +147,13 @@ class EventHooks:
         event, suppress = parse_event_token(event_token)
         if event is None:
             clean = event_token.strip().lstrip("^").lower().replace("-", "_")
-            raise ValueError(f"unknown event: {clean}")
+            raise ValueError(msgs.EVENT_HOOK_UNKNOWN_EVENT.format(clean=clean))
         text = handler.strip()
         if not text:
-            raise ValueError("on needs a handler")
+            raise ValueError(msgs.EVENT_HOOK_ON_NEEDS_A_HANDLER.format())
         hook = EventHook(event=event, handler=text, suppress=suppress)
+        if self._admit is not None and (refusal := self._admit(hook)) is not None:
+            raise ValueError(refusal)
         if hook not in self._hooks[event]:  # the same handler twice would run twice
             self._hooks[event].append(hook)
         return hook
@@ -140,12 +167,12 @@ class EventHooks:
     def emit(self, event: str, **payload) -> EventEmission:
         name = normalize_event_name(event)
         if name is None:
-            raise ValueError(f"unknown event: {event}")
+            raise ValueError(msgs.EVENT_HOOK_UNKNOWN_EVENT_149.format(event=event))
         hooks = self.handlers_for(name)
         emission = EventEmission(event=name, payload=dict(payload), hooks=hooks)
         if self._dispatcher is None or not hooks:
             return emission
-        if self._dispatch_depth > 0:
+        if self._dispatch_depth.get() > 0:
             return EventEmission(
                 event=name,
                 payload=dict(payload),
@@ -153,7 +180,7 @@ class EventHooks:
                 dispatch_skipped=True,
             )
 
-        self._dispatch_depth += 1
+        depth_token = self._dispatch_depth.set(self._dispatch_depth.get() + 1)
         try:
             for hook in hooks:
                 call = HandlerCall(hook=hook, emission=emission)
@@ -174,9 +201,14 @@ class EventHooks:
                     )
                 if call.refusal and result.refusal is None and name in REFUSABLE_EVENTS:
                     result = replace(result, refusal=call.refusal)
+                if call.arguments is not None and result.arguments is None and name in REFUSABLE_EVENTS:
+                    result = replace(result, arguments=call.arguments)
+                if result.arguments is not None:
+                    # The next handler reads the call as this one left it.
+                    emission.payload["arguments"] = result.arguments
                 emission.results.append(result)
         finally:
-            self._dispatch_depth -= 1
+            self._dispatch_depth.reset(depth_token)
         return emission
 
     def all(self) -> dict[str, list[EventHook]]:
@@ -194,7 +226,99 @@ class RefusableOnly:
     def emit(self, event: str, **payload) -> EventEmission:
         name = normalize_event_name(event)
         if name is None:
-            raise ValueError(f"unknown event: {event}")
+            raise ValueError(msgs.EVENT_HOOK_UNKNOWN_EVENT_149.format(event=event))
         if name in REFUSABLE_EVENTS:
             return self._hooks.emit(name, **payload)
         return EventEmission(event=name, payload=dict(payload), hooks=[])
+
+
+# A program that assembles js from its parts can hold each tool call until a
+# decision arrives (from its screen, say). The callable gets the call as the
+# tool_call event carries it ({"id", "name", "arguments"}, the arguments as
+# JSON text). It returns None to let the call run, or the line the model reads
+# as the refused call's result, directly or as an awaitable. js's own command
+# line supplies none.
+Approve = Callable[[dict], "str | None | Awaitable[str | None]"]
+
+
+@dataclass(frozen=True)
+class Approval:
+    """An approval callable and the event loop of the turn that took it. The
+    callable runs on that loop, so it can wait on the screen that loop serves;
+    when that loop no longer runs, it runs on the caller's."""
+
+    approve: Approve
+    loop: asyncio.AbstractEventLoop
+    _pending: set[asyncio.Task] = field(default_factory=set, init=False, repr=False, compare=False)
+    _cancelled: threading.Event = field(default_factory=threading.Event, init=False, repr=False, compare=False)
+    _lock: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+
+    @property
+    def decisions_in_flight(self) -> int:
+        """Decisions this approval is still waiting on."""
+        with self._lock:
+            return len(self._pending)
+
+    def cancel(self) -> None:
+        """Revoke this turn's pending decisions, including kernel bridge calls."""
+        with self._lock:
+            self._cancelled.set()
+            pending = tuple(self._pending)
+        for task in pending:
+            task.get_loop().call_soon_threadsafe(task.cancel)
+
+    async def _decide(self, call: dict) -> str | None:
+        task = asyncio.current_task()
+        assert task is not None
+        with self._lock:
+            if self._cancelled.is_set():
+                return _failed(call, asyncio.CancelledError())
+            self._pending.add(task)
+        try:
+            decision: Any = self.approve(call)
+            if inspect.isawaitable(decision):
+                decision = await decision
+            if self._cancelled.is_set():
+                return _failed(call, asyncio.CancelledError())
+            if decision is not None and not isinstance(decision, str):
+                raise TypeError("approval must return None or a refusal string")
+            return decision
+        except Exception as exc:  # noqa: BLE001 - a failed decision refuses the call
+            return _failed(call, exc)
+        finally:
+            with self._lock:
+                self._pending.discard(task)
+
+    def _on_own_loop(self) -> bool:
+        return self.loop.is_closed() or not self.loop.is_running()
+
+    async def refusal(self, call: dict) -> str | None:
+        """The refusal for ``call``; None when the call may run. A callable
+        that raises refuses the call."""
+        if self._on_own_loop() or asyncio.get_running_loop() is self.loop:
+            return await self._decide(call)
+        future = asyncio.run_coroutine_threadsafe(self._decide(call), self.loop)
+        try:
+            return await asyncio.wrap_future(future)
+        except asyncio.CancelledError as exc:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                raise
+            return _failed(call, exc)
+        except Exception as exc:  # noqa: BLE001
+            return _failed(call, exc)
+
+    def refusal_from_thread(self, call: dict) -> str | None:
+        """``refusal`` from a thread that runs no event loop, such as the
+        kernel's tool bridge: this thread waits for the decision."""
+        if self._on_own_loop():
+            return asyncio.run(self._decide(call))
+        future = asyncio.run_coroutine_threadsafe(self._decide(call), self.loop)
+        try:
+            return future.result()
+        except Exception as exc:  # noqa: BLE001 - includes a cancelled turn
+            return _failed(call, exc)
+
+
+def _failed(call: dict, exc: BaseException) -> str:
+    return 'ERROR: {call_get_name} was not run: the approval failed: {type_exc___name}: {msgs_of_error_exc}'.format(call_get_name=call.get('name'), type_exc___name=type(exc).__name__, msgs_of_error_exc=msgs.of_error(exc))

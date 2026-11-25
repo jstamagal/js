@@ -1,0 +1,1004 @@
+{
+ "alias, mixed case": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "xai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai"
+  },
+  "wire_name": "openai"
+ },
+ "anthropic": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "explicit_prompt_cache": false,
+   "protocol": "AnthropicThinkingProtocol",
+   "sdk": "anthropic"
+  },
+  "route": {
+   "anthropic_wire": true,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "anthropic",
+   "responses_wire": false,
+   "sdk_provider_name": "anthropic",
+   "transport": "anthropic"
+  },
+  "wire_name": "anthropic"
+ },
+ "anthropic-custom": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "explicit_prompt_cache": true,
+   "protocol": "AnthropicThinkingProtocol",
+   "sdk": "anthropic"
+  },
+  "route": {
+   "anthropic_wire": true,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "anthropic-custom",
+   "responses_wire": false,
+   "sdk_provider_name": "anthropic",
+   "transport": "custom_anthropic"
+  },
+  "wire_name": "anthropic"
+ },
+ "catalog, anthropic transport": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "kimi-for-coding"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "kimi-for-coding",
+   "responses_wire": false,
+   "sdk_provider_name": "kimi-for-coding",
+   "transport": "anthropic"
+  },
+  "wire_name": "kimi-for-coding"
+ },
+ "catalog, gateway transport": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "vercel"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "vercel",
+   "responses_wire": false,
+   "sdk_provider_name": "vercel",
+   "transport": "gateway"
+  },
+  "wire_name": "vercel"
+ },
+ "catalog, openai transport": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "meta"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "meta",
+   "responses_wire": false,
+   "sdk_provider_name": "meta",
+   "transport": "openai"
+  },
+  "wire_name": "meta"
+ },
+ "catalog, openai_compatible transport": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "huggingface"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "huggingface",
+   "responses_wire": false,
+   "sdk_provider_name": "huggingface",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "huggingface"
+ },
+ "cliproxyapi": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": true,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "cliproxyapi",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "cliproxyapi"
+  },
+  "wire_name": "openai"
+ },
+ "deepseek": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "deepseek"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": true,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "deepseek",
+   "responses_wire": false,
+   "sdk_provider_name": "deepseek",
+   "transport": "deepseek"
+  },
+  "wire_name": "deepseek"
+ },
+ "jan": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "jan",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "koboldcpp": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "koboldcpp",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "llama.cpp": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "llama.cpp",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "llama.cpp"
+  },
+  "wire_name": "openai"
+ },
+ "llamafile": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "llamafile",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "lmstudio": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "lmstudio",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "localai": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "localai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "mimo": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mimo",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "mimo-token-plan": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mimo-token-plan",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "minimax": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "explicit_prompt_cache": true,
+   "protocol": "AnthropicThinkingProtocol",
+   "sdk": "anthropic"
+  },
+  "route": {
+   "anthropic_wire": true,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": true,
+   "provider_name": "minimax",
+   "responses_wire": false,
+   "sdk_provider_name": "anthropic",
+   "transport": "anthropic"
+  },
+  "wire_name": "anthropic"
+ },
+ "no provider, base URL": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": false,
+   "minimax": false,
+   "provider_name": "",
+   "responses_wire": false,
+   "sdk_provider_name": "",
+   "transport": null
+  },
+  "wire_name": "openai"
+ },
+ "no provider, base URL, deepseek model": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": true,
+   "explicit_provider": false,
+   "minimax": false,
+   "provider_name": "",
+   "responses_wire": false,
+   "sdk_provider_name": "",
+   "transport": null
+  },
+  "wire_name": "openai"
+ },
+ "no provider, no base URL": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": "error: ProviderNotLoggedInError",
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": false,
+   "minimax": false,
+   "provider_name": "",
+   "responses_wire": false,
+   "sdk_provider_name": "",
+   "transport": null
+  },
+  "wire_name": "openai"
+ },
+ "ollama": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "ollama",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "ollama"
+  },
+  "wire_name": "openai"
+ },
+ "ollama-cloud": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "ollama-cloud",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "ollama"
+  },
+  "wire_name": "openai"
+ },
+ "omp": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "omp",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "openai": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai"
+  },
+  "wire_name": "openai"
+ },
+ "openai, custom base URL": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai"
+  },
+  "wire_name": "openai"
+ },
+ "openai-completions": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openai-completions",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "custom_openai"
+  },
+  "wire_name": "openai"
+ },
+ "openai-completions, hosted deepseek model": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openai-completions",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "custom_openai"
+  },
+  "wire_name": "openai"
+ },
+ "openai-responses": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": "ResponsesProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openai-responses",
+   "responses_wire": true,
+   "sdk_provider_name": "openai",
+   "transport": "custom_responses"
+  },
+  "wire_name": "responses"
+ },
+ "opencode-go": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "opencode-go",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "opencode-go-anthropic": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "explicit_prompt_cache": true,
+   "protocol": "AnthropicThinkingProtocol",
+   "sdk": "anthropic"
+  },
+  "route": {
+   "anthropic_wire": true,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "opencode-go-anthropic",
+   "responses_wire": false,
+   "sdk_provider_name": "anthropic",
+   "transport": "anthropic"
+  },
+  "wire_name": "anthropic"
+ },
+ "registered id, mixed case": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "deepseek"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": true,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "deepseek",
+   "responses_wire": false,
+   "sdk_provider_name": "deepseek",
+   "transport": "deepseek"
+  },
+  "wire_name": "deepseek"
+ },
+ "registered id, padded": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "deepseek"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": true,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "deepseek",
+   "responses_wire": false,
+   "sdk_provider_name": "deepseek",
+   "transport": "deepseek"
+  },
+  "wire_name": "deepseek"
+ },
+ "registered id, title case": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "explicit_prompt_cache": false,
+   "protocol": "AnthropicThinkingProtocol",
+   "sdk": "anthropic"
+  },
+  "route": {
+   "anthropic_wire": true,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "anthropic",
+   "responses_wire": false,
+   "sdk_provider_name": "anthropic",
+   "transport": "anthropic"
+  },
+  "wire_name": "anthropic"
+ },
+ "registered id, upper case": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai"
+  },
+  "wire_name": "openai"
+ },
+ "saved login, anthropic sdk": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "explicit_prompt_cache": true,
+   "protocol": "AnthropicThinkingProtocol",
+   "sdk": "anthropic"
+  },
+  "route": {
+   "anthropic_wire": true,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mybox-claude",
+   "responses_wire": false,
+   "sdk_provider_name": "anthropic",
+   "transport": "custom_anthropic"
+  },
+  "wire_name": "anthropic"
+ },
+ "saved login, asked in another case": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": "error: ValueError",
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "MyBox",
+   "responses_wire": false,
+   "sdk_provider_name": "MyBox",
+   "transport": null
+  },
+  "wire_name": "MyBox"
+ },
+ "saved login, cliproxyapi shape": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": true,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mybox-cpa",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "cliproxyapi"
+  },
+  "wire_name": "openai"
+ },
+ "saved login, deepseek sdk with openai-responses shape": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": null,
+   "sdk": "deepseek"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": true,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mybox-mixed",
+   "responses_wire": false,
+   "sdk_provider_name": "deepseek",
+   "transport": "custom_responses"
+  },
+  "wire_name": "deepseek"
+ },
+ "saved login, openai sdk": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mybox",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "custom_openai"
+  },
+  "wire_name": "openai"
+ },
+ "saved login, openai-responses shape": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": {
+   "protocol": "ResponsesProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "mybox-responses",
+   "responses_wire": true,
+   "sdk_provider_name": "openai",
+   "transport": "custom_responses"
+  },
+  "wire_name": "responses"
+ },
+ "sglang": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "sglang",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "tabbyapi": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "tabbyapi",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "text-generation-webui": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "text-generation-webui",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "tgi": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "tgi",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "unknown id": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": "error: ValueError",
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "nosuch",
+   "responses_wire": false,
+   "sdk_provider_name": "nosuch",
+   "transport": null
+  },
+  "wire_name": "nosuch"
+ },
+ "unknown id, mixed case": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": "error: ValueError",
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "NoSuch",
+   "responses_wire": false,
+   "sdk_provider_name": "NoSuch",
+   "transport": null
+  },
+  "wire_name": "NoSuch"
+ },
+ "unknown id, padded": {
+  "decoder_keeps_reasoning": false,
+  "resolve_model": "error: ValueError",
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": false,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "nosuch",
+   "responses_wire": false,
+   "sdk_provider_name": "nosuch",
+   "transport": null
+  },
+  "wire_name": "nosuch"
+ },
+ "vllm": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "vllm",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
+ "xai": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "xai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai"
+  },
+  "wire_name": "openai"
+ },
+ "xai, custom base URL": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "xai",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai"
+  },
+  "wire_name": "openai"
+ },
+ "xinference": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "ReasoningContentProtocol",
+   "reasoning_blocks": false,
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "xinference",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ }
+}

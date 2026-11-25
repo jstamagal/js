@@ -1,8 +1,9 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
+from js import repl_commands, repl_state
 from js.skills import (
     SkillCatalog,
     SkillInvocationError,
@@ -207,6 +208,29 @@ def test_frontmatter_closing_delimiter_is_found_beyond_metadata_prefix(tmp_path)
     assert metadata.description == "Large valid manifest"
 
 
+def test_plain_description_with_colon_is_discovered_and_loadable(tmp_path):
+    package = tmp_path / "package"
+    description = 'Build charts. The user never runs charts: you build the deck and hand them a launcher.'
+    _write(package / "charts" / "SKILL.md", f"---\nname: charts\ndescription: {description}\n---\nbody\n")
+
+    catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+
+    assert catalog.get("charts") is not None
+    assert catalog.get("charts").description == description
+    assert catalog.load("charts") == "body\n"
+
+
+def test_comma_separated_tools_are_discovered_and_loaded(tmp_path):
+    package = tmp_path / "package"
+    _write(package / "automation" / "SKILL.md", "---\ntools: Read, Glob, Grep, Bash\n---\nbody\n")
+
+    catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+
+    assert catalog.get("automation") is not None
+    assert catalog.get("automation").tools == ("Read", "Glob", "Grep", "Bash")
+    assert catalog.load("automation") == "body\n"
+
+
 def test_search_is_case_insensitive_term_based_and_deterministic(tmp_path):
     package = tmp_path / "package"
     _write(package / "zulu" / "SKILL.md", "---\ndescription: Release database safely\n---\nbody")
@@ -223,6 +247,36 @@ def test_search_is_case_insensitive_term_based_and_deterministic(tmp_path):
 
 
 _USER_ONLY = "---\ndescription: Only when asked\ndisable-model-invocation: true\n---\nuser-only body\n"
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_bom_skill_keeps_frontmatter_and_user_only_rule(tmp_path, newline):
+    package = tmp_path / "package"
+    text = "\ufeff" + _USER_ONLY.replace("\n", newline)
+    _write(package / "secret" / "SKILL.md", text)
+    catalog = _catalog(tmp_path, package, tmp_path / "global")
+    metadata = catalog.get("secret")
+    assert metadata.description == "Only when asked"
+    assert not metadata.model_invocable
+    assert load_skill(catalog, "secret") is None
+    assert load_skill(catalog, "secret", user=True).instructions == "user-only body\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "\ufeff"])
+def test_frontmatter_offset_matches_body_after_bom(prefix):
+    from js.skills import _split_frontmatter
+
+    text = prefix + _USER_ONLY
+    manifest, body, end = _split_frontmatter(text)
+    assert manifest["disable-model-invocation"] is True
+    assert text[end:] == body == "user-only body\n"
+
+
+def test_frontmatter_strips_only_one_leading_bom():
+    from js.skills import _split_frontmatter
+
+    assert _split_frontmatter("\ufeff\ufeffbody") == ({}, "\ufeffbody", 1)
+    assert _split_frontmatter("body\ufeff") == ({}, "body\ufeff", 0)
 
 
 def test_user_only_skill_is_hidden_from_model_and_unloadable_by_it(tmp_path):
@@ -273,6 +327,28 @@ def test_user_invocation_ignores_other_lines_and_rejects_unknown_names(tmp_path)
         expand_user_invocation(catalog, "/skill nosuch")
     with pytest.raises(SkillInvocationError):
         expand_user_invocation(catalog, "/skill")
+
+
+def test_repl_assembly_supplies_the_skill_invocation_command(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from repl_driver import record_turns, run_async
+
+    from js import skills
+    from js.config import from_env
+
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path / ".js" / "skills" / "secret" / "SKILL.md", _USER_ONLY)
+    cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
+    assembly = repl_state.ReplAssembly(commands={"use": repl_commands.COMMANDS["skill"]}, skill_command="/use")
+    turns = record_turns(monkeypatch)
+
+    run_async(monkeypatch, cfg, ["/use secret sharpen this plan"], wait=True, assembly=assembly)
+
+    [turn] = turns
+    message = turn.messages[-1]["content"]
+    assert skills.user_invoked_skill(message) == "secret"
+    assert "user-only body" in message
 
 
 _BUILTIN_NINE = {
@@ -353,3 +429,18 @@ def test_malformed_skill_warns_on_one_line_once(tmp_path, capsys):
     lines = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
     assert len(lines) == 1
     assert str(bad) in lines[0]
+
+
+def test_project_dirs_that_are_the_global_dirs_keep_the_global_label(tmp_path):
+    # Run from home: project_dir/.agents/skills is the shared global root and
+    # project_dir/.js/skills is the js global root.
+    home = tmp_path / "home"
+    _write(home / ".agents" / "skills" / "shared" / "SKILL.md", "---\ndescription: Shared skill\n---\nBody\n")
+    _write(home / ".js" / "skills" / "native" / "SKILL.md", "---\ndescription: Native skill\n---\nBody\n")
+    catalog = discover_skills(
+        home,
+        builtin_dir=tmp_path / "package",
+        global_dir=home / ".js" / "skills",
+        user_dir=home / ".agents" / "skills",
+    )
+    assert {skill.name: skill.source for skill in catalog.skills} == {"shared": "global", "native": "global"}

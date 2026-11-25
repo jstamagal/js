@@ -1,55 +1,97 @@
 # Configuration And Sessions
 
+## Selecting a profile
+
+`js --home DIR` uses `DIR` for the complete js home. The flag overrides
+`JS_HOME`; without either, the home is `~/.js`. Startup resolves it once to an
+absolute directory and creates a missing directory. An existing file is an
+error. The resolved directory is exported as `JS_HOME` to prompts and shell
+commands; `%%JS_HOME%%` is the same value during prompt expansion.
+
+Each selected profile owns its config, agents, themes, skills, snippets,
+commands, sessions, credentials, logs, state, cache, work and tmp. A separate
+profile does not run migration from the operator's legacy locations or load
+the operator's `~/.agents/skills`. Its corresponding cross-client skill root
+is `<home>/.agents/skills`. Project `.js/` and `.agents/skills` layers still
+apply; starting in the operator's home uses the selected profile for those
+home-level layers. Session start records include `home`, and Continue hints
+carry `--home` for a separate profile.
+
+
 Configuration is read by `js.config.from_env()` at run start and stored in a
 frozen `Config` dataclass. CLI flags override individual runs where supported.
+
+A program that imports js can build a `Config` in code instead:
+`Config(model=..., provider_id=..., provider_api_key=...)`. `model` is the one
+required argument. Every other field has a default: no session is written
+(the session file is `os.devnull`), and the per-turn settings are the
+`defaults/jsrc` values unless `settings=` holds them. No jsrc, env var or `~/.js`
+file is read.
 
 ## Config Files And Precedence
 
 `js` reads config in this order, lowest to highest:
 
-1. `js/jsrc`, shipped in the package: the built-in defaults
+1. `defaults/jsrc`, shipped in the package: the built-in defaults
 2. user `jsrc` (`~/.js/jsrc`)
 3. project `.js/jsrc`
 4. project `.js/jsrc.local`
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 
-In one line: `js/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
+In one line: `defaults/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
 `.js/jsrc.local` < env vars < `--extra` CLI flags.
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
 `#`. `set -<key>` drops what the layers in between set, so the setting takes its
-`js/jsrc` value again.
+`defaults/jsrc` value again.
 
-`js/jsrc` holds one line per registered setting and is where every default value
-lives. A setting it leaves unset is written `set -<key>`. If `js/jsrc` is
+`defaults/jsrc` holds one line per registered setting and is where every default value
+lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
 missing, leaves out a registered setting, or holds a line that does not apply,
 js stops at startup with one line naming the file.
 
-When there is no `~/.js/jsrc`, js writes one on startup: one line per registered
-setting at its `js/jsrc` value. From then on that file sets every setting, so a
-number changed in `js/jsrc` does not reach a box that already has one; a setting
-registered after the file was written takes its `js/jsrc` value. `/save`
-replaces the file with every setting at its live value (`set -<key>` for one
-that holds none), then the `on` handlers and aliases, and keeps the old file as
-`jsrc.bak`.
+js never writes `~/.js/jsrc` on its own; only `/save` does, so the file holds
+only what the operator set and a default changed in `defaults/jsrc` still reaches
+the box. `js/jsrc.template` lists every setting in sections, each described
+with examples, at its stock value. `/save` writes what changed in the session
+since it started (or since the last `/save`): the settings `/set` changed, the
+model `/model` or the picker chose, the `/fset` entries changed, and `on`
+handlers and aliases added. Nothing the environment, a login or js's defaults
+put in is written. It edits the file in place: a changed setting gets its line
+uncommented or rewritten with the live value (or appended, when the file has
+no line for it), a live line for a setting back at stock is commented out, and
+every other line is left alone. No backup is made. With nothing changed, no
+file is written.
 
-`provider.id`, `provider.base_url`, and `provider.api_key` are unset in
-`js/jsrc`. When `provider.id` is set, the provider is constructed explicitly with
-the given base URL and API key; otherwise `ai-python` routes the model id
-natively through AI Gateway or via `provider:model` syntax for direct providers.
+`PROVIDER`, `BASE_URL`, and `API_KEY` are unset in
+`defaults/jsrc`. A model routes through a saved login (a `provider/model` prefix
+names it), through `PROVIDER`, built with the given base URL and API key, or,
+with no provider, through `BASE_URL` as an OpenAI-compatible endpoint. A model
+with none of these is refused with a not-logged-in message (`js/routing.py`,
+`js/model_client.py`).
 
 ## Setting Reference
 
-Every settable key is registered in `js/settings.py` `REGISTRY` with its type
-and help text; its default is its line in `js/jsrc`. `/set` with no argument
-lists every setting and its current value; `/show <key>` shows one setting with its
-help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
-settings, and `<unset>` for settings that explicitly defer to provider defaults. A set
-`provider.api_key` is masked as `<set>`.
+Every setting is registered in `js/settings.py` `REGISTRY` with its type; its
+help text is its entry in `defaults/help/set.txt` and its default is its line in
+`defaults/jsrc`. `/set` with no argument lists every setting and its current value,
+`/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
+a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
+settings, and `<unset>` for settings that explicitly defer to provider defaults. With
+`PARANOID_MODE` `on`, a set secret setting (`API_KEY`, `ENDPOINT_DEFAULT_KEY`, `EXTRA_HEADERS`,
+`EXTRA_PARAMS`, `MCP_SERVERS`, and the tool keys such as `TAVILY_API_KEY`) shows as `<set>`; with the default `off` it shows in full.
 
-Tool alias profiles let a model see alternate tool names without changing the
+Under `js -C DIR`, `JAIL_HIDE` paths (by default `~/.js`, `~/.ssh`, `~/.gnupg`,
+`~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail. The `~/.js`
+entry also covers the selected profile; an explicit replacement or empty list
+controls the hide rules. These paths stay hidden whatever DIR and
+`JAIL_BIND` show, and `js -C` refuses a DIR inside one. A hidden path created on the host while a long-running jailed
+command (kernel or terminal session) is already running can be visible to that
+command until it ends; file tools refuse it by name throughout.
+
+Tool alias profiles (`TOOL_ALIASES`, a JSON list) let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
 case-insensitive substring-matched against the active model id and provider id.
 `match` may be a single string or a list of strings.
@@ -60,17 +102,17 @@ Aliases that collide with an active canonical tool name are also ignored.
 
 ## MCP Servers And Per-Agent Policy
 
-`mcp.servers` and `mcp.agents` are JSON-valued `jsrc` settings. A stdio server
+`MCP_SERVERS` and `MCP_AGENT_POLICY` are JSON-valued `jsrc` settings. A stdio server
 uses `command`, optional `args`/`env`, and an optional `enabled` boolean:
 
 ```text
-set mcp.servers {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
+set MCP_SERVERS {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
 ```
 
 A streamable-HTTP server uses `url` and optional `headers`:
 
 ```text
-set mcp.servers {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
+set MCP_SERVERS {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
 ```
 
 The value is one JSON object, so combine both entries when using both transports.
@@ -78,11 +120,11 @@ Server names must normalize uniquely. A server requires exactly one of `command`
 or `url`; HTTP URLs must use `http` or `https` and may not contain userinfo.
 Disabled servers are omitted before runtime.
 
-`mcp.agents` applies independent server and namespaced-tool policy by agent id.
+`MCP_AGENT_POLICY` applies independent server and namespaced-tool policy by agent id.
 Allow/deny entries are case-sensitive glob patterns and deny always wins:
 
 ```text
-set mcp.agents {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
+set MCP_AGENT_POLICY {"defaultagent":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
 ```
 
 An absent `allow` permits everything not denied; an empty `allow` permits
@@ -97,9 +139,10 @@ the current turn. A normal turn-owned host closes every stdio process and HTTP
 session on exit. Session-owned hosts may retain connections across turns, but
 loaded MCP schemas do not carry into the next turn.
 
-Configured credential values are redacted from remote schemas, text/structured
-results, resources, prompts, errors, progress/log notifications, provider tool
-results, and append-only session JSONL. Credential sources include environment
+Configured credential values are always redacted, whatever `PARANOID_MODE` says,
+from remote schemas, text/structured results, resources, prompts, errors,
+progress/log notifications, provider tool results, and append-only session
+JSONL. Credential sources include environment
 values, header values and authorization payloads, URL query values, and stdio
 flag values (`--token value` or `--token=value`). Stdio stderr is drained but
 never surfaced. Redaction is a last-resort output boundary, not a reason to put
@@ -108,44 +151,33 @@ secrets in prompts or server-controlled content.
 ## Environment Variables
 
 Registry-backed `JS_*` variables overlay all `jsrc` files and use the same
-coercion as `set`. Every setting reads its canonical `JS_<DOTTED_UPPER>` name
-(`sampling.top_p` <-> `JS_SAMPLING_TOP_P`); the settings below also take a shorter
-name, which wins when both are set. Default values are the lines in `js/jsrc`.
+coercion as `set`. Setting `NAME` reads env var `JS_NAME` (`TOP_P` <->
+`JS_TOP_P`, `MODEL` <-> `JS_MODEL`). Three older env names are still read; the
+new name wins when both are set:
 
-| Variable | Key | Meaning |
+| Old variable | New variable | Setting |
 | --- | --- | --- |
-| `JS_MODEL` | `model.id` | Default model id; unprefixed ids route through AI Gateway. |
-| `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `JS_REASONING` | `model.reasoning_effort` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. |
-| `JS_PROVIDER` | `provider.id` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
-| `JS_BASE_URL` | `provider.base_url` | Explicit provider base URL; unset = provider default. |
-| `JS_API_KEY` | `provider.api_key` | Explicit provider API key; unset = env/login default. |
-| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | Max tool calls per turn before the loop gives up. |
-| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | Shell output shown per call, stdout and stderr together. Past it, the head and tail are shown and the whole stream is written to a file. |
-| `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | Hard cap on any tool result string. |
-| `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | fetch() per-request timeout in seconds. |
-| `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | Timeout in seconds for executable inline prompt directives. |
-| `JS_DEBUG` | `runtime.debug` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs (on stderr in one-shot mode). |
+| `JS_REASONING` | `JS_EFFORT` | `EFFORT` |
+| `JS_CONTEXT_WINDOW` | `JS_CONTEXT_SIZE` | `CONTEXT_SIZE` |
+| `JS_MAX_OUTPUT_TOKENS` | `JS_OUTPUT_TOKENS_MAX` | `OUTPUT_TOKENS_MAX` |
 
-Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
-do not need to be copied into `jsrc`.
+Default values are the lines in `defaults/jsrc`.
 
-The agent a run uses is the `agent` setting (`JS_AGENT`, default
-`defaultagent` in `js/jsrc`). `set agent autocoder` in a `jsrc` file picks it for
-every run under that file; `JS_AGENT` beats the `jsrc` files, and `--agent` or
+A provider's own env vars (`OPENAI_API_KEY`, `OPENAI_BASE_URL`,
+`ANTHROPIC_API_KEY`, ...) fill its key and base URL when the login and the
+settings leave them unset (`js/providers.py`). They do not stand in for a
+login, `PROVIDER` or `BASE_URL`: a model with none of them is refused.
+
+The agent a run uses is the `DEFAULT_AGENT` setting (`JS_DEFAULT_AGENT`, default
+`defaultagent` in `defaults/jsrc`). `set DEFAULT_AGENT slim` in a `jsrc` file picks it for
+every run under that file; `JS_DEFAULT_AGENT` beats the `jsrc` files, and `--agent` or
 `--commit` beats both. `--last` and `--session-key` resolve the agent the same
-way. The agent is read once at startup: `/set agent` in the REPL does not switch
+way. The agent is read once at startup: `/set DEFAULT_AGENT` in the REPL does not switch
 the running session, and `/save` carries it to later runs. `JS_SESSION` is still
 read from the environment. CLI code threads the selected agent and session
-through `Config` instead of mutating `os.environ`. Artifact mode is threaded
-through `ToolContext`.
+through `Config` instead of mutating `os.environ`.
 
-`limits.task_max_depth` and `limits.subagent_max_workers` have only their
-canonical names, `JS_LIMITS_TASK_MAX_DEPTH` and `JS_LIMITS_SUBAGENT_MAX_WORKERS`.
-
-Code-running inline prompt directives are on by default; `JS_ALLOW_INLINE_CODE=0`
+Code-running inline prompt directives are on by default; `JS_INLINE_CODE=0`
 disables them (`--im-a-pussy` sets exactly that for one run). See
 [inline-directives.md](inline-directives.md).
 
@@ -161,7 +193,8 @@ same.
 Files consulted, nearest first:
 
 1. `./.env`
-2. each parent directory's `.env`, up to the filesystem root
+2. each parent directory's `.env`, up to the filesystem root, while
+   `DOTENV_WALK_UP` is on (the default)
 3. `~/.js/.env`
 
 The real process environment always wins, and the nearest file wins over a
@@ -173,10 +206,10 @@ Format is the usual one: `KEY=value` per line, `#` comments, optional
 `export ` prefix, optional single or double quotes around the value. Malformed
 lines are skipped rather than raising.
 
-Provider credentials are a separate matter: `js` deliberately does **not**
-ride ambient provider keys in place of a login (`js/model_client.py`). A
-`.env` sets env vars, so it feeds the same settings env vars do — including
-`JS_API_KEY` — but it does not bypass the login gate.
+Provider credentials are a separate matter: a model with no saved login, no
+`PROVIDER` and no `BASE_URL` is refused, whatever SDK keys the environment holds
+(`js/model_client.py`). A `.env` sets env vars, so it feeds the same settings
+env vars do — including `JS_API_KEY` — but it does not bypass the login gate.
 
 ## CLI Overrides
 
@@ -184,35 +217,39 @@ Common flags:
 
 ```bash
 js -m "model/id"
-js --agent autocoder
+js --agent slim
 js --session existing-session
 js --no-save
 js --debug
 js --debug-file /tmp/js-debug.log
 js --reasoning off
 js --max-out 64000
-js --extra limits.task_max_depth=3
+js --extra SUBAGENT_DEPTH_MAX=3
 js --im-a-pussy
+js -i                  # --no-shell-history
 js --migrate-config
 ```
 
-`--extra KEY=VALUE` sets any dotted config key for one run and wins over env and
-all `jsrc` files. It may be repeated. Exact registered keys use the same
-registry coercion as `set` and env vars, including JSON validation for structured
+`--extra KEY=VALUE` sets one registered setting for one run and wins over env and
+all `jsrc` files. It may be repeated. KEY is a registered setting name (any case)
+or a child of a map setting such as `EXTRA_PARAMS.organization`; any other key is
+refused with `Unknown setting`. Registered settings use the same registry
+coercion as `set` and env vars, including JSON validation for structured
 settings; values store verbatim, with no magic clear/default token (clearing a
-setting back to its default is `set -key`). Loose keys and map subkeys use
-generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
-on the first `=` only, so values may contain `=`.
+setting back to its default is `set -NAME`). Map children use generic
+int -> float -> `true`/`false`/`null` -> string coercion. The key splits on the
+first `=` only, so values may contain `=`.
 
 In the REPL, `set [key [val]]` uses the same registry: `set` lists settings,
 `set key` shows one value, `set key value` changes the live setting, and
 `set -key` puts it back to the value the session started with.
-`show [key]` lists every current value or only the requested key. Secret values
-such as `provider.api_key` render as `<set>` once set.
+`show [key]` lists every current value or only the requested key. Under
+`PARANOID_MODE` `on`, secret values such as `API_KEY` render as
+`<set>` once set; under the default `off` they print in full.
 
-`set` also accepts a setting's short name: `model` (`model.id`), `provider`
-(`provider.id`), `baseurl` (`provider.base_url`), and `apikey`
-(`provider.api_key`).
+`set` also accepts a setting's short name: `model` (`MODEL`), `provider`
+(`PROVIDER`), `baseurl` (`BASE_URL`), and `apikey`
+(`API_KEY`).
 
 A `jsrc` file is a file of commands; a leading `/` is optional. While config
 loads, the settings layer (`setcmd.apply_config_line`) applies `set` lines and
@@ -221,6 +258,8 @@ precedence and apply in `-p` runs too. It follows `load` lines and applies the
 same lines from the loaded files. When the REPL starts it runs every other
 line (`on`, `alias`, `load`, any command in the table) through the command
 table, in file order; errors name the file and line and do not stop startup.
+A `-p` run registers only the `on` lines, and only those whose command stands
+alone (`docs/user-guide.md`); it reports every other `on` line on stderr.
 A relative `load` path in a `jsrc` resolves against that file's directory.
 `/load <file>` runs every line of a file through the same table. Registered
 event handlers run through it too when an event is emitted. Handler failures
@@ -229,15 +268,24 @@ through the model loop; recursive event dispatch from inside a handler is
 skipped.
 
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
-writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
-temporary and is removed after 2 releases.
+writes equivalent `set ...` lines to `jsrc` and exits.
+
+js never rewrites a `jsrc` it loads. A line that still uses an old setting
+name (`model.id`, `limits.max_read_lines`) is an unknown setting at load,
+the same as `set model.id x` typed in the REPL or given with `--extra`.
+`scripts/rename-settings.py --write <file>` rewrites such a file to the new
+names when you run it; the rules are `js/rename.py`'s.
 
 `--im-a-pussy` opts OUT of the code-running inline prompt directives for the
 run; they are on by default and compile and run arbitrary code from prompt
 files -- see [inline-directives.md](inline-directives.md).
 
+`-i` / `--no-shell-history` keeps your recent shell commands out of the system prompt
+for the run: it sets `ENVCTX_HIST=0`, and envctx then prints no
+`recent_shell` block. Export `ENVCTX_HIST=0` to make it permanent.
+
 `--reasoning off` is an explicit override. It disables reasoning even when
-`JS_REASONING` is set.
+`JS_EFFORT` is set.
 
 `-m` / `--model` overrides the effective configured/env model for the selected
 run or session.
@@ -257,13 +305,13 @@ project.
 
 ```text
 ~/.js/
-  jsrc                   # the user layer; js writes it on first run, /save replaces it
+  jsrc                   # the user layer; only /save writes it, in place
   .env
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
   tools.yaml
-  tags.yaml              # your session tag list; replaces the stock js/tags.yaml
   agents/<agent_id>/     # global agent prompts
+  commands/              # markdown commands, /NAME
   skills/
   toolbox/
   logins/
@@ -273,9 +321,9 @@ project.
     <session>.jsonl      # the record, append-only
     <session>.txt        # its readable transcript
     <session>/           # its subagent runs
-  keys                   # key bindings (keys.file), read at REPL start
+  keys                   # key bindings (KEYBINDS_FILE), read at REPL start
   state/
-    history.jsonl        # every prompt sent at a REPL prompt (history.file)
+    history.jsonl        # every prompt sent at a REPL prompt (HISTORY_FILE)
     <agent_id>/debug.log
     <agent_id>/undo/
     <agent_id>/latest.json   # the agent's latest session, for --last
@@ -285,10 +333,8 @@ project.
   logs/
     <agent_id>/          # debug autolog, compaction flights
     transcript/<agent_id>/
-    tags.log             # why a tag sweep stopped
   cache/modelsdotdev/
   cache/sessions.sqlite  # the picker's catalog and search index
-  cache/tags.lock        # held by the running tag sweep
   work/                  # what the agent must not lose; notes/ holds :n and :w
   tmp/                   # js scratch; entries a day old are removed at start
   plans/                 # the plan tool
@@ -361,9 +407,8 @@ never leaves stray files.
 
 ### Agent prompts
 
-Agent prompts are discovered from repo `prompts/`, global `~/.js/agents/`,
-and project `.js/agents/`; project scope wins over global,
-which wins over repo.
+Agent prompts are discovered from stock `defaults/agents/`, global `~/.js/agents/`,
+and project `.js/agents/`; files layer per relative name: project > home > defaults.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:
@@ -380,8 +425,8 @@ blank-line separated:
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
 Agent manifests are an `agent.yaml` beside the prompt files: `tools:`
-entries in `noun:modifier` form, and optional `model:`, `reasoning:`,
-`sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
+entries in `noun:modifier` form, and optional `model:`, `secondary_model:`,
+`models:`, `reasoning:`, `sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
 `~/.js/tools.yaml`. See [tool-system.md](tool-system.md).
 
 ## Session Resolution
@@ -467,12 +512,14 @@ does not hit it. The children of an unsaved run are not saved either.
 
 `js --session` (no name) or `/session [query]` in the REPL lists every session,
 the one last written to first, across every directory and agent: a resumed
-session moves to the top, and a tag record does not move it. The date column
+session moves to the top. The date column
 is still when it started. `•` marks sessions started in
 the current directory; branches sit under the session they came from. A
-session started with `--session NAME` shows NAME in the last column, before
-its tags. `js --list` prints every session file as a table, newest first,
-with local times.
+session started with `--session NAME` shows NAME in the last column. Under
+the highlighted session two lines show the operator's last text (tool calls
+and js reminders left out) and the agent's last status line, the one that
+begins with 📌 (📌🔨🦍), else the last line of its last text.
+`js --list-sessions --json` lists the saved sessions as JSON.
 
 | key | does |
 |---|---|
@@ -509,7 +556,6 @@ Search terms combine with AND:
 | `dir:~/js/*`, `dir:~/js/**` | one level under `~/js` / `~/js` or anywhere under it; `*` and `?` stay within one path component |
 | `mode:-p`, `mode:quick` | how it was started, or its kind |
 | `model:*qwen*` | any message stamped with a matching model |
-| `tag:nfs` | a tag containing the text, or matching a glob |
 
 The words are ranked over what the operator wrote, what the model wrote, the
 `/name` title, and each tool row's label and call line; tool output is not
@@ -522,43 +568,6 @@ entry. On open, a file whose size or mtime differs from its entry is read
 again, an entry whose file is gone is dropped, and a missing or unreadable
 index is built again from the sessions.
 
-### Tags
-
-Sessions are tagged by TypeSafe's Jev from a tag list, one line per tag, its
-name and a short description:
-
-```yaml
-js: the js harness itself, its code, config, tools and sessions
-nfs / storage: NFS exports and mounts, fstab, disks and filesystems
-amd gpus: AMD Radeon and RDNA2 cards, multi-GPU setups, VRAM, power and temperatures
-```
-
-js ships a stock list, `js/tags.yaml`. `~/.js/tags.yaml`, when there is one,
-replaces it whole: copy the stock list there and cut or add lines. `tags.file`
-names a file to read instead of both. Tags describe subjects; an activity such
-as "something broke" or "coding" fits nearly every session and tags nothing.
-
-A session is judged in one request: the state is its last `tags.messages`
-(10) operator and model messages, including the text the model wrote
-alongside its tool calls, each cut to `tags.message_chars` (2000). Tool output
-is not sent. Every tag is one Noul question ("is this one of the main
-subjects"); tags scoring at least `tags.threshold` (0.6) are kept, highest
-first, at most `tags.max` (3). `tags.model` (`jev-latest`) names the model.
-
-When a js run releases its sessions, and when `/session` opens the picker, js
-starts a detached sweep (`python -m js.session_tags`). It tags every shown
-session (not empty, quick, subagent or script-started) that no other process
-has open and whose newest tags record is missing, was judged against a
-different tag list, or is older than its last message. So a session is tagged
-when it ends, a resumed session is tagged again when it ends again, and
-editing `tags.yaml` retags every session. One sweep runs at a time. A failed
-request stops the sweep with one line in `~/.js/logs/tags.log`; the next
-sweep carries on.
-
-With no `TYPESAFE_API_KEY` (from the environment or `~/.js/.env`), or a
-`tags.file` that names a missing file, no sweep starts and nothing is printed. The text of the messages
-above is sent to api.typesafe.ai.
-
 ## The `.txt` Transcript
 
 Every write to a session's `.jsonl` brings the `.txt` beside it up to date:
@@ -568,22 +577,20 @@ agent: defaultagent   dir: /home/me/js   mode: repl
 models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
 started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
 branched-from: -
-tags: js · linux admin
 
 #0001 08:02 you  APE
 #0015 08:31 tool:shell  look at the spill file  $ wc -lc result.txt  → exit 0, 91984B
 #0016 08:32 ape  the file has no real newlines, it's escaped JSON
 ```
 
-Five header lines and a blank line (`head -6 *.txt` summarises a folder), then
+Four header lines and a blank line (`head -5 *.txt` summarises a folder), then
 one line per message, numbered by its place among the message records of the
 `.jsonl`; a multi-line message continues on indented lines. An assistant
 message that calls tools is not a line of its own: its text labels each call,
 and each tool result is a line with the tool, that label, the first line of the
 call and the result's exit code and size. Tool output is only in the `.jsonl`,
 at the same message number. A message a rollback took back out of the
-conversation is not shown; compaction removes nothing from the `.txt`. The
-`tags:` line shows the session's newest tags record, `-` before it has one.
+conversation is not shown; compaction removes nothing from the `.txt`.
 
 ## JSONL Record Shape
 
@@ -595,7 +602,6 @@ The memory file is append-only JSONL. Records have:
 {"id":"c2d81e5a","parent":"3f9a0c12","kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
 {"id":"5e6f7a80","parent":"c2d81e5a","kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
 {"id":"91aa02bc","parent":"5e6f7a80","kind":"title","ts":1781190004.0,"title":"parser fix"}
-{"id":"7c3e5b20","parent":"5e6f7a80","kind":"tags","version":1,"ts":1781190900.0,"tags":["js"],"scores":{"js":0.93,"banter":0.02},"list":"4f1c0e9a27d3b6e1","through":14}
 {"id":"0d4e7b19","parent":"5e6f7a80","kind":"usage","version":1,"ts":1781190005.0,"call":{"model":"m","provider":"p","input_tokens":8120,"output_tokens":41,"cache_read_tokens":6000,"cache_write_tokens":0,"reasoning_tokens":0,"cost":0.0031},"totals":{"calls":3,"...":"...","by_model":{}}}
 ```
 
@@ -603,10 +609,8 @@ Every record starts with an `id`, eight hex digits unique within the file, and
 a `parent`. Message and mark records form the conversation path: each one's
 `parent` is the id of the message or mark before it in the file, `null` for the
 first. A start or title record's `parent` is the message or mark it follows,
-and no record names it as its parent. `usage` and `tags` records are placed
-the same way. A `tags` record holds the kept tags, every tag's score, the
-digest of the tag list it was judged against (`list`) and the session's
-message count then (`through`); its `ts` is not the session's activity.
+and no record names it as its parent. `usage` records are placed the same
+way. Older sessions also hold `tags` records; they are skipped when read.
 Replay reads the file in order and does not use ids.
 
 A record's `ts` is when its message happened. The operator's message is written
@@ -618,9 +622,8 @@ Every start appends a `session_metadata` control record: working directory,
 agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
 `pipe`, `subagent`, `commit`) and the command line. A subagent run's record
 names its `parent_session` file. A branch is a new file holding the parent's
-records up to the message it split at, ids kept, except the `usage` and
-`tags` records, so its usage totals start at zero and it is tagged on its
-own; its start record's
+records up to the message it split at, ids kept, except the `usage`
+records, so its usage totals start at zero; its start record's
 `branched_from` names the parent session file and the `id` of that message,
 and the `.txt` shows the message's number. The start record is not
 conversation context and the message loader ignores it. Adjacent hidden
@@ -635,7 +638,7 @@ left, in the same shape. Resume uses whichever came last: an assistant stamp, a
 the configured model).
 
 An assistant message whose reasoning came signed (an Anthropic thinking
-signature, a Codex encrypted reasoning item) also carries `reasoning_parts`,
+signature, an OpenAI Responses encrypted reasoning item) also carries `reasoning_parts`,
 each part's text and provider metadata, and `reasoning_from`, the provider and
 model that signed them. Replay sends the signed parts back only to that
 provider and model. A record after an edit to earlier history (tool-result
@@ -644,7 +647,7 @@ left out) loses `reasoning_parts` and `reasoning_from`; a compaction mark drops
 them from its kept tail on load.
 
 `/name <text>` appends a `title` record; `/name` alone prints the title. The
-newest title is the session's name in `--list --json`.
+newest title is the session's name in `--list-sessions --json`.
 
 `load_replay_messages()` (and `load_messages()`, which reads through it) ignores:
 
@@ -702,8 +705,7 @@ provider that is not built in refreshes a stale catalog, as any provider
 lookup does): fresh input, cache reads, cache writes and output each at
 their own rate per million tokens, cache rates falling back to the input rate,
 and the price tier whose `min_context` the prompt reaches. A call that names a
-provider is priced only from that provider's catalog row (or the row its SDK
-or login maps to; a Codex login is priced at OpenAI's API rates), so a local
+provider is priced only from that provider's catalog row, so a local
 server's model is not charged an API price. A call with no provider goes
 through the gateway and takes the routed row. A model with no price counts
 tokens only and adds to `unpriced_calls`.
@@ -713,20 +715,15 @@ after it. The newest one is where a resumed session's totals start; `/wipe`
 starts them again at zero. `/cost` prints the totals, the tokens by kind, and
 each model's share. The status bar shows the session's cost; `+` after it
 means some calls had no price, and a session with no priced call shows its
-token count instead. `js -p --json` carries the same figures in its `usage`
-events ([Headless JSON Events](headless-json.md)).
+token count instead. `js -p "task" --json` carries the same figures in its final `usage`
+object; `--json-stream` includes them in `end` ([Headless JSON](headless-json.md)).
 
-## Wipe And Backups
+## Wipe
 
-`/wipe` rotates the active file:
-
-```text
-session.jsonl      -> session.jsonl.bak
-session.jsonl      -> session.jsonl.bak.1
-session.jsonl      -> session.jsonl.bak.2
-```
-
-Existing backups are preserved. The in-process REPL message list is cleared.
+`/wipe` moves the active session file, and its `.txt` beside it, to a new
+session name in the same directory. The moved conversation is a session of
+its own and can be resumed. The in-process REPL message list is cleared. No
+backup file is made.
 
 ## Compaction
 
@@ -736,10 +733,10 @@ the same offline. On load, the mark rebuilds in-memory context as:
 
 1. the unchanged system prompt,
 2. one user message containing `<compaction-summary>...`,
-3. a fixed tail (`tail_tokens`, default `16384`) whose boundary backs up so an
+3. a recent tail (`COMPACTION_KEEP_RECENT_TOKENS`, default `16384`) whose boundary backs up so an
 assistant `tool_calls` message is not separated from its tool results.
 
-The summary model is `compact.model`; literal `same` uses the active session
+The summary model is `COMPACTION_EXTERNAL_MODEL`; literal `same` uses the active session
 model. `/compact -m <model>` overrides it for that one manual compaction.
-Optional focus text and `compact.pre_hook` stdout are supplied as guidance.
+Optional focus text and `COMPACTION_HINT_COMMAND` stdout are supplied as guidance.
 Hook failures warn but do not block compaction.

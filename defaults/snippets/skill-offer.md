@@ -1,0 +1,1 @@
+Skill {{SKILL}} applies to {{PATH}}: {{DESCRIPTION}} Load it with tool_discovery {"load":"{{CATALOG_ID}}"}.

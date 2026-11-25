@@ -1,0 +1,4 @@
+{"kind":"message","message":{"role":"user","content":"one"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"two"},"stamp":{"model":"model-a","provider":"anthropic","reasoning":"high"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"mark","marker":"session_reset","ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"user","content":"fresh"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}

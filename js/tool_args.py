@@ -3,38 +3,96 @@
 from __future__ import annotations
 
 import json
-import re
 
+from . import settings as _settings
 from .toolkit.core import compact_json
 
 
-_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+def _strip_commas_outside_strings(text: str) -> str:
+    """Drop `,` that sit outside any string, directly before `}` or `]`.
+
+    One scan tracking whether the cursor is inside a string and whether the
+    previous backslash escaped the current character, so a `, }` that is part
+    of a string VALUE is never touched.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(text)
+    for index, char in enumerate(text):
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            continue
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < length and text[lookahead] in " \t\r\n":
+                lookahead += 1
+            if lookahead < length and text[lookahead] in "}]":
+                continue  # drop the comma and its trailing whitespace
+            out.append(char)
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _close_object(text: str) -> str | None:
+    """`{"a": 1,` with one missing closing brace, else None."""
+    stripped = text.strip()
+    if stripped.startswith("{") and not stripped.endswith("}"):
+        return stripped + "}"
+    return None
 
 
 def repair_jsonish(raw: str) -> dict:
-    """Best-effort repair for common model-emitted argument JSON."""
+    """Best-effort repair for common model-emitted argument JSON. Raw
+    newlines and tabs inside string values are accepted."""
     if not raw:
         return {}
-    candidates = [raw, raw.strip()]
+    if _settings.live_value("TOOL_ARGUMENT_STRICT"):
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
+        return parsed
     stripped = raw.strip()
+    candidates = [raw, stripped]
     if stripped.startswith('"') and stripped.endswith('"'):
         try:
-            decoded = json.loads(stripped)
+            decoded = json.loads(stripped, strict=False)
             if isinstance(decoded, str):
-                candidates.append(decoded)
+                # Unwrap BEFORE scanning: the encoded form hides its commas
+                # behind escapes, so stripping must run on the decoded text.
+                candidates.extend([decoded, decoded.strip()])
         except json.JSONDecodeError:
             pass
-    candidates.extend(_TRAILING_COMMA_RE.sub(r"\1", item) for item in list(candidates))
-    if stripped and stripped.startswith("{") and not stripped.endswith("}"):
-        candidates.append(stripped + "}")
+    # Structure-only comma strip on every candidate, and the closing brace
+    # both before and after the strip, so `{"a": 1,` and `{"a": 1,}` both mend.
+    for item in list(candidates):
+        closed = _close_object(item)
+        if closed is not None:
+            candidates.append(closed)
+    candidates.extend(_strip_commas_outside_strings(item) for item in list(candidates))
+    for item in list(candidates):
+        closed = _close_object(item)
+        if closed is not None:
+            candidates.append(closed)
     last_error: Exception | None = None
     for candidate in candidates:
         try:
-            parsed = json.loads(candidate)
+            parsed = json.loads(candidate, strict=False)
             if not isinstance(parsed, dict):
                 raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
             return parsed
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, RecursionError) as exc:
             last_error = exc
     raise ValueError(str(last_error) if last_error else "could not parse arguments")
 
@@ -45,6 +103,8 @@ _JSON_CONTAINERS = {"array": list, "object": dict}
 def _scalar_from_string(value: str, types: list) -> object:
     """``value`` parsed as the one scalar type its schema declares, or
     unchanged when it does not parse as that type."""
+    if "null" in types and value.strip() == "null":
+        return None
     if "integer" in types:
         try:
             return int(value.strip())
@@ -76,22 +136,48 @@ def coerce_to_schema(value: object, schema: object) -> object:
 
     Only a property whose declared type excludes ``string`` is touched: a
     container only when the string parses to exactly that container, a scalar
-    only when the string parses as that integer, number or boolean (``"1.5"``
+    only when the string parses as that integer, number, boolean or null (``"1.5"``
     is not an integer; ``"yes"`` is not a boolean). Anything else is returned
     unchanged, so a genuinely wrong argument still fails validation.
     """
-    if not isinstance(schema, dict):
+    if _settings.live_value("TOOL_ARGUMENT_STRICT") or not isinstance(schema, dict):
         return value
     declared = schema.get("type")
-    types = declared if isinstance(declared, list) else [declared]
+    types = list(declared) if isinstance(declared, list) else [declared]
+    # `anyOf`/`oneOf` branches count as declared types: a stringified object
+    # under anyOf[object, array] would otherwise stay a string and fail the
+    # very validation this coercion exists to pass. A branch that declares
+    # string means the string is already valid - leave it alone. `$ref` is
+    # left unresolved (no resolver lives in this file).
+    def _collect(schema_part: dict) -> None:
+        branch_type = schema_part.get("type")
+        if isinstance(branch_type, list):
+            types.extend(branch_type)
+        elif branch_type is not None:
+            types.append(branch_type)
+        for combiner in ("anyOf", "oneOf"):
+            branches = schema_part.get(combiner)
+            if isinstance(branches, list):
+                for branch in branches:
+                    if isinstance(branch, dict) and "$ref" not in branch:
+                        _collect(branch)
+
+    for combiner in ("anyOf", "oneOf"):
+        branches = schema.get(combiner)
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict) and "$ref" not in branch:
+                    _collect(branch)
+    seen_types: set = set()
+    types = [t for t in types if not (t in seen_types or seen_types.add(t))]
     if isinstance(value, str) and "string" not in types:
         for name in types:
             expected = _JSON_CONTAINERS.get(name)
             if expected is None:
                 continue
             try:
-                parsed = json.loads(value)
-            except (json.JSONDecodeError, ValueError):
+                parsed = json.loads(value, strict=False)
+            except (json.JSONDecodeError, ValueError, RecursionError):
                 break
             if isinstance(parsed, expected):
                 value = parsed
@@ -101,22 +187,54 @@ def coerce_to_schema(value: object, schema: object) -> object:
     if isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
-            return {
+            value = {
                 key: coerce_to_schema(item, properties[key]) if key in properties else item
                 for key, item in value.items()
             }
-        return value
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
-            return [coerce_to_schema(item, items) for item in value]
+            value = [coerce_to_schema(item, items) for item in value]
+    if isinstance(value, (dict, list)):
+        branches = [
+            branch
+            for variants in (schema.get("anyOf"), schema.get("oneOf"))
+            if isinstance(variants, list)
+            for branch in variants
+            if isinstance(branch, dict) and "$ref" not in branch
+        ]
+        if branches:
+            from referencing.exceptions import Unresolvable
+
+            try:
+                if schema_error(value, schema) is None:
+                    return value
+                for branch in branches:
+                    candidate = coerce_to_schema(value, branch)
+                    if schema_error(candidate, schema) is None:
+                        return candidate
+            except Unresolvable:
+                pass
     return value
+
+
+def without_underscore_extras(arguments: object, schema: object) -> object:
+    """``arguments`` without the top-level keys that start with ``_`` and
+    that ``schema`` does not declare."""
+    if not isinstance(arguments, dict) or not isinstance(schema, dict):
+        return arguments
+    properties = schema.get("properties")
+    declared = properties if isinstance(properties, dict) else {}
+    extras = [key for key in arguments if isinstance(key, str) and key.startswith("_") and key not in declared]
+    if not extras:
+        return arguments
+    return {key: value for key, value in arguments.items() if key not in extras}
 
 
 def is_json_object(raw: str) -> bool:
     try:
         return isinstance(json.loads(raw), dict)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return False
 
 
@@ -133,7 +251,7 @@ def canonical_tool_args(raw: str) -> str:
         return raw
     try:
         return compact_json(repair_jsonish(raw))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return raw
 
 
@@ -148,8 +266,7 @@ def schema_error(arguments: object, schema: object) -> str | None:
     or there is no schema."""
     if not isinstance(schema, dict):
         return None
-    from jsonschema import exceptions as jsonschema_exceptions
-    from jsonschema import validators as jsonschema_validators
+    from jsonschema import exceptions as jsonschema_exceptions, validators as jsonschema_validators
 
     try:
         validator_type = jsonschema_validators.validator_for(schema)

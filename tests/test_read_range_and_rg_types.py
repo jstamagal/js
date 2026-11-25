@@ -8,8 +8,8 @@ import time
 import pytest
 
 from js.toolkit import ToolContext
-from js.toolkit.fs import _rg_stream, _rg_types, fs_read, fs_search
-
+from js.toolkit.file_search import _rg_stream, _rg_types, fs_search
+from js.toolkit.fs import fs_read
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 
@@ -59,9 +59,9 @@ def test_an_oversized_range_is_clamped_rather_than_rejected(tmp_path):
 
 
 def _read_schema():
-    from js.toolkit import fs
+    from js.toolkit import fs_tools
 
-    return next(t for t in fs.tools() if t.name == "read").openai_spec()["function"]["parameters"]
+    return next(t for t in fs_tools.tools() if t.name == "read").openai_spec()["function"]["parameters"]
 
 
 def _embedded_calls(text: str) -> list[dict]:

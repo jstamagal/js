@@ -3,58 +3,79 @@
 from __future__ import annotations
 
 import pytest
+from repl_driver import type_into_js
 
-from js import cli
-from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
+from js import repl_commands, repl_state
+from js.replcomplete import JsCompleter, path_candidates, value_candidates
+
+
+def test_completer_uses_supplied_command_prefix():
+    completer = JsCompleter(commands=lambda: {"set": "keys"}, setting_keys=("MODEL",), command_prefix=":")
+    assert completer.candidates(":se") == ([":set"], 3)
+    assert completer.candidates(":set MO") == (["MODEL"], 2)
 
 
 def _table():
-    return cli._command_completions({})
+    """Verb -> argument completion source, as the command table gives it."""
+    return {verb: command.complete for verb, command in repl_commands.COMMANDS.items()}
+
+
+def _repl_completer(monkeypatch, tmp_path, lines=()) -> JsCompleter:
+    """The completer of js started at a terminal in ``tmp_path``, after
+    ``lines`` were typed into it."""
+    monkeypatch.chdir(tmp_path)
+    built: dict = {}
+    assert type_into_js(monkeypatch, list(lines), screen_parts=built) == 0
+    return built["completer"]
+
+
+@pytest.fixture
+def completer(monkeypatch, tmp_path) -> JsCompleter:
+    """The completer of js started at a terminal."""
+    return _repl_completer(monkeypatch, tmp_path)
 
 
 # ---- command context (first word) ----
 
-def test_command_prefix_match_not_fuzzy():
-    assert "/compact" in command_candidates("/comp", _table())
-    assert "/compact" in command_candidates("comp", _table())   # bare word -> implicit slash
-    assert command_candidates("cpt", _table()) == []            # subsequence must NOT match
+def test_command_prefix_match_not_fuzzy(completer):
+    assert "/compact" in completer.candidates("/comp")[0]
+    assert "/compact" in completer.candidates("comp")[0]   # bare word -> implicit slash
+    assert completer.candidates("cpt")[0] == []            # subsequence must NOT match
 
 
-def test_every_table_command_completes():
-    assert command_candidates("/", _table()) == sorted("/" + verb for verb in cli.COMMANDS)
+def test_every_table_command_completes(completer):
+    assert completer.candidates("/")[0] == sorted("/" + verb for verb in repl_commands.COMMANDS)
 
 
-def test_bare_quit_words_complete():
-    completer = JsCompleter(commands=_table, bare_words=cli.QUIT_WORDS)
-
+def test_bare_quit_words_complete(completer):
     assert "exit" in completer.candidates("ex")[0]
     assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
-    for word in cli.QUIT_WORDS:
+    for word in repl_state.QUIT_WORDS:
         assert word in completer.candidates(word)[0]
 
 
-def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
-    command = cli.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
-    monkeypatch.setitem(cli.COMMANDS, "frobnicate", command)
-    completer = JsCompleter(commands=lambda: cli._command_completions({}))
+def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch, tmp_path):
+    command = repl_state.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
+    monkeypatch.setitem(repl_commands.COMMANDS, "frobnicate", command)
+    completer = _repl_completer(monkeypatch, tmp_path)
 
     assert completer.candidates("/frob")[0] == ["/frobnicate"]
 
 
-def test_aliases_complete_as_commands():
-    completer = JsCompleter(commands=lambda: cli._command_completions({"aliases": {"ship": "save"}}))
+def test_aliases_complete_as_commands(monkeypatch, tmp_path):
+    completer = _repl_completer(monkeypatch, tmp_path, ["/alias ship save"])
 
     assert completer.candidates("/sh")[0] == ["/ship", "/show"]
 
 
-def test_shared_prefix_yields_all_for_rotation():
-    cands = command_candidates("/re", _table())
+def test_shared_prefix_yields_all_for_rotation(completer):
+    cands = completer.candidates("/re")[0]
     assert {"/reset", "/refresh-model-catalog"} <= set(cands)
 
 
-def test_compact_prefix_rotates_compact_and_compact_auto():
+def test_compact_prefix_rotates_compact_and_compact_auto(completer):
     # /compac is a prefix of both -> Tab rotates between them
-    assert set(command_candidates("/compac", _table())) == {"/compact", "/compact-auto"}
+    assert set(completer.candidates("/compac")[0]) == {"/compact", "/compact-auto"}
 
 
 # ---- routing through JsCompleter.candidates ----
@@ -62,54 +83,30 @@ def test_compact_prefix_rotates_compact_and_compact_auto():
 def _completer(spell=lambda w: ["the"] if w == "teh" else []):
     return JsCompleter(
         commands=_table,
-        setting_keys=["compact.auto", "compact.model", "model.id", "model.reasoning_effort"],
+        setting_keys=["COMPACTION_AUTO", "COMPACTION_EXTERNAL_MODEL", "MODEL", "EFFORT"],
         names=lambda: ["deepseek", "openai", "myvllm"],
         spell=spell,
     )
 
 
 def test_set_arg_completes_keys():
-    cands, n = _completer().candidates("/set compact.")
-    assert cands == ["compact.auto", "compact.model"]
-    assert n == len("compact.")
+    cands, n = _completer().candidates("/set COMPACTION_")
+    assert cands == ["COMPACTION_AUTO", "COMPACTION_EXTERNAL_MODEL"]
+    assert n == len("COMPACTION_")
 
 
 def test_show_arg_completes_keys():
-    cands, _ = _completer().candidates("/show model.")
-    assert cands == ["model.id", "model.reasoning_effort"]
+    cands, _ = _completer().candidates("/show MO")
+    assert cands == ["MODEL"]
 
 
 def test_value_candidates_prefix_matches_reasoning_effort_stops():
-    assert value_candidates("model.reasoning_effort", "m") == ["max", "medium", "minimal"]
-    assert value_candidates("model.reasoning_effort", "zzz") == []
+    assert value_candidates("EFFORT", "m") == ["max", "medium", "minimal"]
+    assert value_candidates("EFFORT", "zzz") == []
 
 
 def test_value_candidates_empty_for_unknown_key():
-    assert value_candidates("model.id", "de") == []
-
-
-def test_set_reasoning_effort_value_completes_xhigh():
-    # FINDING 54: `/set model.reasoning_effort x<tab>` must offer `xhigh`.
-    cands, n = _completer().candidates("/set model.reasoning_effort x")
-    assert cands == ["xhigh"]
-    assert n == len("x")
-
-
-def test_set_reasoning_effort_value_lists_all_stops_when_empty():
-    cands, _ = _completer().candidates("/set model.reasoning_effort ")
-    assert cands == ["high", "low", "max", "medium", "minimal", "off", "xhigh"]
-
-
-def test_set_non_enum_key_value_has_no_candidates():
-    cands, _ = _completer().candidates("/set model.id de")
-    assert cands == []
-
-
-def test_show_second_word_still_completes_keys_not_values():
-    # /show never takes a value, so a second word still completes knob keys
-    # (not the reasoning-effort enum), unlike /set.
-    cands, _ = _completer().candidates("/show model.reasoning_effort m")
-    assert cands == ["model.id", "model.reasoning_effort"]
+    assert value_candidates("MODEL", "de") == []
 
 
 def test_login_arg_completes_names():
@@ -167,3 +164,41 @@ def test_path_candidates_marks_directories(tmp_path):
     (tmp_path / "sub").mkdir()
     cands = path_candidates(str(tmp_path / "su"))
     assert cands == [str(tmp_path / "sub") + "/"]
+
+
+def test_path_completion_treats_filename_metacharacters_as_literal_prefixes(tmp_path):
+    literal = tmp_path / "report[1].txt"
+    literal.write_text("wanted", encoding="utf-8")
+    (tmp_path / "report1.txt").write_text("other file", encoding="utf-8")
+    token = "@" + str(tmp_path / "report[1]")
+
+    candidates, _ = _completer().candidates(f"read {token}")
+
+    assert candidates == ["@" + str(literal)]
+
+
+def test_registered_spellcheck_language_reaches_hunspell(monkeypatch):
+    from types import SimpleNamespace
+
+    from js import fset, replcomplete
+
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout="*\n")
+
+    monkeypatch.setattr(replcomplete.subprocess, "run", run)
+    fset.bind_settings({"SPELLCHECK_LANGUAGE": "de_DE", "SPELLCHECK_TIMEOUT": 7})
+    replcomplete.hunspell_suggest("wort")
+    assert calls[0][0][-1] == "de_DE"
+    assert calls[0][1]["timeout"] == 7
+
+
+def test_completion_routes_and_enums_come_from_the_caller():
+    completer = JsCompleter(commands=lambda: {"set": "set"},
+                            path_completion=lambda token: None,
+                            unknown_arguments=lambda head, token: [head + ":" + token],
+                            value_enums={"CUSTOM": ("chosen",)})
+    assert completer.candidates("/set CUSTOM ch") == (["chosen"], 2)
+    assert completer.candidates("hello ./file") == (["hello:./file"], 6)

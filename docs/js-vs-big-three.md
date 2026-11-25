@@ -33,10 +33,10 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Long shell jobs | handle, never killed | backgrounded | session id | blocks |
 | Async subagents | handle + reminder (js-1g1.17) | yes, notification | yes, mailbox | ? |
 | Persistent code kernel | yes, live `NAMESPACE`, calls js tools (js-1g1.22) | stub in source | fresh V8 per cell | fresh QuickJS |
-| Model recorded per turn | no, start only (being fixed) | ? | yes | yes |
-| Branch / fork / rewind | no (designed) | yes | yes | yes |
-| Session picker with search | no (designed) | yes | yes | yes |
-| Structured headless output | yes, `-p --json` (done in js-1g1.18) | stream-json | `exec --json` | json + rpc |
+| Model recorded per turn | yes, a stamp on every reply (js-1g1.2) | ? | yes | yes |
+| Branch / fork / rewind | branch at a message, from the session picker | yes | yes | yes |
+| Session picker with search | yes, `/session` | yes | yes | yes |
+| Structured headless output | yes, `-p --json` or `--json-stream` | stream-json | `exec --json` | json + rpc |
 | Cost accounting | yes, `/cost` and the bar (done in js-1g1.19) | yes | tokens only | yes |
 | One config grammar (file = REPL) | yes | no | no | no |
 | Prompt-time code directives | yes | no | no | no |
@@ -46,11 +46,11 @@ Safety, sandboxing and approval flows are left out on purpose.
 
 ## Bets that paid off
 
-**The system prompt is frozen into the session.** Resume sends a byte-identical prefix, and `prompt_seen:` warns when prompt files change (`memory.py:261-330`). Claude Code rebuilds its prompt every turn and needs cache-boundary markers. Codex stores base instructions but re-injects context diffs. js has the cleanest cache story of the four.
+**The system prompt is frozen into the session.** Resume sends a byte-identical prefix, and `prompt_seen:` warns when prompt files change (`memory.record_prompt_seen`). Claude Code rebuilds its prompt every turn and needs cache-boundary markers. Codex stores base instructions but re-injects context diffs. js has the cleanest cache story of the four.
 
-**Tool results are clipped once and stay clipped.** `_fair_share_ceiling` (`runtime.py:756`) water-fills a 200 kB per-turn budget, so the fattest result loses bytes first. The clipped text is what enters history, so the prefix never changes later. Claude Code reaches the same budget but needs a replacement-state object to keep it stable.
+**Tool results are clipped once and stay clipped.** `_fair_share_ceiling` (`result_caps.py`) water-fills a 200 kB per-turn budget, so the fattest result loses bytes first. The clipped text is what enters history, so the prefix never changes later. Claude Code reaches the same budget but needs a replacement-state object to keep it stable.
 
-**Oversized results name the exact continuing read.** `spill_oversized_result` (`runtime.py:677`) returns a preview plus `start_byte` and `start_line` for `read`. Claude Code gives a path and a 2 kB preview. Codex middle-truncates.
+**Oversized results name the exact continuing read.** `spill_oversized_result` (`toolkit/results.py`) returns a preview plus `start_byte` and `start_line` for `read`. Claude Code gives a path and a 2 kB preview. Codex middle-truncates.
 
 **Token counts are anchored to the provider and calibrated.** `TokenState` anchors on the last real usage and estimates only the delta. The reply reserve is capped at 20k, like Claude Code.
 
@@ -58,15 +58,15 @@ Safety, sandboxing and approval flows are left out on purpose.
 1. Clear old results.
 2. Summarise before the current message.
 3. Summarise the turn and keep a tail.
-4. If the provider still rejects, halve the tail, up to 3 rounds (`runtime.py:1505-1636`).
+4. If the provider still rejects, halve the tail, up to `COMPACTION_OVERFLOW_ROUNDS_MAX` (3) rounds (`turn_budget.py`).
 
 pi retries once. Codex does not recover inside a normal turn.
 
 **Edit safety is the strictest, and cheap to recover from.**
-- A stale edit is refused, and js returns the diff between what was read and what is on disk now. Coverage is tracked per line range (`fs.py:138`). A stale edit costs one turn in js and two in Claude Code. Codex and pi have no guard.
+- A stale edit is refused, and js returns the diff between what was read and what is on disk now. Coverage is tracked per line range (`fs.changed_since_read`). A stale edit costs one turn in js and two in Claude Code. Codex and pi have no guard.
 - `patch` returns the diff it wrote. None of the others show the model its own edit.
-- A miss gets "closest line is N" (`fs._nearest_hint`).
-- A near-miss on smart quotes, Unicode dashes, no-break spaces or trailing whitespace still applies, and every line and character the edit kept is written back from the file (`fs._keep_untouched`, js-1g1.15).
+- A miss gets "closest line is N" (`patch._nearest_hint`).
+- A near-miss on smart quotes, Unicode dashes, no-break spaces or trailing whitespace still applies, and every line and character the edit kept is written back from the file (`patch._keep_untouched`, js-1g1.15).
 - Batch edits are all-or-nothing, and each edit sees the result of the one before it.
 
 **Shell never kills a long job.** It hands back `HANDLE n RUNNING` with poll, wait and kill, and later reads return only new bytes. This is on par with Claude Code and Codex. pi blocks.
@@ -75,19 +75,19 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **The tool policy is declarative, and you can see why each tool is on or off.** `agent.yaml` noun:modifier entries resolve against `tools.yaml` tags, and `/tools` prints the rule that decided each tool. The others decide in code.
 
-**One grammar for config.** `set key value` is the same line in `js/jsrc`, in `/set` and in `--extra`. `/save` writes every setting at its live value, and `set -key` reverts a setting. The others keep their file format and their runtime settings separate.
+**One grammar for config.** `set key value` is the same line in `defaults/jsrc`, in `/set` and in `--extra`. `/save` writes the settings you changed into your jsrc in place, and `set -key` reverts a setting. The others keep their file format and their runtime settings separate.
 
-**`JS.md` rather than a global `AGENTS.md`**, so repo-shaped instructions don't leak into every project (`paths.py:74-81`). **Single-pass prompt directives**, so a directive's output is never re-scanned (`promptexpand.py`). **Agents are prompt directories** with ordered fragments and a manifest, which is a richer unit than Claude Code's single file or pi's `SYSTEM.md`.
+**`JS.md` rather than a global `AGENTS.md`**, so repo-shaped instructions don't leak into every project (`paths.global_instruction_files`). **Single-pass prompt directives**, so a directive's output is never re-scanned (`promptexpand.py`). **Agents are prompt directories** with ordered fragments and a manifest, which is a richer unit than Claude Code's single file or pi's `SYSTEM.md`.
 
 ## Where bucking the norm looks wrong
 
 **Shell output keeps the head and throws away the tail.** Done in js-1g1.26. `_StreamCapture` now keeps the head and the tail, and the reader writes the raw stream to a file once it passes the cap. The result shows both ends and names the byte range left out and the file, which `read` reaches with `start_byte`. Background job polls work the same way.
 
-**Retry gave up after two attempts and ignored `Retry-After`.** Done in js-1g1.13: a retry waits what `retry-after-ms` or `Retry-After` asks, up to `runtime.retry_attempts` (default 10), and a wait over `runtime.retry_max_wait_seconds` fails at once. The SDK clients' own retries are off, so the budget is js's alone.
+**Retry gave up after two attempts and ignored `Retry-After`.** Done in js-1g1.13: a retry waits what `retry-after-ms` or `Retry-After` asks, up to `RETRY_COUNT_MAX` (default 10), and a wait over `RETRY_WAIT_MAX` fails at once. The SDK clients' own retries are off, so the budget is js's alone.
 
 **A direct Anthropic provider gets no thinking.** Done in js-1g1.12: every provider on the anthropic SDK now takes `reasoning` as thinking, adaptive with an effort on Claude 4.6 and later and a token budget on the rest (`reasoning.anthropic_thinking`). Before, `steers_via_effort` covered only Codex, OpenAI-SDK and implicit gateway endpoints, and a Claude model on the direct API ran with thinking off whatever `reasoning` said.
 
-**A turn cut off by max output tokens just ended.** Done in js-1g1.13: the request is sent again once with `runtime.max_output_escalation` (64k, held to the model's limit), then up to `runtime.max_output_resumes` (3) resume nudges, as Claude Code does. The SDK's `length` finish now counts as a cutoff; before, only Codex's did.
+**A turn cut off by max output tokens just ended.** Done in js-1g1.13: the request is sent again once with `OUTPUT_TOKENS_RETRY_MAX` (64k, held to the model's limit), then up to `OUTPUT_RESUMES_MAX` (3) resume nudges, as Claude Code does. The SDK's `length` finish now counts as a cutoff; before, only Codex's did.
 
 **Compaction summaries are cold.** The summary request is a fresh one-message prompt, so it reads nothing from the main thread's cache. Claude Code forks the summary call so it shares the main thread's cache prefix. The rest of this gap is done in js-1g1.14: the history goes as plain text with tool results clipped to 2000 chars, a second compaction updates the previous summary, and 3 failed summaries in a row pause automatic compaction.
 
@@ -102,8 +102,6 @@ pi retries once. Codex does not recover inside a normal turn.
 **Sessions were filed per agent, and the model was recorded only at start.** Done in js-1g1.2: sessions are filed by start directory and every reply carries a model stamp. Resume comes back on the stamped model; an explicit `-m` or a stamp with no login changes that (js-1g1.21).
 
 **`AGENTS.md` is read only from the start directory.** Kept on purpose: js never walks up, so `~/js` never reads `~/AGENTS.md`. The other three walk up; Codex even reads `/AGENTS.md`. Not a gap.
-
-**Two REPL loops (async and `--blocking`).** Every input feature has to land twice, or it goes missing in one of them. None of the others keeps a second loop.
 
 ## Novel in js
 
@@ -121,7 +119,7 @@ pi retries once. Codex does not recover inside a normal turn.
 - **`toolstats` audits shell habits:** calls to `cat`, `grep`, `find` or `sed -i` where a dedicated tool exists.
 - **An ircII scripting layer:** `on <event> <command>`, `alias`, `load`, and `/save` persisting them. The hook language is the command language.
 - **A vi input buffer with a real ex line** (`:w`, `:x`, `:e`, `:r`, `:n`, and `:<program>` runs the program on the buffer).
-- **`set -key` reverts a setting through the layers,** and `js/jsrc` must list every setting.
+- **`set -key` reverts a setting through the layers,** and `defaults/jsrc` must list every setting.
 - **Session leases with pid and start-time checks,** so the listing can show which sessions are in flight.
 - **The mode-switch note** (-p ↔ REPL) and prompt-drift marks.
 
@@ -130,38 +128,38 @@ pi retries once. Codex does not recover inside a normal turn.
 | mechanism | from | js change |
 |---|---|---|
 | Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | done in js-1g1.11: `_dispatch_tool_calls`, `Tool.read_only` and `read_only_when` |
-| Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `runtime.retry_attempts` |
-| Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `process_net._job_output` |
-| Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `runtime.max_output_escalation`, `runtime.max_output_resumes` |
+| Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `RETRY_COUNT_MAX` |
+| Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `shell._job_output` |
+| Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `OUTPUT_TOKENS_RETRY_MAX`, `OUTPUT_RESUMES_MAX` |
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | done in js-1g1.12: `reasoning_parts` on the assistant record, replayed to the same provider and model |
-| Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |
+| Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction_summary.serialize_conversation`, `compaction.record_auto_failure` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
 | BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | done in js-1g1.16: `discovery.ranked_entries`, `CatalogEntry.search_text` |
-| Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `fs._apply_edit`, `fs._keep_untouched` |
-| Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ToolContext.shown_read`, kept only while the earlier result is in history |
-| Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
-| Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `_stamp_without_login`, `_note_model_switch` |
+| Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `patch._apply_edit`, `patch._keep_untouched` |
+| Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ReadLedger.shown_by`, kept only while the earlier result is in history |
+| Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record`; `session_catalog.branch_session` |
+| Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `run_assembly.unreachable_stamp`, `conversation.note_model_switch` |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
-| Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | done in js-1g1.21: `memory.turn_cut_off`, `_CUT_OFF_NOTICE` |
+| Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | done in js-1g1.21: `memory.turn_cut_off`, the `turn-cut-off` snippet |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | skills done in js-1g1.24: `paths:` frontmatter, `TurnToolSurface.offer_path_skills`; rules still missing |
 | Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | done in js-1g1.23: `prompt_commands.py`, `~/.js/commands/NAME.md` |
-| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `ui.paste_collapse_lines`, `ui.paste_collapse_chars` |
-| Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `ui.paste_image_key` |
+| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `PASTE_COLLAPSE_LINES`, `PASTE_COLLAPSE_CHARS` |
+| Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `PASTE_IMAGE_KEY` |
 | Hooks that return context or block | Claude Code `utils/hooks.ts:418` | done in js-1g1.20: `on EVENT exec CMD`, `hookexec.py`; session and compact events |
-| Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `kernel_bridge.py`, `kernel_client.py` |
+| Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `python_kernel_bridge.py`, `python_kernel_client.py` |
 
 ## Entirely lacking
 
 - **Cost and cumulative token accounting** (done in js-1g1.19: `usage.py`, `/cost`, the status bar).
-- **Structured headless output.** `-p --json` streams events (done in js-1g1.18: `headless.py`); there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
-- **Branch, fork and rewind of history.** (designed)
-- **An in-REPL picker, titles and search.** (designed)
+- **Structured headless output.** `-p --json-stream` streams events (`headless.py`), while `--json` returns one final object; there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
+- **Branch, fork and rewind of history.** Branch done: the session picker branches a session at a message.
+- **An in-REPL picker, titles and search.** Done: `/session` opens the picker with `/` search, and `/name` titles a session.
 - **Plugins, or an in-process extension API** for registering tools or rewriting calls.
 - **Programmatic tool calling** (code mode). Done in js-1g1.22: a kernel cell calls `tools.read(...)` and gets a Python value.
 - **Push notifications.** Shell and kernel jobs are pull-only, and there's no stall watchdog.
 - **Worktree isolation for `task` workers.** They share one tree.
-- **Provider fallback.** The stream idle watchdog (`runtime.stream_idle_seconds`) and silent-overflow detection (a reply whose input exceeds the window) are done in js-1g1.13.
+- **Provider fallback.** The stream idle watchdog (`STREAM_IDLE_TIMEOUT`) and silent-overflow detection (a reply whose input exceeds the window) are done in js-1g1.13.
 - **Automatic memory.** Possibly already covered by the wiki pipeline, which is not wired into sessions.
 
 ## Architecture review (js alone)
@@ -172,11 +170,11 @@ Hot spots over 441 commits in two months:
 
 1. **One per-turn settings projection** (Strong, top pick). Each limit setting is copied by hand through six modules, and `fetch_timeout_s` appears in 9 files. One module that derives the effective limits gives a new setting one place to land. Done in js-1g1.31 (`js/turn_settings.py`).
 2. **Split the internals of `run_turn_async`** (Strong). It is 883 lines, with 19 parameters and 13 closures. Keep the one interface and move the closures into separate modules. Done in js-1g1.32 (`js/turn_stream.py`, `js/turn_surface.py`, `js/turn_budget.py`, `js/turn_call.py`).
-3. **The REPL live-state dict** (Worth exploring). It has 165 use sites, and `provider_base_url` is written from 8 of them.
+3. **The REPL live-state dict** (Worth exploring). It has 165 use sites, and `provider_base_url` is written from 8 of them. Now a typed dataclass, `ReplState` in `js/repl_state.py`.
 4. **Delete the compat shims in `cli.py`** (Strong, cheapest). They existed only so tests could patch old signatures, and one could mask a real `TypeError`. Done in js-1g1.25.
-5. **Move the run modes out of `cli.py`** (Worth exploring). That is about 500 lines, and `_run_prompt` takes 22 parameters.
-6. **One session-file reservation module** (Worth exploring). There are two copies, and they disagree on the name format.
-7. **Split code search out of `fs.py`** (Speculative). It would help navigation only.
+5. **Move the run modes out of `cli.py`** (Worth exploring). Done: the REPL is `js/repl.py`, and the `-p` run is `js/prompt_run.py`, a short function over named steps.
+6. **One session-file reservation module** (Worth exploring). Done: `session_store.reserve`.
+7. **Split code search out of `fs.py`** (Speculative). It would help navigation only. Done: the searches are `js/toolkit/file_search.py` and patch is `js/toolkit/patch.py`.
 
 ## Priorities
 
@@ -184,6 +182,6 @@ Hot spots over 441 commits in two months:
 2. **Parallel read-only tool calls** (done in js-1g1.11).
 3. **`Retry-After` plus a real retry budget** (done in js-1g1.13).
 4. **Reasoning:** turn on thinking for direct Anthropic, and replay Codex's encrypted reasoning and Anthropic's signatures (done in js-1g1.12).
-5. **Record ids plus the model stamp** (done in js-1g1.2), then the picker.
+5. **Record ids plus the model stamp** (done in js-1g1.2), then the picker (done).
 6. **stream-json output for `-p`** (done in js-1g1.18).
 7. **Architecture #1 (settings projection) and #4 (delete the shims, done in js-1g1.25).**

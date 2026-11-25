@@ -1,13 +1,14 @@
 """The swarm bus: one inbox per agent, a message is a file, the room log is the blackboard.
 
-  js -p --json --swarm ROOT/NAME "opener"          # this process is agent NAME on the bus at ROOT
+  python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
   python -m js.swarm send ROOT FROM TO "text"       # from the runner or the operator; TO is a name or *
   python -m js.swarm send ROOT steer kivu --kind stop   # end an agent after its current turn
+  python -m js.swarm send ROOT steer kivu --kind cancel # end its current turn now
+  python -m js.swarm send ROOT steer kivu "go on" --kind restart  # run an ended agent again
   python -m js.swarm members ROOT                    # who is on the bus, asleep or working, what each holds
   python -m js.swarm quiet ROOT                      # exit 0 when every agent is asleep with an empty inbox
   python -m js.swarm cells ROOT                      # the work board
   python -m js.swarm post ROOT steer "title" "body"  # the operator puts work on the board
-  python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
 
 ROOT/log.jsonl         every message ever sent, one JSON object per line, seq-numbered
 ROOT/claims.json       what is claimed, by whom, until when
@@ -16,19 +17,34 @@ ROOT/<name>/inbox/     one file per message not yet delivered to <name>
 ROOT/<name>/subs       the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep     present while <name> waits on its inbox
 ROOT/<name>/spawned    present when another agent's `recruit` started <name>
+ROOT/hold              seconds an asleep agent lets messages that are not addressed to it pile up before it wakes
+ROOT/<name>/ping       the stamp of the last rollcall
+ROOT/<name>/pong       <name>'s answer to it: the stamp, pid, asleep or working, when it last stepped
+ROOT/<name>/stderr     what <name> wrote to stderr while js.swarm_run ran it
 
 An agent on the bus never spends a model call waiting:
 
 - while a turn runs, its inbox is drained at every tool boundary and the messages
   ride in as a user message (``runtime.run_turn_async``'s ``steer``);
-- when the model stops calling tools, the process sleeps on the inbox and wakes
+- when the model stops calling tools, the agent sleeps on the inbox and wakes
   into a new turn with whatever landed. The sleep is a harness-side poll every
   ``POLL_S`` seconds; the model is not called. A burst that lands within
-  ``COALESCE_S`` of the first message is one wake.
+  ``COALESCE_S`` of the first message is one wake. On a bus with a hold, a
+  message addressed to the agent by name still wakes it at once; broadcasts
+  and subscribed kinds wait in the inbox for the hold and wake it once.
 
 A message of kind ``stop`` ends the agent after the turn it lands in. ``retire``
 is the agent ending itself: it posts a handoff and leaves the bus. A message
 sent to a name that has not joined yet waits in that name's inbox.
+
+``cancel`` and ``restart`` (``RUNNER_KINDS``) are for the runner: the agent's
+own inbox reads leave them, and `js.swarm_run` takes them. ``cancel`` ends the
+agent's current turn at once; ``restart`` runs an agent that has ended again
+from its spec, on its session, the body as its first message.
+
+A rollcall is a ping file in every member's directory. The agent's process
+answers it from a thread of its own; the model is not called and nothing lands
+in an inbox or the log. A member whose process is gone stays silent.
 """
 
 from __future__ import annotations
@@ -36,23 +52,32 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import math
 import os
 import re
 import shutil
-import subprocess
 import sys
+import threading
 import time
+import weakref
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from . import messages as msgs
+
 POLL_S = 0.25
 COALESCE_S = 0.3
+PULSE_S = 1.0
+ROLLCALL_WAIT_S = 3.0
 CLAIM_TTL_S = 600.0
-SPAWN_CAP = 8
 STOP = "stop"
 TICK = "tick"
 RETIRE = "retire"
+RESTART = "restart"
+CANCEL = "cancel"
+# Kinds the runner acts on; the agent's own inbox reads leave them for it.
+RUNNER_KINDS = frozenset({RESTART, CANCEL})
 TASK = "task"
 DONE = "done"
 CLOCK = "clock"
@@ -61,15 +86,15 @@ _NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def check_name(name: str) -> str:
-    if not _NAME.fullmatch(name or ""):
-        raise ValueError(f"swarm name must be one word of [A-Za-z0-9_.-]: {name!r}")
+    if name in {".", ".."} or not _NAME.fullmatch(name or ""):
+        raise ValueError(msgs.SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF.format(name=name))
     return name
 
 
 def check_kind(kind: str) -> str:
     kind = (kind or "").strip() or "say"
     if not _NAME.fullmatch(kind):
-        raise ValueError(f"a message kind is one word of [A-Za-z0-9_.-]: {kind!r}")
+        raise ValueError(msgs.SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF.format(kind=kind))
     return kind
 
 
@@ -138,7 +163,7 @@ class Room:
         """Drop <name> from the bus: its inbox, subscriptions and sleep marker. Its claims expire."""
         home = self.root / name
         shutil.rmtree(home / "inbox", ignore_errors=True)
-        for marker in ("subs", "asleep"):
+        for marker in ("subs", "asleep", "ping", "pong"):
             (home / marker).unlink(missing_ok=True)
 
     def members(self) -> list[str]:
@@ -153,6 +178,64 @@ class Room:
         """True when every member is asleep with nothing waiting: the swarm has nothing to do."""
         members = self.members()
         return bool(members) and all(self.asleep(m) and not Inbox(self, m).pending() for m in members)
+
+    # hold: how long an asleep agent lets messages not addressed to it pile up, so a run of them is one wake
+
+    def hold_s(self) -> float:
+        try:
+            return max(0.0, float((self.root / "hold").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return 0.0
+
+    def set_hold(self, seconds: float) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        _replace_text(self.root / "hold", repr(max(0.0, float(seconds))))
+
+    # rollcall: a ping file per member, answered by the member's process, never by its model
+
+    def ping(self) -> float:
+        """Call the roll: stamp every member's ping file. Returns the stamp."""
+        stamp = time.time()
+        for name in self.members():
+            _replace_text(self.root / name / "ping", repr(stamp))
+        return stamp
+
+    def pinged(self, name: str) -> float | None:
+        try:
+            return float((self.root / name / "ping").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def pong(self, name: str) -> dict | None:
+        """<name>'s last answer: ping (the stamp it answers), ts, pid, state, step."""
+        try:
+            answer = json.loads((self.root / name / "pong").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return answer if isinstance(answer, dict) else None
+
+    def answered(self, name: str, stamp: float) -> dict | None:
+        """<name>'s answer to the rollcall stamped `stamp`, or None while it has not answered."""
+        answer = self.pong(name)
+        return answer if answer is not None and answer.get("ping") == stamp else None
+
+    def silent_since(self, name: str) -> float | None:
+        """The stamp of a rollcall <name> has left unanswered past the wait, or None."""
+        stamp = self.pinged(name)
+        if stamp is None or time.time() - stamp < ROLLCALL_WAIT_S or self.answered(name, stamp):
+            return None
+        return stamp
+
+    def rollcall(self, wait: float = ROLLCALL_WAIT_S) -> dict[str, dict | None]:
+        """Ping every member and wait up to `wait` seconds: each member's answer, None for one that stayed silent."""
+        stamp = self.ping()
+        names = self.members()
+        deadline = time.monotonic() + wait
+        while True:
+            answers = {name: self.answered(name, stamp) for name in names}
+            if all(answers.values()) or time.monotonic() >= deadline:
+                return answers
+            time.sleep(POLL_S)
 
     @contextlib.contextmanager
     def _locked(self):
@@ -213,11 +296,14 @@ class Room:
     def subscribe(self, name: str, kind: str, on: bool = True) -> set[str]:
         check_name(name)
         kind = check_kind(kind)
-        kinds = self.subs_of(name)
-        (kinds.add if on else kinds.discard)(kind)
-        path = self.root / name / "subs"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(k + "\n" for k in sorted(kinds)), encoding="utf-8")
+        with self._locked():
+            kinds = self.subs_of(name)
+            (kinds.add if on else kinds.discard)(kind)
+            path = self.root / name / "subs"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(".subs.tmp")
+            tmp.write_text("".join(k + "\n" for k in sorted(kinds)), encoding="utf-8")
+            os.replace(tmp, path)
         return kinds
 
     # claims: one holder per key, for a while
@@ -226,13 +312,17 @@ class Room:
         """Take `key` for `who` for `ttl` seconds, or renew it. Returns (yours, holder, expires)."""
         check_name(who)
         with self._locked():
-            claims = self._claims()
-            held = claims.get(key)
-            if held is not None and held["holder"] != who:
-                return False, held["holder"], held["expires"]
-            claims[key] = {"holder": who, "expires": time.time() + max(1.0, float(ttl))}
-            self._write_claims(claims)
-            return True, who, claims[key]["expires"]
+            return self._claim_locked(key, who, ttl)
+
+    def _claim_locked(self, key: str, who: str, ttl: float) -> tuple[bool, str, float]:
+        expires = expiry(ttl, time.time(), minimum=1.0)
+        claims = self._claims()
+        held = claims.get(key)
+        if held is not None and held["holder"] != who:
+            return False, held["holder"], held["expires"]
+        claims[key] = {"holder": who, "expires": expires}
+        self._write_claims(claims)
+        return True, who, claims[key]["expires"]
 
     def release(self, key: str, who: str) -> bool:
         with self._locked():
@@ -270,22 +360,24 @@ class Room:
             cells = self._cells()
             cell = Cell(max((c.id for c in cells), default=0) + 1, title.strip(), body, by, time.time())
             self._write_cells([*cells, cell])
-        self.send(by, BROADCAST, f"task #{cell.id}: {cell.title}" + (f"\n{body}" if body.strip() else ""), TASK)
+        self.send(by, BROADCAST, f'task #{cell.id}: {cell.title}' + (f'\n{body}' if body.strip() else ""), TASK)
         return cell
 
     def take_cell(self, cell_id: int, who: str, ttl: float = CLAIM_TTL_S) -> tuple[bool, str, float]:
         """Take cell `cell_id` for `who`: a claim on its key, renewed by taking again."""
-        cell = self.cell(cell_id)
-        if cell is None:
-            raise KeyError(cell_id)
-        if cell.status == "done":
-            return False, cell.holder, 0.0
-        yours, holder, expires = self.claim(cell.key, who, ttl)
-        if yours:
-            with self._locked():
+        check_name(who)
+        with self._locked():
+            cells = self._cells()
+            cell = next((c for c in cells if c.id == cell_id), None)
+            if cell is None:
+                raise KeyError(cell_id)
+            if cell.status == "done":
+                return False, cell.holder, 0.0
+            yours, holder, expires = self._claim_locked(cell.key, who, ttl)
+            if yours:
                 self._write_cells([replace(c, status="taken", holder=who) if c.id == cell_id else c
-                                   for c in self._cells()])
-        return yours, holder, expires
+                                   for c in cells])
+            return yours, holder, expires
 
     def finish_cell(self, cell_id: int, who: str, result: str = "") -> Cell:
         """Mark the cell done with `result`, free its claim, tell everyone with a `done` message."""
@@ -295,13 +387,17 @@ class Room:
             done = next((c for c in cells if c.id == cell_id), None)
             if done is None:
                 raise KeyError(cell_id)
+            claims = self._claims()
+            if done.status == "done":
+                raise PermissionError(f'ERROR: task #{cell_id} is already done')
+            if claims.get(done.key, {}).get("holder") != who:
+                raise PermissionError(f'ERROR: task #{cell_id} is not held by you; take it before finishing')
             done = replace(done, status="done", holder=who, result=result)
             self._write_cells([done if c.id == cell_id else c for c in cells])
-            claims = self._claims()
             if done.key in claims:
                 del claims[done.key]
                 self._write_claims(claims)
-        self.send(who, BROADCAST, f"done #{done.id}: {done.title}" + (f"\n{result}" if result.strip() else ""), DONE)
+        self.send(who, BROADCAST, f'done #{done.id}: {done.title}' + (f'\n{result}' if result.strip() else ""), DONE)
         return done
 
     def cell(self, cell_id: int) -> Cell | None:
@@ -347,8 +443,20 @@ class Inbox:
         except FileNotFoundError:
             return False
 
-    def drain(self) -> list[Msg]:
-        """Every waiting message in seq order, each handed over once."""
+    def drain(self, *, skip: frozenset[str] = frozenset()) -> list[Msg]:
+        """Every waiting message in seq order, each handed over once; those of
+        a kind in ``skip`` stay in the inbox."""
+        return self._read(take=True, keep=lambda m: m.kind not in skip)
+
+    def peek(self, *, skip: frozenset[str] = frozenset()) -> list[Msg]:
+        """Every waiting message in seq order, left in the inbox."""
+        return self._read(take=False, keep=lambda m: m.kind not in skip)
+
+    def take(self, kinds: frozenset[str]) -> list[Msg]:
+        """The waiting messages of ``kinds``, in seq order, each handed over once."""
+        return self._read(take=True, keep=lambda m: m.kind in kinds)
+
+    def _read(self, take: bool, keep=lambda _m: True) -> list[Msg]:
         try:
             names = sorted(n for n in os.listdir(self.path) if n.endswith(".json") and not n.startswith("."))
         except FileNotFoundError:
@@ -357,10 +465,14 @@ class Inbox:
         for n in names:
             p = self.path / n
             try:
-                out.append(Msg.loads(p.read_text(encoding="utf-8")))
+                msg = Msg.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            p.unlink(missing_ok=True)
+            if not keep(msg):
+                continue
+            out.append(msg)
+            if take:
+                p.unlink(missing_ok=True)
         return out
 
     def wait(self, timeout: float | None = None) -> list[Msg]:
@@ -375,91 +487,81 @@ class Inbox:
             time.sleep(POLL_S)
 
 
+def _replace_text(path: Path, text: str) -> None:
+    """Write `path` whole: a reader sees the old text or the new, never half."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _pulse(ref: weakref.ref[Agent]) -> None:
+    """The thread that answers rollcalls for one agent, for as long as the agent is on the bus."""
+    while True:
+        agent = ref()
+        if agent is None or agent.retired:
+            return
+        with contextlib.suppress(OSError):
+            agent.answer_ping()
+        del agent
+        time.sleep(PULSE_S)
+
+
 def render(msgs: list[Msg], me: str) -> str:
     """The messages as the model reads them."""
-    lines = ["--- messages ---"]
+    lines = ['--- messages ---']
     for m in msgs:
-        to = "you" if m.to == me else m.to
-        kind = "" if m.kind == "say" else f" {m.kind}"
-        seq = f"#{m.seq}" if m.seq else ""
-        stamp = time.strftime("%H:%M:%S", time.localtime(m.ts))
-        lines.append(f"[{seq}{kind} {m.sender} -> {to} {stamp}]".replace("[ ", "["))
+        to = 'you' if m.to == me else m.to
+        kind = "" if m.kind == 'say' else f' {m.kind}'
+        seq = f'#{m.seq}' if m.seq else ""
+        stamp = time.strftime('%H:%M:%S', time.localtime(m.ts))
+        lines.append(f'[{seq}{kind} {m.sender} -> {to} {stamp}]'.replace('[ ', '['))
         lines.append(m.body.rstrip())
         lines.append("")
     return "\n".join(lines).rstrip()
 
 
 def roster(room: Room, me: str | None = None) -> str:
-    """One line per member: name, you, asleep or working, what it holds."""
+    """One line per member: name, you, asleep or working or silent at rollcall, what it holds."""
     held: dict[str, list[str]] = {}
     for key, claim in room.claims().items():
         held.setdefault(claim["holder"], []).append(key)
     lines = []
+    members = []
     for name in room.members():
         bits = [name]
         if name == me:
-            bits.append("(you)")
-        bits.append("asleep" if room.asleep(name) else "working")
+            bits.append(msgs.SWARM_ROSTER_YOU.format())
+        silent = None if name == me else room.silent_since(name)
+        state = "silent" if silent is not None else "asleep" if room.asleep(name) else "working"
+        members.append({"name": name, "self": name == me, "state": state,
+                        "silent_since": silent, "claims": sorted(held.get(name, []))})
+        if silent is not None:
+            bits.append(msgs.SWARM_ROSTER_SILENT.format(value=clock(silent)))
+        else:
+            bits.append(msgs.SWARM_ROSTER_ASLEEP.words() if state == "asleep" else msgs.SWARM_ROSTER_WORKING.words())
         if held.get(name):
-            bits.append("holds " + ", ".join(sorted(held[name])))
+            bits.append(msgs.SWARM_ROSTER_HOLDS.words(claims=", ".join(sorted(held[name]))))
         lines.append(" ".join(bits))
-    return "\n".join(lines) or "(nobody yet)"
+    bus_view(members=members)
+    return "\n".join(lines) or msgs.SWARM_ROSTER_EMPTY.format()
 
 
 def board(room: Room) -> str:
     """The work board as the model and the operator read it."""
     lines = []
-    for c in room.cells():
-        state = {"open": "open", "taken": f"taken by {c.holder}", "done": f"done by {c.holder}"}[c.status]
-        lines.append(f"#{c.id} [{state}] {c.title}" + (f" (from {c.by})" if c.by else ""))
+    cells = room.cells()
+    bus_view(tasks=[cell.as_dict() for cell in cells])
+    for c in cells:
+        state = {"open": msgs.SWARM_BOARD_OPEN.words(), "taken": msgs.SWARM_BOARD_TAKEN.format(holder=c.holder), "done": msgs.SWARM_BOARD_DONE.format(holder=c.holder)}[c.status]
+        lines.append(msgs.SWARM_BOARD_ROW.format(id=c.id, state=state, title=c.title) + (msgs.SWARM_BOARD_FROM.format(by=c.by) if c.by else ""))
         first = (c.result if c.status == "done" else c.body).strip().splitlines()
         if first:
-            lines.append(f"    {first[0][:160]}")
-    return "\n".join(lines) or "(no tasks on the board)"
-
-
-def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
-    """The command of a sibling of this process: `argv` run again as `python -m js`
-    with the --swarm path, the session name and the prompt replaced. The sibling
-    reads its opener from stdin."""
-    rest = list(argv[1:])
-    out: list[str] = [sys.executable, "-m", "js"]
-    has_prompt = False
-    i = 0
-    while i < len(rest):
-        tok = rest[i]
-        nxt = rest[i + 1] if i + 1 < len(rest) else None
-        has_value = nxt is not None and (nxt == "-" or not nxt.startswith("-"))
-        if tok == "--swarm" and has_value:
-            out += [tok, swarm]
-            i += 2
-        elif tok.startswith("--swarm="):
-            out.append(f"--swarm={swarm}")
-            i += 1
-        elif tok in ("-s", "--session") and has_value:
-            out += [tok, f"{nxt}-{name}"]
-            i += 2
-        elif tok.startswith("--session="):
-            out.append(f"{tok}-{name}")
-            i += 1
-        elif tok in ("-p", "--prompt"):
-            has_prompt = True
-            out += [tok, "-"]
-            i += 2 if has_value else 1
-        elif tok == "--last":
-            i += 1
-        else:
-            out.append(tok)
-            i += 1
-    if "--swarm" not in out and not any(t.startswith("--swarm=") for t in out):
-        out += ["--swarm", swarm]
-    if not has_prompt:
-        out += ["-p", "-"]
-    return out
+            lines.append(f'    {first[0][:160]}')
+    return "\n".join(lines) or msgs.SWARM_BOARD_EMPTY.format()
 
 
 class Agent:
-    """This process as one agent on a bus: ``--swarm ROOT/NAME``."""
+    """One agent on the bus at ROOT/NAME, as `js.swarm_run` runs it."""
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
         p = Path(path).expanduser()
@@ -469,61 +571,79 @@ class Agent:
         self.stop_seen = False
         self.retired = False
         self.alarm: float | None = None
-        # Set by the in-process runner: recruit adds a coroutine there, not a process.
+        # Set by the runner: what `recruit` calls to add an agent to its loop.
         self.recruiter: Any = None
+        # When the agent last stepped: joined, crossed a tool boundary, went to sleep or woke.
+        self.step = time.time()
+        self._answered: float | None = None
+        threading.Thread(target=_pulse, args=(weakref.ref(self),), name=f"swarm-pulse-{self.name}", daemon=True).start()
+
+    def answer_ping(self) -> bool:
+        """Answer the rollcall waiting in this agent's ping file. True when there was a new one."""
+        stamp = self.room.pinged(self.name)
+        if stamp is None or stamp == self._answered:
+            return False
+        home = self.room.root / self.name
+        state = "asleep" if (home / "asleep").is_file() else "working"
+        _replace_text(home / "pong", json.dumps(
+            {"ping": stamp, "ts": time.time(), "pid": os.getpid(), "state": state, "step": self.step}))
+        self._answered = stamp
+        return True
 
     def _take(self, msgs: list[Msg]) -> list[Msg]:
+        self.step = time.time()
         if any(m.kind == STOP for m in msgs):
             self.stop_seen = True
         return msgs
 
     def steer(self) -> dict | None:
         """``run_turn_async``'s steer: the inbox as a user message at a tool boundary."""
-        msgs = self._take(self.inbox.drain())
+        msgs = self._take(self.inbox.drain(skip=RUNNER_KINDS))
         if not msgs:
             return None
         return {"role": "user", "content": render(msgs, self.name), "steered": True}
 
-    def sleep(self) -> list[Msg]:
-        """Block until something lands, or the alarm set by `wake_me` goes off.
-        No model call is made while waiting. A burst is handed over as one wake."""
-        marker = self._asleep()
-        try:
-            timeout = None if self.alarm is None else max(0.0, self.alarm - time.monotonic())
-            landed = self.inbox.wait(timeout)
-            if not landed:
-                return [self._tick()]
-            time.sleep(COALESCE_S)
-            return self._take(landed + self.inbox.drain())
-        finally:
-            marker.unlink(missing_ok=True)
-
     async def sleep_async(self) -> list[Msg]:
-        """`sleep` for an agent on an event loop: the same wait as an await."""
+        """Wait until something lands, or the alarm set by `wake_me` goes off.
+        No model call is made while waiting. A burst is handed over as one wake."""
         import asyncio
 
         marker = self._asleep()
         try:
+            first = None
             while True:
-                landed = self.inbox.drain()
+                first, landed = self._wake(first)
                 if landed:
-                    await asyncio.sleep(COALESCE_S)
-                    return self._take(landed + self.inbox.drain())
-                if self.alarm is not None and time.monotonic() >= self.alarm:
-                    return [self._tick()]
+                    return landed
                 await asyncio.sleep(POLL_S)
         finally:
             marker.unlink(missing_ok=True)
+
+    def _wake(self, first: float | None) -> tuple[float | None, list[Msg]]:
+        """One look at the inbox while asleep. `first` is when the oldest waiting message was
+        first seen. Returns it, and what to wake with: nothing while the wait goes on."""
+        now = time.monotonic()
+        waiting = self.inbox.peek(skip=RUNNER_KINDS)
+        if not waiting:
+            if self.alarm is not None and now >= self.alarm:
+                return None, [self._tick()]
+            return None, []
+        first = now if first is None else first
+        for_me = any(m.to == self.name or m.kind == STOP for m in waiting)
+        if now - first >= (COALESCE_S if for_me else max(COALESCE_S, self.room.hold_s())):
+            return first, self._take(self.inbox.drain(skip=RUNNER_KINDS))
+        return first, []
 
     def _asleep(self) -> Path:
         marker = self.room.root / self.name / "asleep"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
+        self.step = time.time()
         return marker
 
     def _tick(self) -> Msg:
         self.alarm = None
-        return Msg(0, time.time(), CLOCK, self.name, TICK, "The time you asked to be woken after has passed.")
+        return Msg(0, time.time(), CLOCK, self.name, TICK, 'The time you asked to be woken after has passed.')
 
     def wake_message(self, msgs: list[Msg]) -> dict:
         return {"role": "user", "content": render(msgs, self.name)}
@@ -533,7 +653,8 @@ class Agent:
 
     def wake_me(self, seconds: float) -> None:
         """Wake after `seconds` even if nothing lands. Zero or less clears the alarm."""
-        self.alarm = None if seconds <= 0 else time.monotonic() + seconds
+        expires = expiry(seconds, time.monotonic())
+        self.alarm = None if seconds <= 0 else expires
 
     def retire(self, handoff: str) -> Msg:
         """Post the handoff to everyone, leave the bus, end after this turn."""
@@ -543,259 +664,33 @@ class Agent:
         self.retired = True
         return msg
 
-    def spawn(self, name: str, opener: str, argv: list[str] | None = None) -> subprocess.Popen:
-        """Start a sibling agent NAME on this bus: this process's own command with
-        a new name and session, the opener as its first prompt. Its events land in
-        ROOT/NAME/events.jsonl. At most SPAWN_CAP spawned agents per bus."""
-        check_name(name)
-        root = self.room.root
-        home = root / name
-        if name in self.room.members() or (home / "spawned").is_file():
-            raise ValueError(f"{name} is already on the bus")
-        spawned = sum(1 for p in root.iterdir() if (p / "spawned").is_file()) if root.is_dir() else 0
-        if spawned >= SPAWN_CAP:
-            raise ValueError(f"this bus already has {spawned} spawned agents; the cap is {SPAWN_CAP}")
-        home.mkdir(parents=True, exist_ok=True)
-        cmd = sibling_argv(sys.argv if argv is None else argv, str(home), name)
-        with open(home / "events.jsonl", "ab") as out, open(home / "stderr", "ab") as err:
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, start_new_session=True)
-        proc.stdin.write(opener.encode("utf-8"))
-        proc.stdin.close()
-        (home / "spawned").write_text(json.dumps({"by": self.name, "pid": proc.pid, "ts": time.time(), "cmd": cmd}),
-                                      encoding="utf-8")
-        return proc
 
 
-# ---------------------------------------------------------------- the tools --swarm puts on the surface
+def bus_view(**fields: Any) -> None:
+    # Here, not at the top: the toolkit needs js's third-party packages, and
+    # the bus is imported by programs that have only the standard library.
+    from .toolkit.core import view
 
-_OFF_BUS = "ERROR: this agent is not on a swarm bus (run js with --swarm ROOT/NAME)"
+    view(**fields)
 
 
-def _agent(context: Any) -> Agent | None:
-    return getattr(context, "swarm", None)
+def expiry(seconds: float, now: float, *, minimum: float = 0.0) -> float:
+    """A finite deadline that the platform can represent before state is written."""
+    try:
+        duration = float(seconds)
+        if not math.isfinite(duration):
+            raise ValueError("duration must be finite")
+        expires = now + max(minimum, duration)
+        if not math.isfinite(expires):
+            raise ValueError("deadline must be finite")
+        time.localtime(expires)
+    except (OverflowError, OSError) as exc:
+        raise ValueError("deadline is outside the platform time range") from exc
+    return expires
 
 
-def _clock(ts: float) -> str:
+def clock(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
-
-
-def _send(to: str = "", text: str = "", kind: str = "say", context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    to = str(to or "").strip()
-    text = str(text or "")
-    if not to:
-        return "ERROR: to is required: an agent name, or * for everyone else"
-    if not text.strip():
-        return "ERROR: text is empty"
-    try:
-        msg = agent.send(to, text, str(kind or "say"))
-    except ValueError as exc:
-        return f"ERROR: {exc}"
-    return f"sent #{msg.seq} to {'everyone' if to == BROADCAST else to}"
-
-
-def _who(context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    return roster(agent.room, agent.name)
-
-
-def _claim(key: str = "", ttl: Any = None, context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    key = str(key or "").strip()
-    if not key:
-        return "ERROR: key is empty: name the file, area or task you are taking"
-    try:
-        seconds = CLAIM_TTL_S if ttl in (None, "") else float(ttl)
-    except (TypeError, ValueError):
-        return f"ERROR: ttl must be a number of seconds, not {ttl!r}"
-    yours, holder, expires = agent.room.claim(key, agent.name, seconds)
-    if yours:
-        return f"{key} is yours until {_clock(expires)}; claim it again to keep it longer"
-    return f"{key} is held by {holder} until {_clock(expires)}"
-
-
-def _release(key: str = "", context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    key = str(key or "").strip()
-    return f"released {key}" if agent.room.release(key, agent.name) else f"you do not hold {key}"
-
-
-def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    try:
-        kinds = agent.room.subscribe(agent.name, str(kind or ""), on=not _truthy(off))
-    except ValueError as exc:
-        return f"ERROR: {exc}"
-    return "subscribed to: " + (", ".join(sorted(kinds)) if kinds else "nothing")
-
-
-def _truthy(value: Any) -> bool:
-    return value is True or str(value).strip().lower() in ("1", "true", "yes", "on")
-
-
-def _wake_me(seconds: Any = None, context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    try:
-        s = float(seconds)
-    except (TypeError, ValueError):
-        return f"ERROR: seconds must be a number, not {seconds!r}"
-    agent.wake_me(s)
-    if s <= 0:
-        return "alarm cleared"
-    return f"you will be woken in {s:g} s if nothing lands first; stop calling tools to sleep"
-
-
-def _retire(handoff: str = "", context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    handoff = str(handoff or "")
-    if not handoff.strip():
-        return "ERROR: handoff is empty: say what you did, what is left, and where things are"
-    msg = agent.retire(handoff)
-    return f"retired; your handoff is #{msg.seq}. This turn is your last: finish and stop calling tools"
-
-
-def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    name, opener = str(name or "").strip(), str(opener or "")
-    if not opener.strip():
-        return "ERROR: opener is empty: the new agent needs to be told who it is and what to do"
-    try:
-        if agent.recruiter is not None:
-            agent.recruiter(name, opener)
-        else:
-            agent.spawn(name, opener)
-    except (ValueError, OSError) as exc:
-        return f"ERROR: {exc}"
-    return f"started {name}; it is on the bus as {name} and reads your opener first"
-
-
-def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    title = str(title or "").strip()
-    if not title:
-        return "ERROR: title is empty: say in one line what needs doing"
-    cell = agent.room.post_cell(agent.name, title, str(body or ""))
-    return f"posted task #{cell.id}: {cell.title}; everyone was told"
-
-
-def _cell_id(raw: Any) -> int | None:
-    try:
-        return int(str(raw).strip().lstrip("#"))
-    except (TypeError, ValueError):
-        return None
-
-
-def _take_task(id: Any = None, context: Any = None) -> str:  # noqa: A002 - the tool's parameter is named id
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    cell_id = _cell_id(id)
-    if cell_id is None:
-        return f"ERROR: id must be a task number, not {id!r}"
-    try:
-        yours, holder, expires = agent.room.take_cell(cell_id, agent.name)
-    except KeyError:
-        return f"no task #{cell_id} on the board"
-    cell = agent.room.cell(cell_id)
-    if yours:
-        return f"task #{cell_id} is yours until {_clock(expires)}: {cell.title}\n{cell.body}".rstrip()
-    if cell.status == "done":
-        return f"task #{cell_id} is already done by {holder}"
-    return f"task #{cell_id} is held by {holder} until {_clock(expires)}"
-
-
-def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str:  # noqa: A002
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    cell_id = _cell_id(id)
-    if cell_id is None:
-        return f"ERROR: id must be a task number, not {id!r}"
-    try:
-        cell = agent.room.finish_cell(cell_id, agent.name, str(result or ""))
-    except KeyError:
-        return f"no task #{cell_id} on the board"
-    return f"task #{cell.id} done; everyone was told"
-
-
-def _tasks(context: Any = None) -> str:
-    agent = _agent(context)
-    if agent is None:
-        return _OFF_BUS
-    return board(agent.room)
-
-
-def tools() -> tuple:
-    from .toolkit.core import Tool
-    from .toolkit.descriptions import load_description
-
-    return (
-        Tool("send", load_description("send"), _send, {
-            "to": {"type": "string", "description": "An agent's name, or * for everyone else on the bus."},
-            "text": {"type": "string", "description": "The message."},
-            "kind": {"type": "string", "default": "say",
-                     "description": "say (default), ask, reply, done, or a short word the troop agrees on."},
-        }, required=("to", "text"), source="swarm"),
-        Tool("who", load_description("who"), _who, {}, read_only=True, source="swarm"),
-        Tool("claim", load_description("claim"), _claim, {
-            "key": {"type": "string", "description": "What you are taking: a file, a module, a task line."},
-            "ttl": {"type": "number", "description": f"Seconds the claim lasts. Default {CLAIM_TTL_S:g}."},
-        }, required=("key",), source="swarm"),
-        Tool("release", load_description("release"), _release, {
-            "key": {"type": "string", "description": "The key you claimed."},
-        }, required=("key",), source="swarm"),
-        Tool("subscribe", load_description("subscribe"), _subscribe, {
-            "kind": {"type": "string", "description": "A message kind, as passed to send."},
-            "off": {"type": "boolean", "default": False, "description": "True to unsubscribe."},
-        }, required=("kind",), source="swarm"),
-        Tool("wake_me", load_description("wake_me"), _wake_me, {
-            "seconds": {"type": "number", "description": "How long to wait. 0 clears a pending alarm."},
-        }, required=("seconds",), source="swarm"),
-        Tool("retire", load_description("retire"), _retire, {
-            "handoff": {"type": "string", "description": "What you did, what is left, where things are."},
-        }, required=("handoff",), source="swarm"),
-        Tool("recruit", load_description("recruit"), _recruit, {
-            "name": {"type": "string", "description": "The new agent's name: one word, not yet on the bus."},
-            "opener": {"type": "string", "description": "Its first prompt: who it is, the goal, what to do first."},
-        }, required=("name", "opener"), source="swarm"),
-        Tool("post_task", load_description("post_task"), _post_task, {
-            "title": {"type": "string", "description": "One line: what needs doing."},
-            "body": {"type": "string", "default": "", "description": "What the taker needs to know: where, how, done when."},
-        }, required=("title",), source="swarm"),
-        Tool("take_task", load_description("take_task"), _take_task, {
-            "id": {"type": "integer", "description": "The task number from the board."},
-        }, required=("id",), source="swarm"),
-        Tool("finish_task", load_description("finish_task"), _finish_task, {
-            "id": {"type": "integer", "description": "The task number from the board."},
-            "result": {"type": "string", "default": "", "description": "What came of it: where the work is, what was found."},
-        }, required=("id",), source="swarm"),
-        Tool("tasks", load_description("tasks"), _tasks, {}, read_only=True, source="swarm"),
-    )
-
-
-def with_bus_tools(registry):
-    """`registry` plus the bus tools: what --swarm puts on every agent's surface."""
-    extra = tuple(t for t in tools() if t.name not in registry.by_name)
-    aliases = {**registry.aliases, **{t.name.lower(): t.name for t in extra}}
-    return replace(registry, tools=registry.tools + extra, aliases=aliases)
 
 
 # ---------------------------------------------------------------- python -m js.swarm
@@ -803,34 +698,36 @@ def with_bus_tools(registry):
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    from . import messages as msgs
+    # The runner imports the bus tools, which import this module.
+    from . import swarm_run
 
-    ap = argparse.ArgumentParser(prog="python -m js.swarm", description=msgs.SWARM_CLI.text())
+
+    ap = argparse.ArgumentParser(prog="python -m js.swarm", description=msgs.SWARM_CLI.words())
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("send", help=msgs.SWARM_SEND.text())
+    s = sub.add_parser("send", help=msgs.SWARM_SEND.words())
     s.add_argument("root")
     s.add_argument("sender")
-    s.add_argument("to", help=msgs.SWARM_SEND_TO.text())
+    s.add_argument("to", help=msgs.SWARM_SEND_TO.words())
     s.add_argument("text", nargs="?")
-    s.add_argument("--kind", default="say", help=msgs.SWARM_SEND_KIND.text())
-    m = sub.add_parser("members", help=msgs.SWARM_MEMBERS.text())
+    s.add_argument("--kind", default="say", help=msgs.SWARM_SEND_KIND.words())
+    m = sub.add_parser("members", help=msgs.SWARM_MEMBERS.words())
     m.add_argument("root")
-    q = sub.add_parser("quiet", help=msgs.SWARM_QUIET.text())
+    q = sub.add_parser("quiet", help=msgs.SWARM_QUIET.words())
     q.add_argument("root")
-    c = sub.add_parser("cells", help=msgs.SWARM_CELLS.text())
+    c = sub.add_parser("cells", help=msgs.SWARM_CELLS.words())
     c.add_argument("root")
-    p = sub.add_parser("post", help=msgs.SWARM_POST.text())
+    p = sub.add_parser("post", help=msgs.SWARM_POST.words())
     p.add_argument("root")
     p.add_argument("by")
     p.add_argument("title")
     p.add_argument("body", nargs="?", default="")
-    r = sub.add_parser("run", help=msgs.SWARM_RUN.text())
+    r = sub.add_parser("run", help=msgs.SWARM_RUN.words())
     r.add_argument("spec")
     a = ap.parse_args(argv)
     if a.cmd == "send":
         body = a.text if a.text not in (None, "-") else sys.stdin.read()
         msg = Room(a.root).send(a.sender, a.to, body, a.kind)
-        print(f"sent #{msg.seq}")
+        print(msgs.SWARM_SENT.words(seq=msg.seq))
     elif a.cmd == "members":
         print(roster(Room(a.root)))
     elif a.cmd == "quiet":
@@ -840,10 +737,8 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "post":
         body = a.body if a.body != "-" else sys.stdin.read()
         cell = Room(a.root).post_cell(a.by, a.title, body)
-        print(f"posted #{cell.id}")
+        print(msgs.SWARM_POSTED.words(id=cell.id))
     else:
-        from . import swarm_run
-
         return swarm_run.main(a.spec)
     return 0
 

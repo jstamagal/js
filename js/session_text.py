@@ -1,19 +1,18 @@
 """The readable `.txt` transcript beside each session `.jsonl`.
 
 The `.jsonl` is the record; the `.txt` is rebuilt from it after every write, so
-the two stay in step. Its shape is fixed so ripgrep and head work on it:
+the two stay in step while SESSION_TEXT_AUTO_REFRESH is on (the default). Its shape is fixed so ripgrep and head work on it:
 
     agent: defaultagent   dir: /home/ronald_rump/js   mode: repl
     models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
     started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
     branched-from: -
-    tags: js · linux admin
 
     #0001 08:02 you  APE
     #0015 08:31 tool:shell  look at the spill file  $ wc -lc result.txt  → exit 0, 91984B
     #0016 08:32 ape  the file has no real newlines
 
-Five header lines and a blank line, then one line per message, numbered by the
+Four header lines and a blank line, then one line per message, numbered by the
 message's position among the message records of the `.jsonl`; a multi-line
 message continues on indented lines. An assistant message that calls tools is
 not a line of its own: its text labels each of its calls, and each tool result
@@ -21,8 +20,7 @@ is one line with the tool's name, that label, the call's first line, and the
 result's exit code and size. Tool output is only in the `.jsonl`, at the same
 message number. A message a later rollback took back out of the conversation
 (an aborted turn, results cleared by compaction and written again) is not
-shown; compaction itself removes nothing from the `.txt`. The `tags:` line
-shows the newest `tags` record (`js.session_tags`).
+shown; compaction itself removes nothing from the `.txt`.
 
 Each file's parse is kept in memory between writes, so a write reads only the
 records appended since the last one.
@@ -30,6 +28,7 @@ records appended since the last one.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -42,14 +41,36 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import session_store
+from . import memory, session_index, session_store, settings
+from .text_bytes import well_formed
 
 USER = "you"
 ASSISTANT = "ape"
+
+@dataclass(frozen=True)
+class TranscriptStyle:
+    user: str = USER
+    assistant: str = ASSISTANT
+    header: Any = None
+
+
 _INDENT = " " * 12
 _EXIT = re.compile(r"^exit=(-?\d+)$", re.MULTILINE)
 _ARG_WIDTH = 200
 _CACHED_FILES = 64
+
+
+def _timestamp(value: Any) -> float | None:
+    """``value`` as a record time, or None when it is not one a clock can
+    show: not a number, a bool, NaN or infinite, or out of datetime's range
+    (milliseconds by mistake, 1e20). One bad record must not poison the file."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        datetime.fromtimestamp(value)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return value
 
 
 def _clock(ts: float | None) -> str:
@@ -92,7 +113,8 @@ def _call_line(arguments: Any) -> str:
         return ""
     command = arguments.get("command")
     if isinstance(command, str) and command.strip():
-        return "$ " + _lines(command)[0]
+        line = "$ " + _lines(command)[0]
+        return line if len(line) <= _ARG_WIDTH else line[:_ARG_WIDTH - 1] + "…"
     pairs = []
     for key, value in arguments.items():
         if isinstance(value, (str, int, float, bool)) and str(value).strip():
@@ -105,7 +127,7 @@ def _call_line(arguments: Any) -> str:
 
 def _outcome(content: Any) -> str:
     text = _content_text(content)
-    size = f"{len(text.encode('utf-8'))}B"
+    size = f"{len(text.encode('utf-8', 'replace'))}B"
     code = _EXIT.search("\n".join(text.split("\n", 6)[:6]))
     if code is not None:
         return f"exit {code.group(1)}, {size}"
@@ -198,38 +220,48 @@ class _Transcript:
     count: int = 0
     # Message number -> row, for the messages the conversation still holds.
     entries: dict[int, Row] = field(default_factory=dict)
-    # The replayed history as `js.memory` rebuilds it, one light dict per
-    # message; `_entry` is its message number. Rollbacks cut it the way they
-    # cut the replay, and the entries they cut are superseded.
-    replay: list[dict] = field(default_factory=list)
+    # The replayed history as `js.memory` rebuilds it, with one light dict per
+    # message record replay reads; `_entry` is its message number. Marks
+    # rewrite it through `memory.rewrite_history`, and the entries a rollback
+    # deletes from it are superseded. Runs the old writer appended twice stay
+    # in it: replay undoes those (`memory._Reappends`) over the whole file.
+    replay: list[dict] = field(init=False)
     calls: dict[str, _Call] = field(default_factory=dict)
     # Record id -> message number, for naming a branch point by its number.
     numbers: dict[str, int] = field(default_factory=dict)
-    # The newest `tags` record (`js.session_tags`), or None.
-    tagging: dict | None = None
+    style: TranscriptStyle = field(default_factory=TranscriptStyle)
+
+    def __post_init__(self) -> None:
+        self.replay = memory.History(self._superseded)
+
+    def _superseded(self, lights: list[dict]) -> None:
+        for light in lights:
+            self.entries.pop(light.get("_entry"), None)
 
     def feed(self, record: Any) -> None:
         if not isinstance(record, dict):
             return
         if record.get("kind") == "tags":
-            # Written after the session ends, so its time is not the session's.
-            self.tagging = record
+            # Older sessions hold `tags` records written after the session
+            # ended; their time is not the session's.
             return
-        ts = record.get("ts")
-        if isinstance(ts, (int, float)):
+        ts = _timestamp(record.get("ts"))
+        if ts is not None:
             self.first_ts = ts if self.first_ts is None else min(self.first_ts, ts)
             self.last_ts = ts if self.last_ts is None else max(self.last_ts, ts)
-        else:
-            ts = None
         kind = record.get("kind")
         if kind == "session_metadata":
             self._metadata(record)
-        elif kind == "message":
-            self._message(record.get("message"), ts, record.get("stamp"), replayed=True)
+        elif kind == "model_switch":
+            stamp = record.get("stamp")
+            if isinstance(stamp, dict) and isinstance(stamp.get("model"), str) and stamp["model"]:
+                self.last_stamp = dict(stamp)
+        elif kind == "message" and isinstance(record.get("message"), dict):
+            self._message(record["message"], ts, record.get("stamp"), replayed=memory.replayed(record) is not None)
             self._number(record)
             self._identify(record)
-        elif kind == "mark" and isinstance(record.get("marker"), str):
-            self._mark(record["marker"])
+        elif kind == "mark" and (mark := memory.replayed(record)) is not None:
+            memory.rewrite_history(self.replay, mark.marker)
         elif kind == "title" and isinstance(record.get("title"), str):
             self.title = record["title"]
         elif kind is None and record.get("role") in {"user", "assistant", "tool", "system"}:
@@ -239,8 +271,8 @@ class _Transcript:
             self._identify(record)
 
     def _metadata(self, record: dict) -> None:
-        if self.started_ts is None and isinstance(record.get("ts"), (int, float)):
-            self.started_ts = record["ts"]
+        if self.started_ts is None:
+            self.started_ts = _timestamp(record.get("ts"))
         if isinstance(record.get("agent"), str):
             self.last_agent = record["agent"]
             if self.agent is None:
@@ -255,6 +287,8 @@ class _Transcript:
             self.parent = record["parent_session"]
         if isinstance(record.get("model"), str) and record["model"]:
             self.last_stamp = {"model": record["model"]}
+            if isinstance(record.get("provider"), str) and record["provider"]:
+                self.last_stamp["provider"] = record["provider"]
             if self.first_model is None:
                 self.first_model = record["model"]
         if self.branch is None and session_store.branch_parent(record) is not None:
@@ -287,59 +321,39 @@ class _Transcript:
         if row is not None and isinstance(record.get("id"), str):
             row.id = record["id"]
 
-    def _mark(self, marker: str) -> None:
-        from . import memory
-
-        if marker == "session_reset":
-            self.replay.clear()
-            return
-        if marker.startswith("rollback_to:"):
-            try:
-                keep = max(0, int(marker.split(":", 1)[1]))
-            except ValueError:
-                return
-            self.replay[:] = memory.balance_orphaned_tool_calls(self.replay)
-            for light in self.replay[keep:]:
-                self.entries.pop(light.get("_entry"), None)
-            del self.replay[keep:]
-            return
-        compaction = memory._parse_compaction_marker(marker)
-        if compaction is not None:
-            self.replay[:] = memory.balance_orphaned_tool_calls(self.replay)
-            keep_from = max(0, min(int(compaction.get("keep_from", len(self.replay))), len(self.replay)))
-            synthetic = [{"role": "user"}] * (2 if compaction.get("rehydrated") else 1)
-            self.replay[:] = [*synthetic, *self.replay[keep_from:]]
-
     def _message(self, message: Any, ts: float | None, stamp: Any, *, replayed: bool) -> None:
         if not isinstance(message, dict):
             return
         self.count += 1
         number = self.count
         role = message.get("role")
+        raw_calls = message.get("tool_calls")
+        calls = (
+            [call for call in raw_calls
+             if isinstance(call, dict) and isinstance(call.get("function"), dict)]
+            if isinstance(raw_calls, list) else []
+        )
         if replayed:
             light = {"role": role, "_entry": number}
-            if role == "assistant" and message.get("tool_calls"):
+            if role == "assistant" and calls:
                 light["tool_calls"] = [
-                    {"id": call.get("id"), "function": {"name": (call.get("function") or {}).get("name", "")}}
-                    for call in message["tool_calls"] if isinstance(call, dict)]
+                    {"id": call.get("id"), "function": {"name": call["function"].get("name", "")}}
+                    for call in calls]
             if role == "tool":
                 light["tool_call_id"] = message.get("tool_call_id")
             self.replay.append(light)
         if role == "user":
             lines = _lines(_content_text(message.get("content"))) or [""]
-            self.entries[number] = Row(number, role, ts, USER, lines)
+            self.entries[number] = Row(number, role, ts, self.style.user, lines)
         elif role == "assistant":
             model = self._stamp(stamp, number)
             lines = _lines(_content_text(message.get("content")))
-            calls = message.get("tool_calls") or []
             if not calls:
                 if lines:
-                    self.entries[number] = Row(number, role, ts, ASSISTANT, lines, model=model)
+                    self.entries[number] = Row(number, role, ts, self.style.assistant, lines, model=model)
                 return
             for index, call in enumerate(calls):
-                if not isinstance(call, dict):
-                    continue
-                function = call.get("function") or {}
+                function = call["function"]
                 self.calls[str(call.get("id"))] = _Call(
                     str(function.get("name") or "?"),
                     lines[0] if lines else "",
@@ -374,6 +388,8 @@ class _Transcript:
         return sum(1 for row in self.entries.values() if row.role == "user")
 
     def header(self) -> list[str]:
+        if self.style.header is not None:
+            return self.style.header(self)
         if self.models:
             chain = [self.models[0][0], *(f"{model} (#{number:04d})" for model, number in self.models[1:])]
             models = " → ".join(chain)
@@ -385,14 +401,8 @@ class _Transcript:
             f"models: {models}",
             f"started: {_day(started)}   last: {_day(self.last_ts)}   turns: {self.turns()}",
             f"branched-from: {self._branched() or '-'}",
-            f"tags: {' · '.join(self.tags()) or '-'}",
             "",
         ]
-
-    def tags(self) -> list[str]:
-        """The tags of the newest `tags` record."""
-        tags = (self.tagging or {}).get("tags")
-        return [str(tag) for tag in tags] if isinstance(tags, list) else []
 
     def text(self) -> str:
         rows = [line for row in self.rows() for line in row.txt()]
@@ -400,8 +410,7 @@ class _Transcript:
 
     def summary(self) -> dict[str, Any]:
         """What the session catalog keeps for the session: where and how it
-        started, its size in turns and calls, its model stamps, and its tags
-        with the tag list and message count they were judged at."""
+        started, its size in turns and calls, and its model stamps."""
         rows = self.rows()
         final = next((row for row in reversed(rows) if row.role == "assistant"), None)
         parent = self._branch_point()
@@ -425,9 +434,6 @@ class _Transcript:
             "models": models,
             "model_changes": [[model, number] for model, number in self.models],
             "last_stamp": self.last_stamp,
-            "tags": self.tags(),
-            "tags_list": (self.tagging or {}).get("list"),
-            "tags_through": (self.tagging or {}).get("through"),
         }
 
     def search_lines(self) -> list[tuple[int, str, float | None, str]]:
@@ -441,23 +447,25 @@ class _Transcript:
         return lines
 
 
-def parse(session_file: Path) -> _Transcript:
+def parse(session_file: Path, *, style: TranscriptStyle | None = None) -> _Transcript:
     """The whole of `session_file`, parsed from the start."""
-    transcript = _Transcript()
+    transcript = _Transcript(style=style if style is not None else TranscriptStyle())
     with open(session_file, encoding="utf-8", errors="replace") as stream:
         for line in stream:
             _feed_line(transcript, line)
     return transcript
 
 
-def rows(session_file: Path) -> list[Row]:
+def rows(session_file: Path, *, style: TranscriptStyle | None = None) -> list[Row]:
     """The rows of `session_file` the conversation still holds, in order."""
-    return parse(session_file).rows()
+    transcript = parse(session_file) if style is None else parse(session_file, style=style)
+    return transcript.rows()
 
 
-def render(session_file: Path) -> str:
+def render(session_file: Path, *, style: TranscriptStyle | None = None) -> str:
     """The whole transcript of `session_file`, parsed from the start."""
-    return parse(session_file).text()
+    transcript = parse(session_file) if style is None else parse(session_file, style=style)
+    return transcript.text()
 
 
 def _feed_line(transcript: _Transcript, line: str) -> None:
@@ -486,9 +494,14 @@ _parsed: OrderedDict[str, _Parsed] = OrderedDict()
 def _write(path: Path, text: str) -> None:
     staging = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
-        staging.write_text(text, encoding="utf-8")
+        # A lone surrogate (surrogateescape tool output, half an emoji pair)
+        # is written as `?`; strict encoding raised out of refresh() and into
+        # every later append on the session.
+        staging.write_bytes(text.encode("utf-8", "replace"))
         os.replace(staging, path)
     except OSError:
+        pass
+    finally:
         try:
             staging.unlink()
         except OSError:
@@ -500,49 +513,77 @@ def refresh(session_file: Path) -> None:
 
     Only a `.jsonl` gets one. A failure to read or write leaves the `.txt` as
     it was: it is derived, and the record is what matters."""
+
+    if not settings.live_value("SESSION_TEXT_AUTO_REFRESH"):
+        return
     session_file = Path(session_file)
     if session_file.suffix != session_store.SUFFIX:
         return
     key = str(session_file.resolve(strict=False))
     with _lock:
         try:
-            info = os.stat(session_file)
-            parsed = _parsed.pop(key, None)
-            if (parsed is None or (parsed.device, parsed.inode) != (info.st_dev, info.st_ino)
-                    or info.st_size < parsed.offset):
-                parsed = _Parsed(info.st_dev, info.st_ino, 0, _Transcript())
-            with open(session_file, "rb") as stream:
-                stream.seek(parsed.offset)
-                data = stream.read()
+            guard = open(f"{session_file}.refresh.lock", "a+b")  # noqa: SIM115 - held through publication
         except OSError:
             return
-        end = data.rfind(b"\n") + 1
-        for line in data[:end].decode("utf-8", errors="replace").splitlines():
-            _feed_line(parsed.transcript, line)
-        parsed.offset += end
-        _parsed[key] = parsed
-        while len(_parsed) > _CACHED_FILES:
-            _parsed.popitem(last=False)
-        _write(session_store.text_path(session_file), parsed.transcript.text())
-        _index(session_file, parsed.transcript, size=parsed.offset, mtime_ns=info.st_mtime_ns)
+        with guard:
+            try:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                return
+            _refresh(session_file, key)
+
+
+def _refresh(session_file: Path, key: str) -> None:
+    """Read and publish while holding both refresh locks."""
+    try:
+        info = os.stat(session_file)
+        parsed = _parsed.pop(key, None)
+        if (parsed is None or (parsed.device, parsed.inode) != (info.st_dev, info.st_ino)
+                or info.st_size < parsed.offset):
+            parsed = _Parsed(info.st_dev, info.st_ino, 0, _Transcript())
+        with open(session_file, "rb") as stream:
+            stream.seek(parsed.offset)
+            data = stream.read()
+    except OSError:
+        return
+    end = data.rfind(b"\n") + 1
+    # "\n" only, as parse() reads: U+2028 inside a JSON string is not a break.
+    for line in data[:end].decode("utf-8", errors="replace").split("\n"):
+        _feed_line(parsed.transcript, line)
+    parsed.offset += end
+    _parsed[key] = parsed
+    while len(_parsed) > _CACHED_FILES:
+        _parsed.popitem(last=False)
+    _write(session_store.text_path(session_file), parsed.transcript.text())
+    _index(session_file, parsed.transcript, size=parsed.offset, mtime_ns=info.st_mtime_ns)
 
 
 def _index(session_file: Path, transcript: _Transcript, *, size: int, mtime_ns: int) -> None:
     """Keep the session's catalog entry and search text in step with its `.txt`.
     The index is derived; a failure leaves it for the next catalog open."""
-    from . import session_index
 
     try:
-        session_index.store(session_file, transcript.summary(), transcript.search_lines(),
-                            size=size, mtime_ns=mtime_ns)
+        session_index.store(session_file, _well_formed(transcript.summary()),
+                            _well_formed(transcript.search_lines()), size=size, mtime_ns=mtime_ns)
     except (OSError, sqlite3.Error):
         pass
+
+
+def _well_formed(value: Any) -> Any:
+    """``value`` with each lone surrogate in its strings replaced by `?`, so
+    sqlite's strict UTF-8 binding takes it."""
+    if isinstance(value, str):
+        return well_formed(value)
+    if isinstance(value, dict):
+        return {key: _well_formed(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_well_formed(item) for item in value)
+    return value
 
 
 def forget(session_file: Path) -> None:
     """Drop the `.txt` and the index entry of a session file that no longer
     exists as such."""
-    from . import session_index
 
     session_file = Path(session_file)
     with _lock:

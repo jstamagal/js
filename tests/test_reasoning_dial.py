@@ -12,9 +12,8 @@ from typing import Any
 import ai
 import pytest
 
-from js import model_client, reasoning
+from js import history_record, model_client, reasoning, request_params
 from js.model_client import ModelStreamResult
-
 
 # ---- the dial (pure) ----
 
@@ -81,7 +80,7 @@ def _capture(monkeypatch, *, model_id, provider_id, messages, reasoning_effort=N
 
 
 def _reasoning_history():
-    return model_client.history_to_ai_messages(
+    return history_record.history_to_ai_messages(
         "sys",
         [
             {"role": "user", "content": "go"},
@@ -121,3 +120,43 @@ def test_mimo_keeps_replayed_reasoning(monkeypatch):
     captured = _capture(monkeypatch, model_id="mimo-v2.5", provider_id="mimo",
                         messages=_reasoning_history())
     assert _has_reasoning(captured["messages"])
+
+
+def test_anthropic_adaptive_display_uses_registered_setting():
+    plan = reasoning.anthropic_thinking(
+        "claude-opus-4-6", "high", None,
+        settings={"ANTHROPIC_THINKING_DISPLAY": "omitted"},
+    )
+    assert plan.thinking["display"] == "omitted"
+
+
+# ---- the word that goes out ----
+
+def _effort_sent(provider_id, model, effort):
+    params = request_params.build_request_params(
+        model_id=model, provider_id=provider_id, provider_base_url=None,
+        max_output_tokens=None, reasoning_effort=effort)
+    return request_params.wire_fields(params).get("effort")
+
+
+@pytest.mark.parametrize(
+    "provider_id,model,effort,sent",
+    [
+        ("openai", "some-model", "spoon", "spoon"),     # no ladder validation
+        ("openai", "some-model", "off", "off"),         # unrecognized: verbatim, not omitted
+        (None, "opus", "off", "off"),                   # behind a gateway nothing is recognized
+        ("openai", "glm-5.2", "off", "none"),           # glm serves none
+        ("openai", "mimo-v2.5", "off", "low"),
+        ("openai", "kimi-k2.7-code", "spoon", "spoon"), # a non-ladder word stays as typed
+        ("deepseek", "deepseek-chat", "high", "high"),
+        ("openai", "MiniMax-M3.1-Flash", "off", "low"),  # MiniMax's OpenAI endpoint: reasoning_effort
+        ("minimax", "MiniMax-M3.1-Flash", "minimal", "low"),
+        ("minimax", "MiniMax-M3", "spoon", "spoon"),
+    ],
+)
+def test_the_effort_word_is_sent_as_typed_or_snapped_for_a_known_family(provider_id, model, effort, sent):
+    assert _effort_sent(provider_id, model, effort) == sent
+
+
+def test_an_unset_effort_sends_none():
+    assert _effort_sent("openai", "some-model", None) is None

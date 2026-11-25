@@ -1,35 +1,28 @@
-"""`js -p --json`: the run as JSON events, one object per line on stdout.
-
-The schema is in docs/headless-json.md. Every event has a `type`; the first
-is `session` and the last is `result`. Everything else the run prints goes to
-stderr, so stdout carries only these lines.
-"""
+"""JSON output for completed runs and streaming JSON Lines."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import re
+import sys
 import threading
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TextIO
 
-from .toolkit.core import ToolResult
+from . import messages as msgs, network_display, snippets, usage as usage_mod
+from .toolkit.results import result_text
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SUMMARY_CHARS = 200
-
-
-def _result_text(result: Any) -> tuple[str, bool]:
-    """A tool result's text and whether it reports an error."""
-    if isinstance(result, ToolResult):
-        text = result.dehydrated()
-        return text, result.is_error or text.startswith("ERROR")
-    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    return text, text.startswith("ERROR")
 
 
 def tool_result_summary(result: Any) -> dict[str, Any]:
     """`ok`, `bytes`, `lines` and `summary` (the first non-blank line, cut to
     SUMMARY_CHARS characters) of a tool result."""
-    text, failed = _result_text(result)
+    text, failed = result_text(result)
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if len(first) > SUMMARY_CHARS:
         first = first[:SUMMARY_CHARS - 1] + "…"
@@ -58,14 +51,16 @@ class JsonEvents:
         self.errored = False
         self.final_text = ""
         self.session: dict[str, Any] | None = None
+        self.result: dict[str, Any] = {}
+        self.usage = usage_mod.UsageTotals()
         self._lock = threading.Lock()
 
-    def emit(self, kind: str, **fields: Any) -> None:
+    def emit(self, kind: str, /, **fields: Any) -> None:
         if kind == "error":
             self.errored = True
-        elif kind == "session":
+        elif kind == "start":
             self.session = fields
-        line = json.dumps({"type": kind, **fields}, ensure_ascii=False, default=str)
+        line = json.dumps({**fields, "type": kind}, ensure_ascii=True, default=str)
         with self._lock:
             self.out.write(line + "\n")
             self.out.flush()
@@ -73,33 +68,35 @@ class JsonEvents:
     def runtime_event(self, event: str, payload: dict) -> None:
         """The `event_sink` of `runtime.run_turn_async`: each runtime event as
         its JSON event. Events the schema does not name are not written."""
-        if event == "turn_start":
-            self.emit("turn_start", model=payload.get("model"), provider=payload.get("provider_id"))
-        elif event == "stream":
+        if event == "stream":
             self.emit("text", delta=payload.get("text", ""))
         elif event == "response":
-            text = payload.get("text", "")
-            self.final_text = text
-            fields = {"text": text, "finish_reason": payload.get("finish_reason")}
-            if payload.get("incomplete_reason"):
-                fields["incomplete_reason"] = payload["incomplete_reason"]
-            self.emit("message", **fields)
+            self.final_text = payload.get("text", "")
         elif event == "tool_call":
             self.emit("tool_call", id=payload.get("id"), name=payload.get("name"),
                       arguments=_arguments(payload.get("arguments")))
         elif event == "tool_result":
             self.emit("tool_result", id=payload.get("id"), name=payload.get("name"),
-                      **tool_result_summary(payload.get("result")))
+                      result=payload.get("result"), **tool_result_summary(payload.get("result")))
         elif event == "usage":
-            self.emit("usage", **payload)
+            self.usage.add(usage_mod.CallUsage(**{**{"model": "", "provider": None}, **{key: payload[key] for key in usage_mod.CallUsage.__dataclass_fields__ if key in payload}}))
         elif event == "error":
             self.emit("error", message=payload.get("error"), retryable=bool(payload.get("retryable")))
-        elif event == "turn_end":
-            fields = {"reason": payload.get("reason"), "usage": payload.get("usage")}
-            for key in ("finish_reason", "incomplete_reason"):
-                if payload.get(key):
-                    fields[key] = payload[key]
-            self.emit("turn_end", **fields)
+
+
+class OutputEvents:
+    """Observe reasoning and retries, which use the presentation event bus."""
+
+    def __init__(self, events: JsonEvents) -> None:
+        self.events = events
+
+    def emit(self, event) -> None:
+        fields = dict(event.fields)
+        if event.name == "reasoning":
+            self.events.emit("reasoning", delta=fields.get("text", ""))
+        elif event.name == "retry_wait":
+            self.events.emit("retry", attempt=fields.get("n"), attempts=fields.get("attempts"),
+                             delay=fields.get("delay"), message=str(fields.get("error", "")))
 
 
 class LastLine:
@@ -108,15 +105,19 @@ class LastLine:
 
     def __init__(self, target: TextIO) -> None:
         self.target = target
-        self.last_line = ""
+        self._last_line = ""
         self._pending = ""
+
+    @property
+    def last_line(self) -> str:
+        return self._pending.strip() or self._last_line
 
     def write(self, text: str) -> int:
         self._pending += text
         *done, self._pending = self._pending.split("\n")
         for line in done:
             if line.strip():
-                self.last_line = line.strip()
+                self._last_line = line.strip()
         return self.target.write(text)
 
     def flush(self) -> None:
@@ -133,3 +134,60 @@ class LastLine:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.target, name)
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_WARN_MARK = re.compile(r"^\*+\s*")
+
+
+# The events of the --json run in progress (`json_run`); None outside one.
+active: JsonEvents | None = None
+
+
+def json_run(run: Callable[[], int], *, stream: bool = True) -> int:
+    """Keep stdout machine-readable, ending with the completed run object."""
+    global active
+    stdout = sys.stdout
+    events = JsonEvents(stdout if stream else io.StringIO())
+    err = LastLine(sys.stderr)
+    active = events
+    try:
+        with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
+            try:
+                code = run()
+            except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
+                msgs.warn(msgs.FAILED, error=network_display.error_text(exc))
+                code = 2 if isinstance(exc, snippets.SnippetError) else 1
+    finally:
+        active = None
+    opened = events.session
+    if opened is None:
+        events.emit("start", version=SCHEMA_VERSION)
+    if code != 0 and not events.errored:
+        emit_failure(events, err.last_line, code)
+    payload = events.result or {
+        "answer": events.final_text if code == 0 else "",
+        "session": None if opened is None else opened.get("id"),
+        "provider": None if opened is None else opened.get("provider"),
+        "model": None if opened is None else opened.get("model"),
+        "effort": None if opened is None else opened.get("effort"),
+        "usage": None if opened is None else opened.get("usage"),
+    }
+    if "benchmarks" not in payload:
+        if opened is not None and opened.get("file"):
+            payload["usage"] = usage_mod.totals(Path(opened["file"])).as_dict()
+        payload.update(ok=code == 0, exit_code=code)
+    if stream:
+        events.emit("end", **payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, default=str), file=stdout)
+    return code
+
+
+def emit_failure(events: JsonEvents, line: str, code: int) -> None:
+    """An `error` record of ``line`` without its colour and warning mark,
+    after a `start` record when the run wrote none."""
+    if events.session is None:
+        events.emit("start", version=SCHEMA_VERSION)
+    message = _WARN_MARK.sub("", _ANSI.sub("", line))
+    events.emit("error", message=message or f"exit {code}", retryable=False)

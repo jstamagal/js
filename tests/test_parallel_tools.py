@@ -6,20 +6,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-import re
 import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import config as turn_config, run as run_turn
 
-from js import display, runtime, settings
-from js.toolkit import core as tool_core, fs
+from js import paths, result_caps, runtime
+from js.toolkit import core as tool_core, fs, patch as patch_tool
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 class Probe:
@@ -53,15 +52,19 @@ def _sleeper_registry(probe: Probe, seconds: float, *, read_only: bool = True) -
                               required=("label",), read_only=read_only),), {})
 
 
-def _calls(*labels: str, name: str = "sleeper") -> list[runtime._PendingToolCall]:
-    return [runtime._PendingToolCall(label, name, [json.dumps({"label": label})]) for label in labels]
+def _calls(*labels: str, name: str = "sleeper") -> list[tuple[str, str, str]]:
+    return [(label, name, json.dumps({"label": label})) for label in labels]
 
 
-def _dispatch(calls, registry, context, *, trace: bool = False, progress=None):
-    return runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 256 * 1024, trace, runtime.ToolErrorTracker(),
-        registry, context, progress,
-    )
+def _dispatch(calls, registry, context) -> list[tuple[str, str]]:
+    """The (call id, result) of each of ``calls``, made as one batch by the
+    model in a turn on PARALLEL_TOOLS_MAX ``context.max_parallel_tools``, in
+    the order the turn records them."""
+    cfg = turn_config(context.cwd, max_parallel_tools=context.max_parallel_tools)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        turn = run_turn(context.cwd, monkeypatch, registry, [calls], cfg=cfg, context=context)
+    return [(message["tool_call_id"], message["content"]) for message in turn.messages
+            if message.get("role") == "tool"]
 
 
 def test_three_read_only_calls_that_each_sleep_half_a_second_run_at_once(tmp_path):
@@ -74,7 +77,7 @@ def test_three_read_only_calls_that_each_sleep_half_a_second_run_at_once(tmp_pat
 
     assert elapsed < 1.0
     assert probe.most == 3
-    assert [result for _pc, _args, result in records] == ["slept a", "slept b", "slept c"]
+    assert [result for _id, result in records] == ["slept a", "slept b", "slept c"]
 
 
 def test_results_come_back_in_the_model_order_not_the_finish_order(tmp_path):
@@ -96,25 +99,7 @@ def test_results_come_back_in_the_model_order_not_the_finish_order(tmp_path):
     records = _dispatch(_calls("slow", "fast"), registry, ToolContext(cwd=tmp_path, max_parallel_tools=8))
 
     assert probe.finished == ["fast", "slow"]
-    assert [(pc.id, result) for pc, _args, result in records] == [("slow", "SLOW"), ("fast", "FAST")]
-
-
-def test_max_parallel_tools_one_runs_every_call_in_turn(tmp_path, monkeypatch):
-    jsrc = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
-    assert re.search(r"^set runtime\.max_parallel_tools 8$", jsrc, re.M)
-    copy = tmp_path / "pkg" / "jsrc"
-    copy.parent.mkdir()
-    copy.write_text(re.sub(r"^set runtime\.max_parallel_tools \d+$",
-                           "set runtime.max_parallel_tools 1", jsrc, flags=re.M), encoding="utf-8")
-    monkeypatch.setattr(settings, "PACKAGE_JSRC", copy)
-    probe = Probe()
-    context = ToolContext(cwd=tmp_path)
-    assert context.max_parallel_tools == 1
-
-    _dispatch(_calls("a", "b", "c"), _sleeper_registry(probe, 0.05), context)
-
-    assert probe.most == 1
-    assert probe.finished == ["a", "b", "c"]
+    assert records == [("slow", "SLOW"), ("fast", "FAST")]
 
 
 def test_the_cap_bounds_how_many_read_only_calls_run_at_once(tmp_path):
@@ -150,25 +135,27 @@ def test_read_read_patch_read_runs_the_reads_together_and_the_patch_alone(tmp_pa
         patch_saw.append(reads_running)
         time.sleep(0.2)
         patch_saw.append(reads_running)
-        return fs.patch(context=context, **kwargs)
+        return patch_tool.patch(context=context, **kwargs)
 
     registry = ToolRegistry((
         dataclasses.replace(stock.resolve("read"), handler=read),
         dataclasses.replace(stock.resolve("patch"), handler=patch),
     ), {})
-    read_args = json.dumps({"file_path": str(target)})
+    # Three different reads: a turn runs one call of identical repeats.
+    def read_args(**window):
+        return json.dumps({"file_path": str(target), **window})
+
     calls = [
-        runtime._PendingToolCall("r1", "read", [read_args]),
-        runtime._PendingToolCall("r2", "read", [read_args]),
-        runtime._PendingToolCall("p1", "patch", [json.dumps(
-            {"file_path": str(target), "old_string": "beta", "new_string": "BETA"})]),
-        runtime._PendingToolCall("r3", "read", [read_args]),
+        ("r1", "read", read_args()),
+        ("r2", "read", read_args(range={"start_line": 1, "end_line": 3})),
+        ("p1", "patch", json.dumps({"file_path": str(target), "old_string": "beta", "new_string": "BETA"})),
+        ("r3", "read", read_args(range={"start_line": 2, "end_line": 2})),
     ]
 
     records = _dispatch(calls, registry, ToolContext(cwd=tmp_path, max_parallel_tools=8))
 
-    results = {pc.id: result for pc, _args, result in records}
-    assert [pc.id for pc, _args, _result in records] == ["r1", "r2", "p1", "r3"]
+    results = dict(records)
+    assert [call_id for call_id, _result in records] == ["r1", "r2", "p1", "r3"]
     assert most_reads == 2
     assert patch_saw == [0, 0]
     assert "BETA" not in results["r1"] and "BETA" not in results["r2"]
@@ -183,17 +170,17 @@ def test_concurrent_reads_of_one_file_leave_consistent_coverage(tmp_path):
     for _round in range(5):
         context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
         calls = [
-            runtime._PendingToolCall(f"r{start}", "read", [json.dumps(
-                {"file_path": str(target), "range": {"start_line": start, "end_line": start + 9}})])
+            (f"r{start}", "read", json.dumps(
+                {"file_path": str(target), "range": {"start_line": start, "end_line": start + 9}}))
             for start in range(1, 81, 10)
         ]
 
         _dispatch(calls, registry, context)
 
         path = target.resolve()
-        assert context.read_ranges[path] == [(1, 80)]
-        assert path in context.fully_read_paths
-        assert fs.patch(file_path=str(target), old_string="line 55\n", new_string="line 55!\n",
+        assert context.reads.coverage(path).ranges == [(1, 80)]
+        assert context.reads.coverage(path).whole
+        assert patch_tool.patch(file_path=str(target), old_string="line 55\n", new_string="line 55!\n",
                         context=context).startswith("patched ")
         target.write_text("".join(f"line {n}\n" for n in range(1, 81)), encoding="utf-8")
 
@@ -222,12 +209,12 @@ def test_a_clip_of_one_parallel_read_keeps_the_other_reads_coverage(tmp_path, mo
                                        suppress_output=True))
 
     whole = next(m["content"] for m in messages if m.get("tool_call_id") == "whole")
-    assert "max_tool_results_per_turn_bytes" in whole
+    assert "PARALLEL_RESULTS_MAX" in whole
     path = target.resolve()
-    assert path not in context.fully_read_paths
-    assert context.require_read(path, "edit", line_ranges=[(2995, 2995)]) is None
-    assert context.require_read(path, "edit", line_ranges=[(1500, 1500)]) is not None
-    assert context.require_read(path, "edit", line_ranges=[(1, 1)]) is None
+    assert not context.reads.coverage(path).whole
+    assert context.reads.require(path, "edit", line_ranges=[(2995, 2995)]) is None
+    assert context.reads.require(path, "edit", line_ranges=[(1500, 1500)]) is not None
+    assert context.reads.require(path, "edit", line_ranges=[(1, 1)]) is None
 
 
 def test_cancel_mid_batch_keeps_finished_results_and_starts_nothing_new(tmp_path, monkeypatch):
@@ -280,58 +267,6 @@ def test_cancel_mid_batch_keeps_finished_results_and_starts_nothing_new(tmp_path
     assert answered == {"c1": "look 1", "c2": "look 2"}
 
 
-def test_parallel_exchanges_print_whole(capsys, tmp_path):
-    probe = Probe()
-    context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
-    context.config = SimpleNamespace(settings={"ui": {"tools": 2, "tools_preview_lines": 3}})
-
-    def lines(label: str, context=None) -> str:
-        probe.enter()
-        time.sleep(0.05)
-        probe.leave(label)
-        return "\n".join(f"{label} row {n}" for n in range(3))
-
-    registry = ToolRegistry((Tool("sleeper", "test", lines, {"label": {"type": "string"}},
-                                  read_only=True),), {})
-
-    _dispatch(_calls("a", "b", "c", "d"), registry, context, trace=True)
-
-    assert probe.most > 1
-    out = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in capsys.readouterr().out.splitlines()]
-    headers = [i for i, line in enumerate(out) if line.startswith(display.TOOL_MARKER + " ")]
-    assert len(headers) == 4
-    for start, end in zip(headers, [*headers[1:], len(out)], strict=True):
-        label = re.search(r'"label":\s*"(\w)"', out[start]) or re.search(r"\b([abcd])\b", out[start])
-        assert label is not None, out[start]
-        body = out[start + 1:end]
-        assert all(row.split()[0] == label.group(1) for row in body if " row " in row), body
-        assert sum(" row " in row for row in body) == 3
-
-
-def test_parallel_reads_at_ui_tools_one_each_name_their_file(capsys, tmp_path):
-    context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
-    context.config = SimpleNamespace(settings={"ui": {"tools": 1}})
-
-    def read(file_path: str, context=None) -> str:
-        time.sleep(0.02)
-        return "same size\n" * 20
-
-    registry = ToolRegistry((Tool("read", "test", read, {"file_path": {"type": "string"}},
-                                  read_only=True),), {})
-    paths = [f"src/module_{name}.py" for name in "abcd"]
-    calls = [runtime._PendingToolCall(f"c{i}", "read", [json.dumps({"file_path": path})])
-             for i, path in enumerate(paths)]
-
-    _dispatch(calls, registry, context, trace=True)
-
-    out = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in capsys.readouterr().out.splitlines()]
-    traces = [line for line in out if line.startswith(display.TOOL_MARKER + " ")]
-    assert len(traces) == 4
-    assert len(set(traces)) == 4
-    for path in paths:
-        assert sum(path in line for line in traces) == 1
-
-
 def test_which_calls_are_read_only():
     registry = build_default_registry()
 
@@ -340,9 +275,6 @@ def test_which_calls_are_read_only():
 
     for name in ("read", "fs_search", "skill", "docs_search", "exa_search", "serper_search", "tavily_search"):
         assert ro(name), name
-    assert ro("ast_search", pattern="f($A)")
-    assert ro("ast_search", pattern="f($A)", rewrite="g($A)")
-    assert not ro("ast_search", pattern="f($A)", rewrite="g($A)", apply=True)
     assert ro("fetch", url="https://example.com")
     assert ro("fetch", url="https://example.com", method="head")
     assert not ro("fetch", url="https://example.com", method="POST")
@@ -363,21 +295,21 @@ def test_a_call_id_scopes_read_coverage_to_its_call(tmp_path):
     with tool_core.call_scope("two"):
         second = fs.fs_read(file_path=str(target), context=context)
 
-    context.record_delivered_read(target.resolve(), second, second.split("\n", 3)[0], "two")
+    context.reads.narrow_to_delivered(target.resolve(), second, second.split("\n", 3)[0], "two")
 
     assert "row 5" in first
-    assert context.read_ranges[target.resolve()] == [(1, 5)]
-    assert target.resolve() not in context.fully_read_paths
+    assert context.reads.coverage(target.resolve()).ranges == [(1, 5)]
+    assert not context.reads.coverage(target.resolve()).whole
 
 
 def test_spilled_parallel_results_are_whole(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path / "spill")
+    monkeypatch.setattr(paths, "tool_results_dir", lambda: tmp_path / "spill")
     text = "".join(f"{n:06d}\n" for n in range(20000))
 
     notices = []
 
     def spill() -> None:
-        notices.append(runtime.spill_oversized_result(text, 1000))
+        notices.append(result_caps.spill_oversized_result(text, 1000))
 
     threads = [threading.Thread(target=spill) for _ in range(8)]
     for thread in threads:

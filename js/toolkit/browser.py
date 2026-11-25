@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import http.server
 import io
 import json
@@ -16,21 +17,71 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .. import paths
+from .. import jail, paths, settings as _settings
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
-CHROME_FALLBACK = Path("/opt/chrome-for-testing/chrome-linux64/chrome")
 GL_ARGS = (
-    "--use-gl=swiftshader",
-    "--enable-unsafe-swiftshader",
+    "--use-angle=vulkan",
     "--hide-scrollbars",
     "--mute-audio",
 )
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args: Any, context: ToolContext | None = None, **kwargs: Any) -> None:
+        self.context = context
+        super().__init__(*args, **kwargs)
+
+    def send_head(self) -> Any:
+        try:
+            root = Path(self.directory).resolve()
+            target = Path(self.translate_path(self.path))
+            if target.is_dir():
+                for name in ("index.html", "index.htm"):
+                    index = target / name
+                    if index.is_file():
+                        target = index
+                        break
+            if not target.resolve().is_relative_to(root):
+                self.send_error(403)
+                return None
+            if self.context is not None:
+                self.context.resolve_path(target)
+        except jail.JailError:
+            self.send_error(403)
+            return None
+        except (OSError, RuntimeError):
+            self.send_error(404)
+            return None
+        return super().send_head()
+
+    def list_directory(self, path: str) -> Any:
+        if self.context is None:
+            return super().list_directory(path)
+        try:
+            entries = sorted(Path(path).iterdir(), key=lambda entry: entry.name.lower())
+        except OSError:
+            self.send_error(404)
+            return None
+        links = []
+        for entry in entries:
+            try:
+                self.context.resolve_path(entry)
+            except jail.JailError:
+                continue
+            name = entry.name + ("/" if entry.is_dir() else "")
+            links.append(f'<li><a href="{quote(name)}">{html.escape(name)}</a></li>')
+        body = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                "<title>Directory listing</title></head><body><ul>"
+                + "".join(links) + "</ul></body></html>").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        return io.BytesIO(body)
+
     def do_GET(self) -> None:
         if self.path.partition("?")[0] == "/favicon.ico":
             self.send_response(204)
@@ -48,10 +99,10 @@ class _ThreadingServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
 
-def _start_local_server(path: Path) -> tuple[_ThreadingServer, str, Path]:
+def _start_local_server(path: Path, *, context: ToolContext | None = None) -> tuple[_ThreadingServer, str, Path]:
     root = path if path.is_dir() else path.parent
     index = "" if path.is_dir() else quote(path.name)
-    handler = functools.partial(_QuietHandler, directory=str(root))
+    handler = functools.partial(_QuietHandler, directory=str(root), context=context)
     server = _ThreadingServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}/{index}", root
@@ -63,7 +114,10 @@ def _rgb_pixels(image: Any) -> Any:
 
 
 def _frame_metrics(png: bytes) -> tuple[dict[str, Any], Any]:
-    from PIL import Image
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError('browser_probe image analysis needs Pillow, the `vision` extra; run `just install`') from exc
 
     image = Image.open(io.BytesIO(png)).convert("RGB")
     counts = Counter(
@@ -170,14 +224,15 @@ def _safe_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:50] or "step"
 
 
-def _launch_browser(playwright: Any) -> Any:
+def _launch_browser(playwright: Any, context: ToolContext | None = None) -> Any:
     try:
         return playwright.chromium.launch(args=list(GL_ARGS))
     except Exception as first:
-        if not CHROME_FALLBACK.is_file():
+        fallback = _settings.knob_attr(context, "browser_fallback_file", "BROWSER_FALLBACK_FILE")
+        if not fallback or not Path(fallback).is_file():
             raise first
         return playwright.chromium.launch(
-            executable_path=str(CHROME_FALLBACK), args=list(GL_ARGS)
+            executable_path=str(fallback), args=list(GL_ARGS)
         )
 
 
@@ -220,8 +275,7 @@ def browser_probe(
         from playwright.sync_api import sync_playwright
     except ImportError:
         return (
-            "ERROR: browser_probe requires the optional Playwright backend; "
-            "install js[browser] (Playwright does not publish musllinux wheels)"
+            'ERROR: browser_probe requires the optional Playwright backend; install js[browser] (Playwright does not publish musllinux wheels)'
         )
 
     target = text_or_default(target).strip()
@@ -233,6 +287,8 @@ def browser_probe(
     hold = min(int_or_default(hold_ms, 1600, minimum=0), 30_000)
     width = min(int_or_default(viewport_width, 1280, minimum=100), 3840)
     height = min(int_or_default(viewport_height, 800, minimum=100), 2160)
+    base = context.resolve_path(output_dir, write=True) if output_dir else paths.browser_probes_dir()
+    run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     server: _ThreadingServer | None = None
     url = target
@@ -241,12 +297,9 @@ def browser_probe(
         if not path.exists():
             return f"ERROR: no such local target: {path}"
         try:
-            server, url, _root = _start_local_server(path)
+            server, url, _root = _start_local_server(path, context=context)
         except OSError as exc:
             return f"ERROR: could not serve local target: {type(exc).__name__}: {exc}"
-
-    base = context.resolve_path(output_dir, write=True) if output_dir else paths.browser_probes_dir()
-    run_dir = base / f"probe-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     report: dict[str, Any] = {
         "url": url,
@@ -267,7 +320,7 @@ def browser_probe(
         context.snapshot(run_dir)
         run_dir.mkdir(parents=True, exist_ok=False)
         with sync_playwright() as playwright:
-            browser = _launch_browser(playwright)
+            browser = _launch_browser(playwright, context)
             page = browser.new_page(viewport={"width": width, "height": height})
             page.on(
                 "console",
@@ -382,14 +435,10 @@ def browser_probe(
     ]
     failed = "error" in report and not report["frames"]
     report["reading"] = (
-        "The probe failed before it captured a frame; do not infer page, WebGL, or "
-        "visual state from the empty measurements."
+        'The probe failed before it captured a frame; do not infer page, WebGL, or visual state from the empty measurements.'
         if failed
         else (
-            "Frame paths are PNGs; use read on them when available. "
-            "dominant_color_share and unique_colors describe each frame. "
-            "changed_pct_from_previous is the percent of pixels moving by more than "
-            "eight RGB levels after each interaction. These are measurements, not verdicts."
+            'Frame paths are PNGs; use read on them when available. dominant_color_share and unique_colors describe each frame. changed_pct_from_previous is the percent of pixels moving by more than eight RGB levels after each interaction. These are measurements, not verdicts.'
         )
     )
     prefix = "ERROR: browser probe failed\n" if failed else ""

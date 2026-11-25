@@ -39,7 +39,7 @@ def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
 
     # Flat, not oneOf: llama.cpp's schema-to-grammar path emits {} for a bare
     # oneOf with no top-level properties, so a grammar-constrained model cannot
-    # call patch at all. _apply_edit rejects mixing the two forms in code.
+    # call patch at all. patch() rejects mixing the two forms in code.
     assert "oneOf" not in schema
     assert schema["required"] == ["file_path"]
     assert schema["additionalProperties"] is False
@@ -96,7 +96,7 @@ def test_closed_sets_and_numeric_bounds_match_handler_contracts():
 def test_mcp_control_catalog_ids_load_callable_tools():
     host = MCPHost(MCPConfiguration((), MCPPolicy()))
     entries = host.initial_catalog()
-    assert {entry.name for entry in entries} == set(dict(host.CONTROL_TOOLS))
+    assert {entry.name for entry in entries} == set(dict(host.control_tools()))
     for entry in entries:
         assert entry.loadable is True
         assert entry.description.strip()

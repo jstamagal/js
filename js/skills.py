@@ -2,25 +2,26 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
-import re
 from typing import Any
 
 import yaml
 
-from . import paths
-from . import messages as msgs
+from . import messages as msgs, output, paths, snippets
+from .cli_options import current
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _MAX_DESCRIPTION = 500
 # Discovery runs on every turn; each distinct warning prints once per process.
 _WARNED: set[str] = set()
-# The skills js ships, vendored as js/skills/<name>/SKILL.md.
-BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+# The skills js ships, vendored as defaults/skills/<name>/SKILL.md.
+BUILTIN_SKILLS_DIR = paths.defaults_dir() / "skills"
 
 
 @dataclass(frozen=True)
@@ -86,12 +87,12 @@ class LoadedSkill:
     def render(self) -> str:
         problems = []
         if self.activation.denied:
-            problems.append("policy-denied: " + ", ".join(self.activation.denied))
+            problems.append('policy-denied: ' + ", ".join(self.activation.denied))
         if self.activation.missing:
-            problems.append("unknown: " + ", ".join(self.activation.missing))
+            problems.append('unknown: ' + ", ".join(self.activation.missing))
         if not problems:
             return self.instructions
-        report = "Skill tool requirements unavailable: " + "; ".join(problems)
+        report = 'Skill tool requirements unavailable: ' + "; ".join(problems)
         separator = "" if self.instructions.endswith("\n") else "\n"
         return f"{self.instructions}{separator}\n{report}"
 
@@ -116,12 +117,14 @@ class SkillCatalog:
         builtin_dir: Path | None = None,
         global_dir: Path | None = None,
         user_dir: Path | None = None,
+        disabled: Iterable[str] = (),
     ) -> SkillCatalog:
         return discover_skills(
             project_dir,
             builtin_dir=builtin_dir,
             global_dir=global_dir,
             user_dir=user_dir,
+            disabled=disabled,
         )
 
     @property
@@ -207,7 +210,6 @@ def load_skill(
     return LoadedSkill(metadata=metadata, instructions=body, activation=activation)
 
 
-_USER_COMMAND_RE = re.compile(r"/skill(?:\s+(\S+))?(?:\s+(.*))?", re.DOTALL)
 _USER_SKILL_BLOCK_RE = re.compile(r'<skill name="([^"]+)">\n')
 
 
@@ -226,41 +228,69 @@ class SkillInvocationError(ValueError):
     """A ``/skill`` line that names no skill, or one the catalog lacks."""
 
 
-def expand_user_invocation(catalog: SkillCatalog, text: str) -> str | None:
+def match_user_invocation(text: str, *, command: str = "/skill",
+                          pattern: re.Pattern | None = None) -> re.Match | None:
+    """Match an invocation. A supplied pattern captures the name and request."""
+    if pattern is None:
+        pattern = re.compile(re.escape(command) + r"(?:\s+(\S+))?(?:\s+(.*))?", re.DOTALL)
+    return pattern.fullmatch(text.strip())
+
+def expand_user_invocation(catalog: SkillCatalog, text: str, *, command: str = "/skill",
+                           pattern: re.Pattern | None = None) -> str | None:
     """Turn a ``/skill <name> [request]`` line into the user message that carries it.
 
     This is the user's path into a skill, so it loads skills whose frontmatter
     disables model invocation. Returns None when ``text`` is not a ``/skill``
     line; raises SkillInvocationError when it names no known skill.
     """
-    match = _USER_COMMAND_RE.fullmatch(text.strip())
+    match = match_user_invocation(text, command=command, pattern=pattern)
     if match is None:
         return None
     name, request = match.group(1), (match.group(2) or "").strip()
     if not name:
-        raise SkillInvocationError(msgs.USAGE.text(usage="/skill <name> [request]"))
-    loaded = load_skill(catalog, name, user=True)
+        raise SkillInvocationError(msgs.USAGE.said(usage=f"{command} <name> [request]"))
+    try:
+        loaded = load_skill(catalog, name, user=True)
+    except (OSError, ValueError) as exc:
+        raise SkillInvocationError(str(exc)) from exc
     if loaded is None:
-        raise SkillInvocationError(msgs.NO_SUCH_SKILL.text(name=name))
+        raise SkillInvocationError(msgs.NO_SUCH_SKILL.said(name=name))
     metadata = loaded.metadata
-    header = [f"Base directory for this skill: {metadata.path.parent}"]
+    header = [f'Base directory for this skill: {metadata.path.parent}']
     if metadata.tools:
         header.append(
-            "Tools this skill declares (load them with tool_discovery): "
+            snippets.render('skill-tools-header')
             + ", ".join(metadata.tools)
         )
     body = loaded.instructions.strip("\n")
-    block = f'<skill name="{metadata.name}">\n' + "\n".join(header) + f"\n\n{body}\n</skill>"
+    block = f'<skill name="{metadata.name}">\n' + "\n".join(header) + f'\n\n{body}\n</skill>'
     return f"{block}\n\n{request}" if request else block
 
 
 def _glob_match(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
-    """Match path components against pattern components; ``**`` spans any number."""
-    if not pattern:
-        return not parts
-    if pattern[0] == "**":
-        return any(_glob_match(parts[index:], pattern[1:]) for index in range(len(parts) + 1))
-    return bool(parts) and fnmatchcase(parts[0], pattern[0]) and _glob_match(parts[1:], pattern[1:])
+    """Match path components against pattern components; ``**`` spans any number.
+
+    Dynamic programming over (parts index, pattern index): ``**`` may consume
+    any number of components, so naive recursion is exponential in repeated
+    ``**``; the memo keeps every (i, j) pair to one evaluation.
+    """
+    memo: dict[tuple[int, int], bool] = {}
+
+    def match(i: int, j: int) -> bool:
+        key = (i, j)
+        hit = memo.get(key)
+        if hit is not None:
+            return hit
+        if j == len(pattern):
+            result = i == len(parts)
+        elif pattern[j] == "**":
+            result = any(match(k, j + 1) for k in range(i, len(parts) + 1))
+        else:
+            result = i < len(parts) and fnmatchcase(parts[i], pattern[j]) and match(i + 1, j + 1)
+        memo[key] = result
+        return result
+
+    return match(0, 0)
 
 
 def _ordered_subset(required: tuple[str, ...], reported: tuple[str, ...]) -> tuple[str, ...]:
@@ -281,23 +311,34 @@ def discover_skills(
     builtin_dir: Path | None = None,
     global_dir: Path | None = None,
     user_dir: Path | None = None,
+    disabled: Iterable[str] = (),
 ) -> SkillCatalog:
     """Index built-in, global, and project skills without retaining their bodies.
 
     Layers run lowest first, so a global or project skill shadows a built-in
-    one of the same name.
+    one of the same name. A skill named in ``disabled`` (the SKILLS_DISABLED
+    setting; case does not matter) is left out of the catalog.
     """
 
+    if current().skips_skills:
+        return SkillCatalog()
     builtin_root = builtin_dir or BUILTIN_SKILLS_DIR
     global_root = global_dir or paths.global_skills_dir()
     user_root = user_dir or paths.shared_skills_dir()
     # Within a scope the cross-client dir (.agents/skills) is scanned first and
     # the js-native dir last, so native wins a name collision — with a warning,
     # because two same-named skills in one scope is ambiguity, not layering.
+    # Run from $HOME, the project dirs are the global dirs: a project root that
+    # resolves to a global root is skipped, so its skills keep the global label.
+    shared_project = paths.shared_skills_dir() if project_dir.resolve() == paths.user_home().resolve() else project_dir / ".agents" / "skills"
+    project_roots = tuple(
+        root for root in (shared_project, paths.project_home(project_dir) / "skills")
+        if not any(_same_file(root, global_dir) for global_dir in (user_root, global_root))
+    )
     layers = (
         ("builtin", (builtin_root,)),
         ("global", (user_root, global_root)),
-        ("project", (project_dir / ".agents" / "skills", project_dir / ".js" / "skills")),
+        ("project", project_roots),
     )
     selected: dict[str, _SkillRecord] = {}
     for source, roots in layers:
@@ -307,13 +348,13 @@ def discover_skills(
             for path in _skill_paths(root):
                 try:
                     record = _index_skill(path, source)
-                except ValueError as exc:
-                    _warn_once(msgs.SKILL_SKIPPED.text(path=path, error=exc))
+                except (ValueError, OSError) as exc:
+                    _warn_once(msgs.SKILL_SKIPPED.said(path=path, error=exc))
                     continue
                 key = record.metadata.name.casefold()
                 prior = root_records.get(key)
                 if prior is not None:
-                    _warn_once(msgs.SKILL_DUPLICATE.text(
+                    _warn_once(msgs.SKILL_DUPLICATE.said(
                         path=path, name=record.metadata.name, root=root, prior=prior.metadata.path))
                     continue
                 root_records[key] = record
@@ -321,18 +362,24 @@ def discover_skills(
                 prior = layer_records.get(key)
                 # A dir symlinked into both roots is one skill, not a collision.
                 if prior is not None and not _same_file(prior.metadata.path, record.metadata.path):
-                    _warn_once(msgs.SKILL_OVERRIDES.text(
+                    _warn_once(msgs.SKILL_OVERRIDES.said(
                         name=record.metadata.name, path=record.metadata.path, prior=prior.metadata.path))
             layer_records.update(root_records)
         selected.update(layer_records)
+    for name in disabled:
+        selected.pop(name.casefold(), None)
     return SkillCatalog(selected.values())
 
 
 def _skill_paths(root: Path) -> tuple[Path, ...]:
     """A skill is a subdirectory holding a SKILL.md — the Agent Skills format."""
-    if not root.is_dir():
+    try:
+        if not root.is_dir():
+            return ()
+        return tuple(sorted(root.glob("*/SKILL.md"), key=lambda item: str(item).casefold()))
+    except OSError as exc:
+        _warn_once(msgs.SKILL_SKIPPED.said(path=root, error=exc))
         return ()
-    return tuple(sorted(root.glob("*/SKILL.md"), key=lambda item: str(item).casefold()))
 
 
 def _index_skill(path: Path, source: str) -> _SkillRecord:
@@ -360,28 +407,40 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
+    offset = int(text.startswith("\ufeff"))
+    text = text[offset:]
     if not text.startswith("---") or text[:4] not in {"---\n", "---\r"}:
-        return {}, text, 0
+        return {}, text, offset
     match = re.search(r"\r?\n---[ \t]*(?:\r?\n|$)", text[3:])
     if match is None:
-        raise ValueError("frontmatter is missing a closing ---")
+        raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_IS_MISSING_A_CLOSING.format())
     start = 3 + match.start()
     end = 3 + match.end()
     yaml_text = text[text.find("\n") + 1:start]
     try:
         manifest = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
-        # An unquoted glob such as `paths: *.rs` reads as a YAML alias; a
-        # second parse quotes the paths globs.
+        # Installed skills use plain descriptions with colons and unquoted
+        # path globs. Quote those scalar values before retrying YAML.
         try:
-            manifest = yaml.safe_load(_quote_path_globs(yaml_text))
+            manifest = yaml.safe_load(_quote_plain_description(_quote_path_globs(yaml_text)))
         except yaml.YAMLError:
-            raise ValueError(f"invalid YAML frontmatter: {_yaml_problem(exc)}") from exc
+            raise ValueError(msgs.SKILL_FRONTMATTER_INVALID_YAML_FRONTMATTER.format(value=_yaml_problem(exc))) from exc
     if manifest is None:
         manifest = {}
     if not isinstance(manifest, dict):
-        raise ValueError("frontmatter must be a mapping")
-    return manifest, text[end:], end
+        raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING.format())
+    return manifest, text[end:], end + offset
+
+
+def _quote_plain_description(yaml_text: str) -> str:
+    def quote(match: re.Match[str]) -> str:
+        value = match.group(2)
+        if value and value[0] not in "\"'|>[]{&*!%@`" and ": " in value:
+            return match.group(1) + json.dumps(value)
+        return match.group(0)
+
+    return re.sub(r"^(description:[ \t]*)([^\r\n]*)", quote, yaml_text, flags=re.MULTILINE)
 
 
 _YAML_SPECIAL = re.compile(r"[{}\[\]*&#!|>%@`]|: ")
@@ -426,13 +485,18 @@ def _yaml_problem(exc: yaml.YAMLError) -> str:
     return f"{problem} (line {mark.line + 2})" if mark is not None else problem
 
 
+def reset_warnings() -> None:
+    """Forget which discovery warnings were shown; each shows again once."""
+    _WARNED.clear()
+
+
 def _warn_once(message: str) -> None:
-    """Print a discovery warning as one line, once per process."""
+    """Emit a discovery warning once per process."""
     line = " ".join(message.split())
     if line in _WARNED:
         return
     _WARNED.add(line)
-    msgs.warn(msgs.FAILED_WARN, error=line)
+    output.notice(msgs.FAILED_WARN, error=message if isinstance(message, msgs.Said) else line)
 
 
 def _string_field(manifest: dict[str, Any], field: str) -> str:
@@ -440,7 +504,7 @@ def _string_field(manifest: dict[str, Any], field: str) -> str:
     if value is None:
         return ""
     if not isinstance(value, str):
-        raise ValueError(f"{field} frontmatter must be a string")
+        raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_STRING.format(field=field))
     return value.strip()
 
 
@@ -452,23 +516,25 @@ def _bool_field(manifest: dict[str, Any], field: str) -> bool:
         return value
     if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
         return value.strip().lower() == "true"
-    raise ValueError(f"{field} frontmatter must be true or false")
+    raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_TRUE_OR_FALSE.format(field=field))
 
 
 def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     value = manifest.get("tools")
     if value is None:
         return ()
+    if isinstance(value, str):
+        value = [item for item in value.split(",") if item.strip()]
     if not isinstance(value, list):
-        raise ValueError("tools frontmatter must be a list of strings")
+        raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF.format())
     tools: list[str] = []
     seen: set[str] = set()
     for item in value:
         if not isinstance(item, str) or not _TOOL_RE.fullmatch(item.strip()):
-            raise ValueError("tools frontmatter must contain safe non-empty strings")
+            raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_CONTAIN_SAFE_NON_EMPTY.format())
         tool = item.strip()
         if tool in seen:
-            raise ValueError(f"tools frontmatter contains duplicate {tool!r}")
+            raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_CONTAINS_DUPLICATE.format(tool=tool))
         seen.add(tool)
         tools.append(tool)
     return tuple(tools)
@@ -482,14 +548,14 @@ def _paths_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     if isinstance(value, str):
         value = [value]
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("paths frontmatter must be a list of glob strings")
+        raise ValueError(msgs.SKILL_FRONTMATTER_PATHS_FRONTMATTER_MUST_BE_A_LIST_OF.format())
     patterns = tuple(dict.fromkeys(
         expanded for item in value for part in _split_outside_braces(item)
         for expanded in _expand_braces(part)
     ))
     # A match-all pattern would offer the skill on the first file touched; it
     # scopes nothing, so the skill is left unscoped.
-    if all(pattern.strip("/") == "**" for pattern in patterns):
+    if any(pattern.strip("/") in {"**", "**/*"} for pattern in patterns):
         return ()
     return patterns
 
@@ -525,7 +591,7 @@ def _expand_braces(pattern: str) -> list[str]:
 
 def _validate_name(name: str) -> None:
     if not _NAME_RE.fullmatch(name) or ".." in name:
-        raise ValueError(f"unsafe skill name {name!r}")
+        raise ValueError(msgs.SKILL_FRONTMATTER_UNSAFE_SKILL_NAME.format(name=name))
 
 
 def _derive_description(body: str, name: str) -> str:

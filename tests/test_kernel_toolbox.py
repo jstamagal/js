@@ -16,13 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from js import config as jsconfig
-from js import paths
-from js import settings as jssettings
-from js import messages as msgs
-from js.toolkit import ToolContext
-from js.toolkit import kernel as kmod
-from js.toolkit import toolbox as tbmod
+from js import config as jsconfig, messages as msgs, paths, settings as jssettings
+from js.toolkit import ToolContext, python_kernel, toolbox as tbmod
 from js.toolkit.descriptions import render_tool_name_sections
 from js.toolkit.registry import build_default_registry
 
@@ -39,7 +34,7 @@ def ctx(tmp_path, monkeypatch):
     """A ToolContext whose toolbox writes into tmp_path, never the real config dir."""
     work = tmp_path / "work"
     work.mkdir()
-    monkeypatch.setattr(tbmod._paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
+    monkeypatch.setattr(paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
     context = ToolContext(cwd=work)
     context.model = "test-model"
     context.kernel_verbosity = "quiet"
@@ -60,7 +55,9 @@ def stderr_of(monkeypatch, fn):
         return Console(file=buffer, width=100, force_terminal=False,
                        color_system=None, highlight=False)
 
-    monkeypatch.setattr(kmod, "_console", fake_console)
+    from js import kernel_display
+
+    monkeypatch.setattr(kernel_display, "_console", fake_console)
     result = fn()
     return result, buffer.getvalue()
 
@@ -69,13 +66,94 @@ def stderr_of(monkeypatch, fn):
 # toolbox on disk — no kernel needed
 # ---------------------------------------------------------------------------
 
+# A tool file's provenance header: one comment line holding a JSON object.
+HEADER_PREFIX = "# js-toolbox: "
+
+
+def header_line(meta: dict) -> str:
+    return HEADER_PREFIX + json.dumps(meta, separators=(",", ":"), sort_keys=True)
+
+
+def saved_header(path: Path) -> dict:
+    [line] = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith(HEADER_PREFIX)]
+    return json.loads(line[len(HEADER_PREFIX):])
+
+
+def archived_revisions(record) -> list[int]:
+    """The revisions of `record` kept in its directory's .history."""
+    archived = (record.path.parent / ".history").glob(f"{record.name}.r*.py")
+    return sorted(int(path.name.removeprefix(f"{record.name}.r").removesuffix(".py")) for path in archived)
+
+
+@pytest.mark.parametrize("definition", [
+    "def sample():\n    return 1\n",
+    "async def sample():\n    return 1\n",
+    "class sample:\n    value = 1\n",
+])
+def test_history_source_fallback_keeps_decorators(definition, capsys):
+    source = "@decorate\n" + definition
+    namespace = {"In": [source]}
+    exec(tbmod._SOURCE_PROBE % {"name": "sample"}, namespace)
+    payload = json.loads(capsys.readouterr().out.removeprefix("__JS_SRC__"))
+
+    def decorate(target):
+        target.decorated = True
+        return target
+
+    restored = {"decorate": decorate}
+    exec(payload["source"], restored)
+    assert restored["sample"].decorated is True
+
+
+@pytest.mark.parametrize("bad_entry", ["oops", None, 7, ["nested"]])
+def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad_entry):
+    cwd = Path(ctx.cwd)
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    directory.mkdir(parents=True)
+    valid = {"revision": 1, "model": "first", "date": "2026-01-01", "note": "original"}
+    original = header_line({"revision": 2, "history": [bad_entry, valid]})
+    original += "\n\ndef sample():\n    return 1\n"
+    target = directory / "sample.py"
+    target.write_text(original, encoding="utf-8")
+    tbmod.write_revision(cwd, "other", "def other():\n    return 2\n", model="other-model")
+
+    listing = tbmod.describe(cwd)
+    assert tbmod.discover(cwd)["sample"].history == [valid]
+    assert "sample r2" in listing and "first" in listing
+    assert "other r1" in listing
+    assert "original" in tbmod.history_of(cwd, "sample")
+
+    report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 3\n", model="next")
+    assert "sample r3" in report
+    saved = saved_header(target)
+    assert saved["history"][0] == valid
+    assert [entry["model"] for entry in saved["history"]] == ["first", "next"]
+    assert (directory / ".history" / "sample.r2.py").read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("model", [5, ["a"], {"x": 1}])
+def test_non_string_history_models_do_not_break_listing_or_saving(ctx, model):
+    cwd = Path(ctx.cwd)
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    directory.mkdir(parents=True)
+    history = [{"revision": 1, "model": model}]
+    target = directory / "sample.py"
+    target.write_text(header_line({"revision": 1, "history": history})
+                      + "\n\ndef sample():\n    return 1\n", encoding="utf-8")
+
+    assert "sample r1 [global] unknown" in tbmod.describe(cwd)
+    report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 2\n", model="next")
+    assert "authors: unknown -> next" in report
+    assert tbmod.discover(cwd)["sample"].history[0] == history[0]
+    assert "sample r2 [global] unknown -> next" in tbmod.describe(cwd)
+
 
 def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(ctx):
     tbmod.write_revision(Path(ctx.cwd), "adder", "def adder(a, b):\n    return a + b\n",
                          model="qwen", note="first cut", stamp=time.time())
 
     path = tbmod.toolbox_dirs(Path(ctx.cwd))[0] / "adder.py"
-    header = tbmod._parse_header(path.read_text(encoding="utf-8"))
+    header = saved_header(path)
 
     assert header["name"] == "adder"
     assert header["revision"] == 1
@@ -104,6 +182,66 @@ def test_second_save_bumps_the_revision_and_archives_the_previous_body(ctx):
     assert tbmod.discover(cwd)["adder"].authors == ["qwen", "fable"]
 
 
+def test_recreating_deleted_tool_continues_above_archived_revisions(ctx):
+    cwd = Path(ctx.cwd)
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    archive = directory / ".history" / "adder.r1.py"
+    original = archive.read_bytes()
+    (directory / "adder.py").unlink()
+
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 3\n")
+    assert tbmod.discover(cwd)["adder"].revision == 2
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 4\n")
+    assert archive.read_bytes() == original
+    assert "return 3" in (directory / ".history" / "adder.r2.py").read_text()
+
+
+def test_revision_exceeds_archived_max_even_with_lower_live_header(ctx):
+    cwd = Path(ctx.cwd)
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    archive = directory / ".history" / "adder.r9.py"
+    archive.parent.mkdir()
+    archive.write_text("old revision nine")
+
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    assert tbmod.discover(cwd)["adder"].revision == 10
+    assert archive.read_text() == "old revision nine"
+
+
+def test_revision_numbering_does_not_mix_global_and_project_archives(ctx):
+    cwd = Path(ctx.cwd)
+    for scope in ("global", "project"):
+        tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n", scope=scope)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    archive = global_dir / ".history" / "adder.r9.py"
+    archive.parent.mkdir()
+    archive.write_text("global revision nine")
+
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n", scope="project")
+    assert saved_header(project_dir / "adder.py")["revision"] == 2
+    assert archive.read_text() == "global revision nine"
+
+
+def test_save_never_overwrites_an_existing_archive(ctx):
+    cwd = Path(ctx.cwd)
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    target = directory / "adder.py"
+    original = target.read_bytes()
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    archive = directory / ".history" / "adder.r1.py"
+    target.write_bytes(original.replace(b"return 1", b"return 99"))
+    before = target.read_bytes()
+
+    report = tbmod.write_revision(cwd, "adder", "def adder():\n    return 3\n")
+    assert report.startswith("ERROR")
+    assert archive.read_bytes() == original
+    assert target.read_bytes() == before
+
+
 def test_restore_writes_the_old_body_as_a_new_revision_so_history_only_grows(ctx):
     cwd = Path(ctx.cwd)
     tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return a + b\n", model="qwen")
@@ -118,7 +256,7 @@ def test_restore_writes_the_old_body_as_a_new_revision_so_history_only_grows(ctx
     assert "return a + b" in record.path.read_text(encoding="utf-8")
     assert [entry["note"] for entry in record.history] == [
         "", "broke it", "rolled back to r1"]
-    assert tbmod._archived_revisions(record) == [1, 2]
+    assert archived_revisions(record) == [1, 2]
 
 
 def test_history_reports_every_revision_and_what_can_be_restored(ctx):
@@ -201,7 +339,7 @@ def test_a_missing_jupyter_package_becomes_one_error_naming_it(ctx, monkeypatch)
     monkeypatch.setattr(importlib.util, "find_spec",
                         lambda name: None if name == "jupyter_client" else object())
 
-    result = kmod.kernel(code="1 + 1", context=ctx)
+    result = python_kernel.kernel(code="1 + 1", context=ctx)
 
     assert result.startswith("ERROR: the kernel tool needs the jupyter_client package")
     assert "pyproject.toml" in result
@@ -229,42 +367,51 @@ def test_toolbox_save_accepts_an_explicit_source_with_no_kernel_at_all(ctx, monk
     assert tbmod.discover(Path(ctx.cwd))["adder"].history[0]["note"] == "by hand"
 
 
+def test_toolbox_save_refuses_source_without_the_named_definition(ctx):
+    cwd = Path(ctx.cwd)
+    original = "def adder(a, b):\n    return a + b\n"
+    tbmod.write_revision(cwd, "adder", original)
+    path = tbmod.discover(cwd)["adder"].path
+    before = path.read_bytes()
+
+    result = tbmod.toolbox(action="save", name="adder",
+                           source="def other():\n    return 1\n", context=ctx)
+
+    assert path.read_bytes() == before
+    assert result.startswith("ERROR")
+    assert tbmod.discover(cwd)["adder"].revision == 1
+    assert archived_revisions(tbmod.discover(cwd)["adder"]) == []
+
+
 def test_model_facing_cap_uses_the_js_limit_knob_and_names_it_in_the_marker(ctx):
     ctx.max_tool_result_bytes = 200
 
-    capped = kmod.cap_for_model("x" * 5000, ctx)
+    capped = python_kernel.cap_for_model("x" * 5000, ctx).model
 
     assert len(capped.encode("utf-8")) <= 200
-    assert "[truncated: limits.max_tool_result_bytes (200) reached]" in capped
+    assert "[truncated: TOOL_RESULT_MAX (200) reached]" in capped
+
+
+def test_model_facing_cap_of_zero_cuts_nothing(ctx):
+    ctx.max_tool_result_bytes = 0
+    text = "x" * 300_000
+
+    assert python_kernel.cap_for_model(text, ctx) == text
 
 
 def test_per_call_verbosity_beats_the_config_knob_which_beats_normal(ctx):
     ctx.kernel_verbosity = "quiet"
 
-    assert kmod.resolve_verbosity(ctx, "verbose") == "verbose"
-    assert kmod.resolve_verbosity(ctx, "") == "quiet"
-    assert kmod.resolve_verbosity(ctx, "nonsense") == "quiet"
+    assert python_kernel.resolve_verbosity(ctx, "verbose") == "verbose"
+    assert python_kernel.resolve_verbosity(ctx, "") == "quiet"
+    assert python_kernel.resolve_verbosity(ctx, "nonsense") == "quiet"
     ctx.kernel_verbosity = "bogus"
-    assert kmod.resolve_verbosity(ctx, "") == "normal"
-
-
-def test_the_render_clips_long_output_and_says_how_many_lines_it_hid(ctx, monkeypatch):
-    ctx.kernel_render_max_lines = 5
-
-    _result, screen = stderr_of(monkeypatch, lambda: kmod.render_execution(
-        ctx, level="normal", code="print(1)",
-        stdout="\n".join(f"line {i}" for i in range(40)),
-        stderr="", display="", error="", elapsed=0.1, cell=1,
-        added=[], removed=[], namespace=["f"], images=[], interrupted=False))
-
-    assert "line 4" in screen
-    assert "line 5" not in screen
-    assert msgs.KERNEL_MORE_LINES.text(count=35) in screen
+    assert python_kernel.resolve_verbosity(ctx, "") == "normal"
 
 
 def test_verbose_splits_the_streams_that_normal_merges(ctx, monkeypatch):
     def render(level):
-        _r, screen = stderr_of(monkeypatch, lambda: kmod.render_execution(
+        _r, screen = stderr_of(monkeypatch, lambda: python_kernel.render_execution(
             ctx, level=level, code="x=1", stdout="OUT-TEXT\n", stderr="ERR-TEXT\n",
             display="DISPLAY-TEXT\n", error="", elapsed=0.1, cell=1, added=[],
             removed=[], namespace=["f"], images=[], interrupted=False))
@@ -280,7 +427,7 @@ def test_verbose_splits_the_streams_that_normal_merges(ctx, monkeypatch):
 
 def test_quiet_stays_silent_on_success_and_still_reports_an_error(ctx, monkeypatch):
     def render(error):
-        _r, screen = stderr_of(monkeypatch, lambda: kmod.render_execution(
+        _r, screen = stderr_of(monkeypatch, lambda: python_kernel.render_execution(
             ctx, level="quiet", code="x=1", stdout="hello\n", stderr="",
             display="", error=error, elapsed=0.1, cell=3, added=[], removed=[],
             namespace=["f"], images=[], interrupted=False))
@@ -294,7 +441,7 @@ def test_quiet_stays_silent_on_success_and_still_reports_an_error(ctx, monkeypat
 def test_a_multi_line_event_renders_one_line_per_line(ctx, monkeypatch):
     ctx.kernel_verbosity = "normal"
 
-    _r, screen = stderr_of(monkeypatch, lambda: kmod.render_event(
+    _r, screen = stderr_of(monkeypatch, lambda: python_kernel.render_event(
         ctx, "normal", "TOOLBOX\nalpha r1 [global] qwen\nbeta r2 [project] fable"))
 
     assert screen.count("· ") == 3
@@ -303,7 +450,7 @@ def test_a_multi_line_event_renders_one_line_per_line(ctx, monkeypatch):
 
 def test_verbose_shows_kernel_lifecycle_that_normal_keeps_off_the_screen(ctx, monkeypatch):
     def render(level):
-        _r, screen = stderr_of(monkeypatch, lambda: kmod.render_event(
+        _r, screen = stderr_of(monkeypatch, lambda: python_kernel.render_event(
             ctx, level, "kernel started in /tmp/x", verbose_only=True))
         return screen
 
@@ -321,8 +468,10 @@ def test_both_tools_are_registered_with_their_model_facing_descriptions():
 
     assert registry.resolve("kernel").name == "kernel"
     assert registry.resolve("toolbox").name == "toolbox"
-    assert "persistent IPython kernel" in registry.resolve("kernel").description
-    assert "outlive the session" in registry.resolve("toolbox").description
+    descriptions = Path(python_kernel.__file__).resolve().parents[2] / "defaults" / "tool_descriptions"
+    for name in ("kernel", "toolbox"):
+        expected = (descriptions / f"{name}.md").read_text().strip()
+        assert registry.resolve(name).description == expected
 
 
 def test_the_kernel_description_changes_when_toolbox_shares_the_surface():
@@ -355,20 +504,20 @@ def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
     import yaml
 
     root = Path(__file__).resolve().parents[1]
-    spec = yaml.safe_load((root / "prompts" / "twotool" / "agent.yaml").read_text())
+    spec = yaml.safe_load((root / "defaults" / "agents" / "twotool" / "agent.yaml").read_text())
 
     assert spec["tools"] == ["kernel:eager", "toolbox:eager", "shell:eager"]
-    assert (root / "prompts" / "twotool" / "01-prompt.md").read_text().strip()
+    assert (root / "defaults" / "agents" / "twotool" / "01-prompt.md").read_text().strip()
 
 
 def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeypatch):
     keys = {spec.key for spec in jssettings.REGISTRY}
-    assert {"kernel.verbosity", "kernel.render_max_lines"} <= keys
+    assert {"KERNEL_VERBOSITY", "KERNEL_LINES_MAX"} <= keys
 
     monkeypatch.setenv("JS_KERNEL_VERBOSITY", "verbose")
     cfg = jsconfig.from_env(save_session=False, cwd=tmp_path)
     assert cfg.kernel_verbosity == "verbose"
-    assert cfg.kernel_render_max_lines == jssettings.default_value("kernel.render_max_lines")
+    assert cfg.kernel_render_max_lines == jssettings.default_value("KERNEL_LINES_MAX")
 
     # a value outside the three levels falls back rather than reaching the render
     monkeypatch.setenv("JS_KERNEL_VERBOSITY", "shouting")
@@ -382,8 +531,8 @@ def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeyp
 
 @needs_kernel
 def test_state_survives_between_calls_and_the_namespace_line_lists_it(ctx):
-    first = kmod.kernel(code="def triple(n):\n    return n * 3\n", context=ctx)
-    second = kmod.kernel(code="triple(14)", context=ctx)
+    first = python_kernel.kernel(code="def triple(n):\n    return n * 3\n", context=ctx)
+    second = python_kernel.kernel(code="triple(14)", context=ctx)
 
     assert "DEFINED triple(n)" in first
     assert "NAMESPACE triple" in first
@@ -395,7 +544,7 @@ def test_state_survives_between_calls_and_the_namespace_line_lists_it(ctx):
 def test_the_kernel_listens_on_unix_sockets_that_shutdown_removes(ctx):
     """TCP ports are handed out racily between processes; the kernel's
     sockets live in a private directory instead, one per session."""
-    assert "42" in kmod.kernel(code="6 * 7", context=ctx)
+    assert "42" in python_kernel.kernel(code="6 * 7", context=ctx)
     session = ctx.kernel_session
     socket_dir = session.socket_dir
     connection = json.loads(Path(session.manager.connection_file).read_text(encoding="utf-8"))
@@ -412,20 +561,20 @@ def test_the_kernel_listens_on_unix_sockets_that_shutdown_removes(ctx):
 def test_cells_run_in_the_interpreter_running_js(ctx):
     import sys
 
-    result = kmod.kernel(code="import sys\nprint(sys.executable)", context=ctx)
+    result = python_kernel.kernel(code="import sys\nprint(sys.executable)", context=ctx)
 
     assert sys.executable in result
 
 
 @needs_kernel
 def test_a_cell_awaits_at_top_level_without_a_loop_patch_and_has_no_nest_asyncio(ctx):
-    awaited = kmod.kernel(code=(
+    awaited = python_kernel.kernel(code=(
         "import asyncio\n"
         "async def ping():\n"
         "    return 'pong'\n"
         "print(await ping())\n"
     ), context=ctx)
-    missing = kmod.kernel(code="import nest_asyncio", context=ctx)
+    missing = python_kernel.kernel(code="import nest_asyncio", context=ctx)
 
     assert "pong" in awaited and "NAMESPACE ping" in awaited
     assert "ModuleNotFoundError" in missing and "nest_asyncio" in missing
@@ -440,14 +589,14 @@ def test_waiting_on_the_kernels_own_loop_never_completes_but_await_does(ctx):
     the coroutine is the one the cell blocked. `await` runs the same coroutine.
     """
     ctx.kernel_wait_seconds = 30
-    blocked = kmod.kernel(code=(
+    blocked = python_kernel.kernel(code=(
         "import asyncio\n"
         "loop = asyncio.get_running_loop()\n"
         "async def q():\n"
         "    return 7\n"
         "print(asyncio.run_coroutine_threadsafe(q(), loop).result(timeout=0.3))\n"
     ), context=ctx)
-    awaited = kmod.kernel(code="print(await q())", context=ctx)
+    awaited = python_kernel.kernel(code="print(await q())", context=ctx)
 
     assert "TimeoutError" in blocked
     assert "7" in awaited
@@ -457,24 +606,24 @@ def test_waiting_on_the_kernels_own_loop_never_completes_but_await_does(ctx):
 def test_a_cell_blocked_on_the_kernels_own_loop_returns_a_handle_and_recovers(ctx):
     """The #101 wedge shape: a sync wrapper waiting on this kernel's own loop."""
     ctx.kernel_wait_seconds = 0.2
-    kmod.kernel(code=(
+    python_kernel.kernel(code=(
         "import asyncio\n"
         "def blocked():\n"
         "    loop = asyncio.get_event_loop()\n"
         "    return asyncio.run_coroutine_threadsafe(asyncio.sleep(0.5), loop).result()\n"
     ), context=ctx)
 
-    wedged = kmod.kernel(code="blocked()", context=ctx)
+    wedged = python_kernel.kernel(code="blocked()", context=ctx)
 
     assert wedged.splitlines()[-1].endswith(" RUNNING")
-    refused = kmod.kernel(code="print('next')", context=ctx)
+    refused = python_kernel.kernel(code="print('next')", context=ctx)
     assert "the previous cell is still running (blocked())" in refused
 
-    stopped = kmod.kernel(action="interrupt", context=ctx)
+    stopped = python_kernel.kernel(action="interrupt", context=ctx)
     assert "KeyboardInterrupt" in stopped
     assert stopped.splitlines()[-1].startswith("NAMESPACE ")
 
-    after = kmod.kernel(
+    after = python_kernel.kernel(
         code="import asyncio\nawait asyncio.sleep(0.1)\nprint('loop answers')", context=ctx)
 
     assert "loop answers" in after
@@ -511,8 +660,8 @@ def test_a_saved_async_tool_that_closes_its_client_leaves_no_unclosed_warning(ct
                   source=source, context=ctx)
     tbmod.toolbox(action="load", context=ctx)
 
-    closed = kmod.kernel(code="print(await ask())", context=ctx)
-    leaked = kmod.kernel(code=(
+    closed = python_kernel.kernel(code="print(await ask())", context=ctx)
+    leaked = python_kernel.kernel(code=(
         "async def leaky():\n"
         "    client = _Client()\n"
         "    await client.ping()\n"
@@ -526,9 +675,9 @@ def test_a_saved_async_tool_that_closes_its_client_leaves_no_unclosed_warning(ct
 
 @needs_kernel
 def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
-    kmod.kernel(code="def gone():\n    pass\ndef stays():\n    pass\n", context=ctx)
+    python_kernel.kernel(code="def gone():\n    pass\ndef stays():\n    pass\n", context=ctx)
 
-    after = kmod.kernel(code="del gone", context=ctx)
+    after = python_kernel.kernel(code="del gone", context=ctx)
 
     assert "GONE gone" in after
     assert "NAMESPACE stays" in after
@@ -537,19 +686,19 @@ def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
 
 @needs_kernel
 def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
-    kmod.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
+    python_kernel.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
     ctx.kernel_wait_seconds = 0.2
-    kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
+    python_kernel.kernel(code="import time\ntime.sleep(60)", context=ctx)
 
     started = time.monotonic()
-    result = kmod.kernel(action="wait", timeout=0.5, context=ctx)
+    result = python_kernel.kernel(action="wait", timeout=0.5, context=ctx)
     elapsed = time.monotonic() - started
 
     assert result.startswith("INTERRUPTED after 0.5s.")
     assert "KeyboardInterrupt" in result
     assert elapsed < 30
     assert result.splitlines()[-1].startswith("NAMESPACE ")
-    assert "'alive'" in kmod.kernel(code="survivor()", context=ctx)
+    assert "'alive'" in python_kernel.kernel(code="survivor()", context=ctx)
 
 
 @needs_kernel
@@ -557,40 +706,40 @@ def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx)
     ctx.kernel_wait_seconds = 0.2
 
     started = time.monotonic()
-    result = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
+    result = python_kernel.kernel(code="import time\ntime.sleep(60)", context=ctx)
     elapsed = time.monotonic() - started
 
     handle = result.splitlines()[-1].removeprefix("HANDLE ").removesuffix(" RUNNING")
     assert elapsed < 20
     assert "still running" in result
     assert f"cell 1 is still running after 0.2s (handle {handle})." in result
-    assert f"HANDLE {handle} RUNNING" in kmod.kernel(action="poll", context=ctx)
+    assert f"HANDLE {handle} RUNNING" in python_kernel.kernel(action="poll", context=ctx)
 
-    stopped = kmod.kernel(action="interrupt", context=ctx)
+    stopped = python_kernel.kernel(action="interrupt", context=ctx)
 
     assert "KeyboardInterrupt" in stopped
     assert stopped.splitlines()[-1].startswith("NAMESPACE ")
-    assert "1" in kmod.kernel(code="print(1)", context=ctx)
+    assert "1" in python_kernel.kernel(code="print(1)", context=ctx)
 
 
 @needs_kernel
 def test_a_second_cell_is_refused_while_the_first_is_still_running(ctx):
     ctx.kernel_wait_seconds = 0.2
-    first = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
+    first = python_kernel.kernel(code="import time\ntime.sleep(60)", context=ctx)
     assert "still running" in first
 
-    refused = kmod.kernel(code="print('second')", context=ctx)
+    refused = python_kernel.kernel(code="print('second')", context=ctx)
 
     assert "ERROR: the previous cell is still running (import time); interrupt it or wait" in refused
     assert refused.splitlines()[-1].endswith("RUNNING")
-    kmod.kernel(action="interrupt", context=ctx)
+    python_kernel.kernel(action="interrupt", context=ctx)
 
 
 @needs_kernel
 def test_output_a_cell_produces_after_the_call_returned_arrives_on_the_next_poll(ctx):
     # The cell prints only once the test opens the gate, after the call returned.
     ctx.kernel_wait_seconds = 0.2
-    first = kmod.kernel(code=(
+    first = python_kernel.kernel(code=(
         "import os, time\n"
         "while not os.path.exists('gate'):\n"
         "    time.sleep(0.01)\n"
@@ -603,7 +752,7 @@ def test_output_a_cell_produces_after_the_call_returned_arrives_on_the_next_poll
     deadline = time.monotonic() + 30
     while not polls or polls[-1].splitlines()[-1].endswith(" RUNNING"):
         assert time.monotonic() < deadline, polls
-        polls.append(kmod.kernel(action="poll", context=ctx))
+        polls.append(python_kernel.kernel(action="poll", context=ctx))
 
     assert "late output" in "\n".join(polls)
     assert "finished" in polls[-1]
@@ -617,20 +766,20 @@ def test_a_cell_abandoned_by_a_cancelled_turn_leaves_the_kernel_idle(ctx):
     outcome: list[str] = []
     worker = threading.Thread(
         target=lambda: outcome.append(
-            kmod.kernel(code="import time\ntime.sleep(30)", context=ctx)))
+            python_kernel.kernel(code="import time\ntime.sleep(30)", context=ctx)))
     worker.start()
     for _ in range(400):
-        if kmod.busy_handle(ctx.kernel_session) is not None:
+        if python_kernel.busy_handle(ctx.kernel_session) is not None:
             break
         time.sleep(0.05)
-    assert kmod.busy_handle(ctx.kernel_session) is not None
+    assert python_kernel.busy_handle(ctx.kernel_session) is not None
 
-    assert kmod.interrupt_inflight(ctx) is True
+    assert python_kernel.interrupt_inflight(ctx) is True
 
     worker.join(30)
     assert not worker.is_alive()
     started = time.monotonic()
-    result = kmod.kernel(code="print(1)", context=ctx)
+    result = python_kernel.kernel(code="print(1)", context=ctx)
     assert time.monotonic() - started < 10
     assert "1" in result
     assert result.splitlines()[-1].startswith("NAMESPACE ")
@@ -648,7 +797,7 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
     its code runs is caught by ipykernel itself, and the cell is dropped with
     no error message. Either way the 30-second cell stops.
     """
-    kmod.kernel(code="x = 1", context=ctx)
+    python_kernel.kernel(code="x = 1", context=ctx)
     session = ctx.kernel_session
     blocker = session.submit("import os, signal, time\n"
                              "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
@@ -658,15 +807,15 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline and not any(
             m["header"]["msg_type"] == "stream" for m in blocker.messages):
-        kmod.pump(session, time.monotonic() + 0.1)
+        python_kernel.pump(session, time.monotonic() + 0.1)
     assert not blocker.finished
     target = session.submit("import time\ntime.sleep(30)")
 
-    assert kmod.interrupt_inflight(ctx) is True
+    assert python_kernel.interrupt_inflight(ctx) is True
     (Path(ctx.cwd) / "gate").touch()
 
     started = time.monotonic()
-    kmod.collect_until(session, target, started + 20)
+    python_kernel.collect_until(session, target, started + 20)
     assert target.finished
     assert time.monotonic() - started < 15
     assert all(m["content"].get("ename") == "KeyboardInterrupt"
@@ -675,10 +824,10 @@ def test_an_interrupt_sent_before_the_kernel_starts_the_cell_still_stops_it(ctx)
 
 @needs_kernel
 def test_a_kernel_that_dies_mid_cell_is_reported_not_waited_on(ctx):
-    kmod.kernel(code="x = 1", context=ctx)
+    python_kernel.kernel(code="x = 1", context=ctx)
 
     started = time.monotonic()
-    result = kmod.kernel(code="import os\nos._exit(1)", timeout=120, context=ctx)
+    result = python_kernel.kernel(code="import os\nos._exit(1)", timeout=120, context=ctx)
     elapsed = time.monotonic() - started
 
     assert result.startswith("ERROR: the kernel died during execution (cell 2)")
@@ -688,18 +837,18 @@ def test_a_kernel_that_dies_mid_cell_is_reported_not_waited_on(ctx):
 
 @needs_kernel
 def test_restart_clears_the_namespace_and_says_so(ctx):
-    kmod.kernel(code="def doomed():\n    pass\n", context=ctx)
+    python_kernel.kernel(code="def doomed():\n    pass\n", context=ctx)
 
-    report = kmod.kernel(restart=True, context=ctx)
+    report = python_kernel.kernel(restart=True, context=ctx)
 
     assert "kernel restarted; the namespace is empty" in report
     assert report.splitlines()[-1] == "NAMESPACE (none)"
-    assert kmod.kernel(code="", context=ctx) == "NAMESPACE (none)"
+    assert python_kernel.kernel(code="", context=ctx) == "NAMESPACE (none)"
 
 
 @needs_kernel
 def test_image_output_lands_in_an_artifact_file_named_in_the_result(ctx):
-    result = kmod.kernel(code=(
+    result = python_kernel.kernel(code=(
         "import base64\n"
         "from IPython.display import display\n"
         "png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptV"
@@ -725,7 +874,7 @@ def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx,
     (startup / "00-mark.py").write_text("import os\nos.write(2, b'KERNEL-BOOT-MARK\\n')\n", encoding="utf-8")
     monkeypatch.setenv("IPYTHONDIR", str(ipython_dir))
 
-    _result, screen = stderr_of(monkeypatch, lambda: kmod.kernel(
+    _result, screen = stderr_of(monkeypatch, lambda: python_kernel.kernel(
         code="1 + 1", verbosity="verbose", context=ctx))
 
     log = ctx.kernel_session.log_path.read_text(encoding="utf-8")
@@ -737,7 +886,7 @@ def test_the_kernels_own_stderr_goes_to_a_log_file_not_the_operators_screen(ctx,
 @needs_kernel
 def test_a_tool_saved_from_the_kernel_loads_into_a_fresh_one_with_its_imports(ctx):
     cwd = Path(ctx.cwd)
-    kmod.kernel(code=(
+    python_kernel.kernel(code=(
         "import statistics\n"
         "def spread(values):\n"
         "    return statistics.fmean(values)\n"
@@ -748,10 +897,10 @@ def test_a_tool_saved_from_the_kernel_loads_into_a_fresh_one_with_its_imports(ct
 
     ctx.kernel_session.shutdown()
     ctx.kernel_session = None
-    assert "NameError" in kmod.kernel(code="spread([1, 2, 3])", context=ctx)
+    assert "NameError" in python_kernel.kernel(code="spread([1, 2, 3])", context=ctx)
 
     loaded = tbmod.toolbox(action="load", context=ctx)
-    used = kmod.kernel(code="spread([2, 4, 6])", context=ctx)
+    used = python_kernel.kernel(code="spread([2, 4, 6])", context=ctx)
 
     assert "hoisted into the file: import statistics" in saved
     assert "import statistics" in body
@@ -773,7 +922,7 @@ def test_load_reports_a_broken_tool_by_name_and_still_loads_the_healthy_ones(ctx
     assert "TOOLBOX loaded healthy r1 [global]" in report
     assert "TOOLBOX BROKEN unparseable: syntax error line 1" in report
     assert "TOOLBOX BROKEN exploding: RuntimeError: boom at import" in report
-    assert "'ok'" in kmod.kernel(code="healthy()", context=ctx)
+    assert "'ok'" in python_kernel.kernel(code="healthy()", context=ctx)
 
 
 @needs_kernel
@@ -792,28 +941,28 @@ def test_a_tool_whose_module_level_calls_a_sibling_loads_whatever_its_name(ctx):
     assert "leaf r1 [global]" in report
     assert "TOOLBOX BROKEN amodulelevel" not in report
     assert "TOOLBOX BROKEN zsolo: NameError" in report
-    assert "4" in kmod.kernel(code="VALUE", context=ctx)
+    assert "4" in python_kernel.kernel(code="VALUE", context=ctx)
 
 
 @needs_kernel
 def test_save_accepts_a_definition_that_calls_an_already_saved_tool(ctx):
     """Load execs every tool file into one namespace, so a sibling resolves."""
-    kmod.kernel(code="def leaf(n):\n    return n * 2\n", context=ctx)
+    python_kernel.kernel(code="def leaf(n):\n    return n * 2\n", context=ctx)
     tbmod.toolbox(action="save", name="leaf", note="doubles", context=ctx)
-    kmod.kernel(code="def composite(n):\n    return leaf(n) + 1\n", context=ctx)
+    python_kernel.kernel(code="def composite(n):\n    return leaf(n) + 1\n", context=ctx)
 
     report = tbmod.toolbox(action="save", name="composite", note="uses leaf", context=ctx)
 
     assert not report.startswith("ERROR")
     assert "composite" in report
-    kmod.kernel(restart=True, context=ctx)
+    python_kernel.kernel(restart=True, context=ctx)
     tbmod.toolbox(action="load", context=ctx)
-    assert "9" in kmod.kernel(code="print(composite(4))", context=ctx)
+    assert "9" in python_kernel.kernel(code="print(composite(4))", context=ctx)
 
 
 @needs_kernel
 def test_save_refuses_a_definition_whose_free_name_lives_in_the_session(ctx):
-    kmod.kernel(code=(
+    python_kernel.kernel(code=(
         "PREFIX = '>> '\n"
         "def shout(text):\n"
         "    return PREFIX + text.upper()\n"
@@ -830,14 +979,14 @@ def test_save_refuses_a_definition_whose_free_name_lives_in_the_session(ctx):
 @needs_kernel
 def test_a_refused_save_leaves_the_previous_revision_and_history_alone(ctx):
     cwd = Path(ctx.cwd)
-    kmod.kernel(code=(
+    python_kernel.kernel(code=(
         "def shout(text):\n"
         "    return text\n"
         "PREFIX = '>> '\n"
     ), context=ctx)
     assert tbmod.toolbox(action="save", name="shout", note="plain", context=ctx).startswith(
         "saved shout r1")
-    kmod.kernel(code="def shout(text):\n    return PREFIX + text\n", context=ctx)
+    python_kernel.kernel(code="def shout(text):\n    return PREFIX + text\n", context=ctx)
 
     report = tbmod.toolbox(action="save", name="shout", note="loud", context=ctx)
 
@@ -878,26 +1027,26 @@ def test_an_explicit_source_with_its_own_imports_saves_cleanly(ctx, monkeypatch)
 
 @needs_kernel
 def test_a_source_probe_never_lands_in_the_namespace_the_model_reads(ctx):
-    kmod.kernel(code="def only():\n    return 1\n", context=ctx)
+    python_kernel.kernel(code="def only():\n    return 1\n", context=ctx)
     tbmod.toolbox(action="save", name="only", context=ctx)
 
-    report = kmod.kernel(code="", context=ctx)
+    report = python_kernel.kernel(code="", context=ctx)
 
     assert report == "NAMESPACE only"
 
 
 @needs_kernel
 def test_a_live_kernel_is_tracked_so_process_exit_can_shut_it_down(ctx):
-    kmod.kernel(code="x = 1", context=ctx)
+    python_kernel.kernel(code="x = 1", context=ctx)
     session = ctx.kernel_session
 
-    assert session in kmod._LIVE_SESSIONS
+    assert session in python_kernel._LIVE_SESSIONS
     assert session.alive()
 
-    kmod._shutdown_live_kernels()
+    python_kernel._shutdown_live_kernels()
 
     assert session.alive() is False
-    assert session not in kmod._LIVE_SESSIONS
+    assert session not in python_kernel._LIVE_SESSIONS
 
 
 @needs_kernel
@@ -905,7 +1054,7 @@ def test_the_toolbox_load_probe_reports_json_the_kernel_actually_produced(ctx):
     directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
     directory.mkdir(parents=True)
     (directory / "alpha.py").write_text("def alpha():\n    return 'a'\n", encoding="utf-8")
-    session, error, _started = kmod.get_session(ctx)
+    session, error, _started = python_kernel.get_session(ctx)
     assert error == ""
 
     loaded, problems = tbmod.load_into_kernel(session, Path(ctx.cwd))
@@ -919,7 +1068,7 @@ def test_the_toolbox_load_probe_reports_json_the_kernel_actually_produced(ctx):
 def test_the_shipped_example_loads_and_calls_cleanly_in_a_fresh_kernel(ctx):
     report = tbmod.toolbox(action="load", context=ctx)
 
-    result = kmod.kernel(code="print(word_frequencies('a b a c a', limit=2))", context=ctx)
+    result = python_kernel.kernel(code="print(word_frequencies('a b a c a', limit=2))", context=ctx)
 
     assert "word_frequencies r1 [global] js" in report
     assert "[('a', 3), ('b', 1)]" in result
@@ -957,7 +1106,7 @@ class _OfflineKernel:
     def __init__(self) -> None:
         self.cwd = Path("/tmp")
         self.executions = 0
-        self.handles: dict[str, kmod.CellHandle] = {}
+        self.handles: dict[str, python_kernel.CellHandle] = {}
         self.current = ""
         self.last = ""
         self.namespace: dict[str, str] = {}
@@ -978,84 +1127,58 @@ def _offline_kernel(monkeypatch, output=None, names=(), callables=None, alive=Tr
 
     def fake_run_cell(sess, code, timeout=120, *, store_history=True, marker=""):
         if "__js_probe" in code:
-            return kmod.CellOutput(marker=json.dumps(probe))
-        return output if output is not None else kmod.CellOutput()
+            return python_kernel.CellOutput(marker=json.dumps(probe))
+        return output if output is not None else python_kernel.CellOutput()
 
     def fake_submit_cell(sess, code, wait, *, label=""):
-        result = output if output is not None else kmod.CellOutput()
-        handle = kmod.CellHandle(id=label or "1", msg_id="offline", code=code,
+        result = output if output is not None else python_kernel.CellOutput()
+        handle = python_kernel.CellHandle(id=label or "1", msg_id="offline", code=code,
                                  started=time.monotonic())
         handle.died = result.died
         handle.finished = not result.died
         handle.elapsed = result.elapsed
         return handle, result
 
-    monkeypatch.setattr(kmod, "get_session", lambda context: (session, "", False))
-    monkeypatch.setattr(kmod, "run_cell", fake_run_cell)
-    monkeypatch.setattr(kmod, "submit_cell", fake_submit_cell)
+    monkeypatch.setattr(python_kernel, "get_session", lambda context: (session, "", False))
+    monkeypatch.setattr(python_kernel, "run_cell", fake_run_cell)
+    monkeypatch.setattr(python_kernel, "submit_cell", fake_submit_cell)
     if not alive:
         session.alive = lambda: False  # type: ignore[method-assign]
     return session
 
 
-def test_kernel_footer_reports_a_value_only_cell(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch, kmod.CellOutput(stdout="hello\n"), names=["x"])
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="x = 41", context=context)
-
-    assert "hello" in result
-    assert "DEFINED x" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
-def test_kernel_footer_reports_an_import_only_cell(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch, kmod.CellOutput(), names=["math"])
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="import math", context=context)
-
-    assert "DEFINED math" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
-def test_kernel_footer_stays_last_after_an_image(tmp_path, monkeypatch):
-    image = tmp_path / "cell.png"
-    image.write_bytes(b"\x89PNG")
-    _offline_kernel(
-        monkeypatch,
-        kmod.CellOutput(stdout="done\n", images=[image]),
-        names=["f"],
-        callables={"f": "f()"},
-    )
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="def f(): pass", context=context)
-
-    lines = result.splitlines()
-    assert lines[-1] == "NAMESPACE f"
-    assert any(line.startswith("IMAGE ") for line in lines)
-    assert next(i for i, line in enumerate(lines) if line.startswith("IMAGE ")) < len(lines) - 1
-
-
-def test_kernel_restart_with_empty_code_still_ends_with_the_footer(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch)
-    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
-
-    result = kmod.kernel(restart=True, context=context)
-
-    assert "kernel restarted; the namespace is empty" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
 def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
     session = _offline_kernel(
-        monkeypatch, kmod.CellOutput(died=True), names=["x"], alive=False
+        monkeypatch, python_kernel.CellOutput(died=True), names=["x"], alive=False
     )
     context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
 
-    result = kmod.kernel(code="import os\nos._exit(1)", context=context)
+    result = python_kernel.kernel(code="import os\nos._exit(1)", context=context)
 
     assert result.startswith("ERROR: the kernel died during execution (cell 1)")
     assert result.splitlines()[-1] == "NAMESPACE (none)"
     assert session.namespace == {}
+
+
+def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, monkeypatch):
+    import sys
+
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    python_kernel.render_event(ctx, "normal", "toolbox saved")
+    assert "toolbox saved" in stream.getvalue() and "\x1b" not in stream.getvalue()
+
+
+def test_an_agent_listing_kernel_and_toolbox_gets_them_with_default_settings(monkeypatch):
+    from types import SimpleNamespace
+
+    from js import run_assembly
+    from js.toolkit import policy
+
+    seen = []
+    monkeypatch.setattr(policy.output, "notice", lambda message, **_fields: seen.append(message))
+    surface = run_assembly.registry_for(SimpleNamespace(prompt_roots=())).select(["kernel:eager", "toolbox:eager"])
+
+    assert {"kernel", "toolbox"} <= set(surface.by_name)
+    assert seen == []

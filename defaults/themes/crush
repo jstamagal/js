@@ -1,0 +1,15 @@
+# crush: Charm's Crush: the charmtone palette on the terminal's own background.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
+
+fset PALETTE_00 #fffaf1
+fset PALETTE_02 #6b50ff
+fset PALETTE_03 #00c555
+fset PALETTE_04 #ff8aa7
+fset PALETTE_06 #ff8aa7
+fset PALETTE_07 #e59500
+fset PALETTE_10 #1fb4ff
+fset PALETTE_12 #1fb4ff
+fset PALETTE_13 #ff60ff
+fset PALETTE_14 #b8b4c2
+fset PALETTE_93 #3a3943
+fset PALETTE_94 #858392
