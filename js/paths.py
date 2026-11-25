@@ -380,7 +380,7 @@ def find(rel: str | Path) -> Path | None:
     path = Path(rel)
     if path.parts and path.parts[0] not in _PROJECT_SCOPES and not path.is_absolute():
         selected = home()
-        key = (path, defaults_dir(), selected, os.getcwd(), _ISOLATE, _mtime((selected / path).parent))
+        key = (str(path), str(defaults_dir()), str(selected), os.getcwd(), _ISOLATE, _mtime((selected / path).parent))
         if key not in _FOUND:
             if len(_FOUND) >= 256:
                 _FOUND.clear()
