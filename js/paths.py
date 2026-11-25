@@ -14,7 +14,7 @@ whole structure is always there:
       JS.md  tools.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
-      sessions/      every session, filed by the directory it started in
+      sessions/      every session, filed by its project (`project_namespace`)
       state/         prompt history, undo store, kernel output, spilled results,
                      commit backups
       logs/          logs, transcripts
@@ -107,6 +107,14 @@ def project_root(cwd: Path | None = None) -> Path | None:
                 continue
             return directory
     return found
+
+
+def project_namespace(cwd: Path | None = None) -> Path:
+    """The directory that names the project ``cwd`` (default: here) is in:
+    its `project_root`, or ``cwd`` itself outside any project. Sessions are
+    filed under it, so every directory of one project shares them."""
+    current = (cwd or Path.cwd()).resolve(strict=False)
+    return project_root(current) or current
 
 
 def project_chain(cwd: Path | None = None) -> tuple[Path, ...]:

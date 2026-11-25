@@ -1,19 +1,25 @@
 """Where session files live and how a name finds one.
 
-Sessions are filed by the directory they were started in:
+Sessions are filed by the project they were started in
+(`paths.project_namespace`: the project root, or the start directory outside
+any project):
 
     ~/.js/sessions/<slug>/<name>.jsonl     the record, append-only
     ~/.js/sessions/<slug>/<name>.txt       its readable transcript (js.session_text)
     ~/.js/sessions/<slug>/<name>/          that session's subagent runs
 
-The slug is the start directory's absolute path with `/` and `_` replaced by
-`-`, so every folder name starts with `-`. A generated name is
-`YYYY-MM-DDTHHMM-xxxx` in local time; `ls` order is time order.
+The slug is the project's absolute path with `/` and `_` replaced by `-`, so
+every folder name starts with `-`: a run in `~/monorepo/packages/dingus` files
+its sessions in `-home-me-monorepo`. Each session's start record holds the
+directory it started in. A generated name is `YYYY-MM-DDTHHMM-xxxx` in local
+time; `ls` order is time order.
 
-A name resolves in the current directory's folder first, then in every folder.
-A name found in more than one other folder is refused with the paths. A
-generated name also resolves from a unique tail of at least four characters
-(`6d65`), the same way.
+A name resolves in the project's folder first, then in the start directory's
+own folder (sessions filed before they were filed by project stay there),
+then in every folder. A name found in more than one other folder is refused
+with the paths. A generated name also resolves from a unique tail of at least
+four characters (`6d65`), the same way; among several in one folder, the one
+started in this directory wins.
 
 Every record of a session file carries an `id`, eight hex digits unique within
 the file, and a `parent`. The message and mark records form the conversation
@@ -59,6 +65,8 @@ _TASK = (
     re.compile(r"task-\d+-[0-9a-f]{16}"),
 )
 _TAIL_MIN = 4
+# The kind of a session's start record (`js.session_catalog.record_session_start`).
+START_KIND = "session_metadata"
 _RESERVE_TRIES = 64
 
 
@@ -71,13 +79,19 @@ class AmbiguousSession(ValueError):
 
 
 def slug(directory: Path | str) -> str:
-    """The folder name for sessions started in `directory`."""
+    """The folder name for sessions filed under `directory`."""
     absolute = str(Path(directory).expanduser().resolve(strict=False))
     return absolute.replace("/", "-").replace("_", "-")
 
 
 def folder_for(directory: Path | str) -> Path:
     return paths.sessions_root() / slug(directory)
+
+
+def project_folder(directory: Path | str) -> Path:
+    """The folder for sessions started in `directory`: its project's
+    (`paths.project_namespace`)."""
+    return folder_for(paths.project_namespace(Path(directory).expanduser()))
 
 
 def is_folder_name(name: str) -> bool:
@@ -161,25 +175,59 @@ def _one(session: str, found: list[Path]) -> Path | None:
     return found[0] if found else None
 
 
-def find(session: str, relative: Path, current: Path) -> Path | None:
+def started_in(session_file: Path) -> str | None:
+    """The start directory the session's first record names, or None when
+    its first record is not a start record."""
+    try:
+        with open(session_file, "rb") as stream:
+            line = stream.readline()
+        record = json.loads(line)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("kind") != START_KIND:
+        return None
+    cwd = record.get("cwd")
+    return cwd if isinstance(cwd, str) and cwd else None
+
+
+def _prefer_start(found: list[Path], start: Path | None) -> list[Path]:
+    """`found` narrowed to the sessions started in `start`, when that leaves
+    exactly one; else `found`."""
+    if start is None or len(found) < 2:
+        return found
+    here = str(start)
+    narrowed = [path for path in found if started_in(path) == here]
+    return narrowed if len(narrowed) == 1 else found
+
+
+def find(session: str, relative: Path, current: Path, start: Path | None = None) -> Path | None:
     """The existing session a validated relative name names, or None.
 
-    Exact names first, in `current` and then in every folder; then, for a name
-    of one component, a unique tail of a generated name, in the same order."""
-    found = _named(current, relative)
-    if found is not None:
-        return found
-    others = [folder for folder in folders() if folder != current]
+    `current` is the project's folder and `start` the directory the run
+    started in. Exact names first, in `current`, then in `start`'s own folder
+    (where sessions were filed before they were filed by project), then in
+    every folder; then, for a name of one component, a unique tail of a
+    generated name, in the same order. Among several tail matches in one
+    folder, the one session started in `start` wins."""
+    start = None if start is None else Path(start).expanduser().resolve(strict=False)
+    own = folder_for(start) if start is not None else None
+    near = [current] if own is None or own == current else [current, own]
+    others = [folder for folder in folders() if folder not in near]
+    for folder in near:
+        found = _named(folder, relative)
+        if found is not None:
+            return found
     found = _one(session, [path for folder in others if (path := _named(folder, relative)) is not None])
     if found is not None:
         return found
     tail = relative.with_suffix("").as_posix()
     if "/" in tail or len(tail) < _TAIL_MIN:
         return None
-    found = _one(session, _tails(current, tail))
-    if found is not None:
-        return found
-    return _one(session, [path for folder in others for path in _tails(folder, tail)])
+    for folder in near:
+        found = _one(session, _prefer_start(_tails(folder, tail), start))
+        if found is not None:
+            return found
+    return _one(session, _prefer_start([path for folder in others for path in _tails(folder, tail)], start))
 
 
 def branch_parent(metadata: Any) -> tuple[str, Any] | None:

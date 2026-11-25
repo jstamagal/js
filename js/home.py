@@ -480,7 +480,7 @@ def _parents(sessions: list[_OldSession]) -> dict[Path, _OldSession]:
 
 def _targets(sessions: list[_OldSession], parents: dict[Path, _OldSession]) -> dict[Path, Path]:
     targets: dict[Path, Path] = {}
-    home_folder = session_store.folder_for(paths.user_home())
+    home_folder = session_store.project_folder(paths.user_home())
 
     def target(session: _OldSession, depth: int = 0) -> Path:
         if session.path in targets:
@@ -488,7 +488,7 @@ def _targets(sessions: list[_OldSession], parents: dict[Path, _OldSession]) -> d
         parent = parents.get(session.path)
         cwd = session.metadata.get("cwd") if session.metadata else None
         if isinstance(cwd, str) and cwd:
-            where = session_store.folder_for(cwd) / session.relative
+            where = session_store.project_folder(cwd) / session.relative
         elif parent is not None and depth < len(sessions):
             where = session_store.subagent_folder(target(parent, depth + 1)) / session.relative
         else:
