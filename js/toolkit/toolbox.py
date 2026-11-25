@@ -321,6 +321,7 @@ def write_revision(
     note: str = "",
     scope: str = "global",
     stamp: float | None = None,
+    directory: Path | None = None,
 ) -> str:
     """Promote a body to disk as revision N+1, archiving revision N first."""
     if not _SAFE_NAME.match(name):
@@ -336,7 +337,8 @@ def write_revision(
     if not any(isinstance(node, definitions) and node.name == name for node in tree.body):
         return f"ERROR: source must define a top-level function or class named {name!r}"
 
-    directory = project_toolbox_dir(cwd) if scope == "project" else _paths.global_toolbox_dir()
+    if directory is None:
+        directory = project_toolbox_dir(cwd) if scope == "project" else _paths.global_toolbox_dir()
     if directory is None:
         return f"ERROR: {Path(cwd)} is not inside a repository, so it has no project toolbox"
     try:
@@ -420,7 +422,7 @@ def restore(cwd: Path, name: str, revision: int, *, model: str = "") -> str:
         return f"ERROR: could not read {archive}: {exc}"
     body = _HEADER.sub("", text).strip()
     return write_revision(cwd, name, body, model=model or "restore",
-                          note=f"rolled back to r{revision}", scope=record.scope)
+                          note=f"rolled back to r{revision}", scope=record.scope, directory=record.path.parent)
 
 
 @dataclass
