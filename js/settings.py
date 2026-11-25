@@ -341,6 +341,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_FAILURES_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_CACHE_TTL", "int", group="compaction"),
+    SettingSpec("CACHE_KEEPALIVE", "bool", group="compaction"),
+    SettingSpec("CACHE_KEEPALIVE_IDLE_MAX", "int", group="compaction"),
+    SettingSpec("CACHE_KEEPALIVE_COMPACTION", "bool", group="compaction"),
+    SettingSpec("CACHE_KEEPALIVE_COMPACTION_TOKENS_MIN", "int", group="compaction"),
     SettingSpec("COMPACTION_HINT_COMMAND", "str",
                 empty=EMPTY_NONE, group="compaction"),
     # --- subagents ---

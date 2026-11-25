@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Idle cache keepalive.** While the REPL waits for input, js resends the
+  last request of a Claude route with a one-token output cap at 90% of
+  `COMPACTION_CACHE_TTL`, so the prompt cache stays warm and the next turn
+  reads it instead of writing the whole prefix again. Each refresh prints a
+  network line (cache read, cost, next refresh) and is charged to the
+  session; the status bar shows `warm HH:MM` for the next one. It stops after
+  `CACHE_KEEPALIVE_IDLE_MAX` (3600s), compacting a context of at least
+  `CACHE_KEEPALIVE_COMPACTION_TOKENS_MIN` tokens first
+  (`CACHE_KEEPALIVE_COMPACTION`), and on a refresh that misses or fails, a
+  model switch or a history rewrite. `CACHE_KEEPALIVE off` turns it off. GPT
+  routes are not refreshed.
+
 - **Project setup layers through the repository.** The project root is the
   nearest directory holding a `.git` (a submodule lifts to its superproject).
   Each `.js/` from the root down to the working directory is a layer over

@@ -1300,6 +1300,8 @@ STATUS_PHASE = Message("{phase}", banner=False)
 STATUS_REPLY = Message("out {tokens}", banner=False)
 STATUS_WHO = Message("{who}", banner=False)
 STATUS_CACHE = Message("cache {pct}%", banner=False)
+# The idle cache keepalive's next refresh (js/cache_keepalive.py).
+STATUS_KEEPALIVE = Message("warm {at}", banner=False)
 STATUS_COST = Message("{cost}", banner=False)
 STATUS_COMPACTING = Message("compacting", banner=False)
 STATUS_WINDOW = Message("[{number}]", banner=False)
@@ -1489,6 +1491,20 @@ FSET_EMPTY = Message("{name}:")
 
 
 COMPACTING_ROLE = Message("Compacting", banner=False)
+
+# The idle cache keepalive (js/cache_keepalive.py): the role its refreshes
+# go out under, the line each one prints and why it stops.
+KEEPALIVE_ROLE = Message("Cache keepalive", banner=False)
+NET_CACHE_KEEPALIVE = Message("Cache keepalive: read {read} cached tokens, {cost}; next at {next}")
+KEEPALIVE_UNPRICED = Message("unpriced", banner=False)
+KEEPALIVE_STOPPED = Message("Cache keepalive stopped: {reason}")
+KEEPALIVE_WHY_IDLE = Message("idle {idle} after {refreshes} refreshes", banner=False)
+KEEPALIVE_WHY_EXPIRED = Message("the cache ran out {seconds}s after its last read, before a refresh went out", banner=False)
+KEEPALIVE_WHY_MISSED = Message("a refresh read {read} of {prompt} prompt tokens from the cache", banner=False)
+KEEPALIVE_WHY_FAILED = Message("a refresh failed: {error}", banner=False)
+KEEPALIVE_WHY_CACHE_OFF = Message("ANTHROPIC_PROMPT_CACHE is off", banner=False)
+KEEPALIVE_WHY_NOT_CLAUDE = Message("{model} is not a Claude model", banner=False)
+KEEPALIVE_WHY_BUDGET = Message("THINKING_BUDGET is set", banner=False)
 
 CLEARING_OVERFLOW_START = Message("provider overflow; round={round_}; keeping newest {keep_recent} tool results", banner=False)
 

@@ -279,6 +279,11 @@ class Meter:
 _METER: contextvars.ContextVar[Meter | None] = contextvars.ContextVar("js_usage_meter", default=None)
 
 
+def current_meter() -> Meter | None:
+    """The meter the running task charges its calls to, or None."""
+    return _METER.get()
+
+
 def start(meter: Meter) -> contextvars.Token:
     return _METER.set(meter)
 

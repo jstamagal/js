@@ -372,6 +372,10 @@ class ToolContext(_turn_settings.ContextSettings):
     # after a deliberate history rewrite.
     cache_read_baseline: int | None = None
     cache_read_model: str = ""
+    # The last main-conversation request as it went out
+    # (js.cache_keepalive.CachedRequest), which the idle keepalive resends;
+    # None before the first and after a history rewrite.
+    cached_request: Any = field(default=None, repr=False)
     # Automatic summaries that failed in a row; COMPACTION_FAILURES_MAX
     # of them pause automatic compaction until a summary succeeds.
     summary_failures: int = 0

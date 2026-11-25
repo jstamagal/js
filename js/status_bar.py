@@ -108,6 +108,7 @@ def status_line(
     cost: str | None = None,
     window: int | None = None,
     activity: list[int] | None = None,
+    keepalive: str | None = None,
 ) -> str:
     """The status bar as a plain string of exactly `width` cells.
 
@@ -117,9 +118,11 @@ def status_line(
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
     while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
-    cost`, where `cost` is the session's spend (`usage_display.status_text`). Each
-    field is drawn through its /fset format, STATUS_CLOCK and the rest.
-    Groups that do not fit give way in a fixed order: cache, then the model's
+    cost`, where `cost` is the session's spend (`usage_display.status_text`).
+    ``keepalive``, the clock time of the idle cache keepalive's next refresh,
+    shows before the cache field. Each field is drawn through its /fset
+    format, STATUS_CLOCK and the rest. Groups that do not fit give way in a
+    fixed order: the keepalive, then cache, then the model's
     head, then the provider, then the centre count, then the cost, then the
     agent id. The session name stays, elided with an ellipsis when it still
     does not fit.
@@ -128,7 +131,7 @@ def status_line(
         return ""
     model_text = model or ""
     session_text = session_short or ""
-    show = {"cache": cache_pct is not None, "provider": bool(provider),
+    show = {"keepalive": bool(keepalive), "cache": cache_pct is not None, "provider": bool(provider),
             "count": output_tokens is not None, "agent": bool(agent_id), "cost": bool(cost)}
 
     clock_text = _field(msgs.STATUS_CLOCK, clock=clock)
@@ -149,6 +152,7 @@ def status_line(
                                             _field(msgs.STATUS_PHASE, phase=phase) if phase else "", count)))
         who = "/".join(filter(None, (agent_id if show["agent"] else "", session_text)))
         right = " ".join(filter(None, (activity_text, _field(msgs.STATUS_WHO, who=who) if who else "",
+                                       _field(msgs.STATUS_KEEPALIVE, at=keepalive) if show["keepalive"] else "",
                                        _field(msgs.STATUS_CACHE, pct=cache_pct) if show["cache"] else "",
                                        _field(msgs.STATUS_COST, cost=cost) if show["cost"] else "")))
         return left, centre, right
@@ -163,6 +167,7 @@ def status_line(
             model_text = "…" + model_text[-12:]
 
     steps = (
+        lambda: show.update(keepalive=False),
         lambda: show.update(cache=False),
         truncate_model,
         lambda: show.update(provider=False),
