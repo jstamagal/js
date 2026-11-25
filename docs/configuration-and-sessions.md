@@ -34,18 +34,22 @@ file is read.
 
 1. `defaults/jsrc`, shipped in the package: the built-in defaults
 2. user `jsrc` (`~/.js/jsrc`)
-3. project `.js/jsrc`
-4. project `.js/jsrc.local`
+3. each project `.js/` from the repository root down to the working
+   directory: its `jsrc`, then its `jsrc.local`
+4. presets (`--preset NAME`: `~/.js/jsrc.NAME`, then each project `.js/jsrc.NAME`)
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 
-In one line: `defaults/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
-`.js/jsrc.local` < env vars < `--extra` CLI flags.
+The repository root is the nearest directory at or above the working directory
+holding a `.git`; inside a submodule it is the superproject's. Outside any
+repository there is no project layer. A `.js/` that is the home is the global
+layer only, so a repository rooted at `$HOME` reads `~/.js` once.
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. `set -<key>` drops what the layers in between set, so the setting takes its
-`defaults/jsrc` value again.
+`#`. `set -<key>` puts the setting back to what the layers below that file
+set: in `~/.js/jsrc` that is the `defaults/jsrc` value, in a project `.js/jsrc`
+it is what the home and the farther project layers set.
 
 `defaults/jsrc` holds one line per registered setting and is where every default value
 lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
@@ -408,19 +412,21 @@ never leaves stray files.
 ### Agent prompts
 
 Agent prompts are discovered from stock `defaults/agents/`, global `~/.js/agents/`,
-and project `.js/agents/`; files layer per relative name: project > home > defaults.
+and each project `.js/agents/` in the chain. The nearest layer holding an agent's
+directory supplies the whole agent; lower copies of it are not read.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:
 
-- `JS.md` and `JS.local.md` from `~/.js/`. These are js's own
-  always-on operator context and load whatever directory js runs in. They are
-  deliberately NOT called `AGENTS.md`: that name is the per-repo convention a
-  dozen other tools also read, so a global one would silently apply
-  repo-shaped instructions everywhere.
-- `AGENTS.md` and `AGENTS.local.md` from the project, exactly the way any other
-  directory's project files load. A `~/.js/AGENTS.md` therefore applies
-  only when js is run from inside `~/.js`.
+- `JS.md` and `JS.local.md` (GLOBAL_INSTRUCTION_FILES) from `~/.js/` and from
+  each project `.js/` in the chain. `~/.js/JS.md` loads whatever directory js
+  runs in. These are deliberately NOT called `AGENTS.md`: that name is the
+  per-repo convention a dozen other tools also read, so a global one would
+  silently apply repo-shaped instructions everywhere.
+- From each directory from the repository root down to the working directory
+  (PROJECT_INSTRUCTION_FILES): `JS.md`, else `AGENTS.md`; then `JS.local.md`,
+  else `AGENTS.local.md`. Nothing above the root is read, and outside a
+  repository none of these is.
 
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.

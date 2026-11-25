@@ -15,6 +15,7 @@ from js.toolkit.subagents import task
 
 
 def _agent(tmp_path, monkeypatch, files):
+    (tmp_path / ".git").mkdir(exist_ok=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("JS_DEFAULT_AGENT", "voice")
@@ -178,7 +179,7 @@ def test_repl_initializes_before_the_first_typed_message(tmp_path, monkeypatch):
     ]
 
 
-def test_project_message_files_survive_lower_layer_manifest_fallback(tmp_path):
+def test_a_project_agent_replaces_the_lower_one_manifest_and_all(tmp_path):
     repo, global_root, project = (tmp_path / name for name in ("repo", "global", "project"))
     for root in (repo, project):
         (root / "voice").mkdir(parents=True)
@@ -186,7 +187,7 @@ def test_project_message_files_survive_lower_layer_manifest_fallback(tmp_path):
     (repo / "voice" / "01-user.md").write_text("LOWER", encoding="utf-8")
     (project / "voice" / "01-user.md").write_text("PROJECT", encoding="utf-8")
     spec = persona.load_agent_prompt_spec("voice", (repo, global_root, project))
-    assert spec.model == "lower-model"
+    assert spec.model == ""
     assert [exchange.user for exchange in spec.exchanges] == ["PROJECT"]
 
 
@@ -318,14 +319,14 @@ def test_global_benchmark_agent_is_automatically_selected(tmp_path, monkeypatch)
     assert requests[0][-1] == ("user", "global benchmark")
 
 
-def test_project_agent_keeps_lower_benchmark_files(tmp_path, monkeypatch):
+def test_project_agent_does_not_read_lower_benchmark_files(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "project opening", "01-agent.md": "project reply"})
     global_directory = Path.home() / ".js" / "agents" / "voice"
     global_directory.mkdir(parents=True)
     (global_directory / "01-benchmark.md").write_text("GLOBAL BENCHMARK", encoding="utf-8")
     requests = _model(monkeypatch, ["done"])
     assert cli.main(["-p", "typed", "-q"]) == 0
-    assert requests[0][-1] == ("user", "GLOBAL BENCHMARK")
+    assert requests[0][-1] == ("user", "typed")
     assert requests[0][1:3] == [("user", "project opening"), ("assistant", "project reply")]
 
 

@@ -12,8 +12,9 @@ Configuration precedence is:
 
 1. `defaults/jsrc`, shipped in the package: the built-in defaults
 2. platform `jsrc`
-3. project `.js/jsrc`
-4. project `.js/jsrc.local`
+3. each project `.js/jsrc`, then `.js/jsrc.local`, from the repository root
+   down to the working directory
+4. presets
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 

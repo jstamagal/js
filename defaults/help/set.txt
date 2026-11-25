@@ -805,10 +805,13 @@ SESSION_TEXT_AUTO_REFRESH
     on: a session's text file is rewritten when its journal changes.
 
 GLOBAL_INSTRUCTION_FILES
-    Instruction files read from ~/.js, in order.
+    Instruction files read from ~/.js and from each project .js/
+    directory, in order.
 
 PROJECT_INSTRUCTION_FILES
-    Instruction files read from the start directory, in order.
+    Instruction files read from each directory from the project root down
+    to the start directory, in order. An entry that is a list reads its
+    first file present.
 
 DOTENV_WALK_UP
     on: .env files are read from the start directory and every parent;

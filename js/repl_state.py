@@ -72,6 +72,9 @@ class ReplState:
     load_stack: list = field(default_factory=list)
     # True while the startup run of the jsrc files runs.
     rc_replay: bool = False
+    # While the jsrc replays: what the files before the running one set, the
+    # value its `set -KEY` falls back to.
+    rc_baseline: dict | None = None
     repl_assembly: ReplAssembly | None = None
     mcp_host: MCPHost | None = None
     keymap: Keymap | None = None

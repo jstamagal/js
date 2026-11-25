@@ -16,7 +16,7 @@ def _write(path, text):
 @pytest.fixture
 def layers(tmp_path, monkeypatch):
     stock, profile, project = (tmp_path / name for name in ('stock', 'profile', 'project'))
-    project.mkdir()
+    (project / '.git').mkdir(parents=True)
     paths.configure_home(profile)
     monkeypatch.setattr(paths, 'defaults_dir', lambda: stock)
     monkeypatch.chdir(project)

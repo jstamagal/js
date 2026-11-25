@@ -397,7 +397,7 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         spec = PromptSpec(system=system, tool_selectors=())
         return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
-        base = load_agent_prompt_spec('defaultagent', getattr(cfg, "prompt_roots", ()) or paths.agent_roots()[:2], env=False)
+        base = load_agent_prompt_spec(cfg.agent_id, getattr(cfg, "prompt_roots", ()) or paths.agent_roots(), env=False)
         spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models,
                           tool_aliases=base.tool_aliases)
         return _finish_configured_spec(_with_model_profile(spec, cfg, None), cfg, expand)

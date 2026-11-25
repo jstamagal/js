@@ -7,8 +7,11 @@ A config file is a *script*: each non-comment line is a command (see
 There is no TOML — `js --migrate-config` converts a legacy `config.toml` once.
 
 Precedence, lowest to highest:
-    defaults/jsrc < ~/.js/jsrc < project .js/jsrc
-        < project .js/jsrc.local < env vars < --extra CLI flag
+    defaults/jsrc < ~/.js/jsrc < each project .js/ from the repository root
+        down to the working directory (its jsrc, then its jsrc.local)
+        < presets < env vars < --extra CLI flag
+
+`set -KEY` in a file puts KEY back to what the layers below that file set.
 """
 
 from __future__ import annotations
@@ -150,9 +153,12 @@ JsrcCommand = tuple[Path, int, str]
 
 
 def apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[str],
-                lines: list[str] | None = None, commands: list[JsrcCommand] | None = None) -> str | None:
+                lines: list[str] | None = None, commands: list[JsrcCommand] | None = None,
+                baseline: dict | None = None) -> str | None:
     """Apply the settings lines of the jsrc at ``path`` (or ``lines``, read
-    as that file) onto ``settings``, the files it loads with it, in order. A
+    as that file) onto ``settings``, the files it loads with it, in order.
+    `set -KEY` takes the ``baseline`` value (default: the stock settings),
+    the layers below this file. A
     loaded file stops at its first bad setting, as `/load` stops it, and so
     does every loaded file containing it; the top-level jsrc goes on. Every
     other line is the REPL's, which runs the whole file again in one pass
@@ -189,9 +195,10 @@ def apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[str
                 elif error is None and not target.is_file():
                     error = msgs.LOAD_NOT_FOUND.said(path=target)
                 if error is None:
-                    error = apply_jsrc(target, settings, stack, warnings, commands=commands)
+                    error = apply_jsrc(target, settings, stack, warnings, commands=commands, baseline=baseline)
             else:
-                result = setcmd.apply_config_line(settings, raw, baseline=package_settings())
+                result = setcmd.apply_config_line(
+                    settings, raw, baseline=package_settings() if baseline is None else baseline)
                 if result.handled and result.error:
                     error = msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=result.error)
                     warnings.append(error)
@@ -208,11 +215,13 @@ def load_jsrc_files(paths: list[Path], settings: dict, commands: list[JsrcComman
     """Apply each existing jsrc script's settings onto ``settings`` in order;
     ``commands`` collects every other line. Returns human-readable warnings
     for bad lines. A named missing theme raises FileNotFoundError with the
-    directories searched."""
+    directories searched. Each file is a layer: its `set -KEY` falls back
+    to the value the files before it left."""
     warnings: list[str] = []
     for path in paths:
         if path.exists():
-            apply_jsrc(path.resolve(strict=False), settings, [], warnings, commands=commands)
+            apply_jsrc(path.resolve(strict=False), settings, [], warnings, commands=commands,
+                       baseline=copy.deepcopy(settings))
     return warnings
 
 

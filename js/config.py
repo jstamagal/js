@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from . import (
     fset as _fset,
@@ -341,15 +342,6 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     return concrete_path
 
 
-def _same_config_path(one: Path, other: Path) -> bool:
-    """True when two jsrc paths name the same file, however each is spelled.
-
-    The home directory reached through a second name (a symlink to it, or a
-    physical cwd where `$HOME` is the link) is still the home directory: its
-    jsrc is the global layer, so the project branch must not add it back."""
-    return one == other or one.resolve(strict=False) == other.resolve(strict=False)
-
-
 @dataclass(frozen=True)
 class InvocationSources:
     """What a command line adds to the settings a run loads: ``extras`` from
@@ -366,8 +358,8 @@ def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[
     """Resolve ``--preset foo,bar`` to ``jsrc.foo``/``jsrc.bar`` files, in order.
 
     Each preset name layers on top of the base jsrc files like another `set`
-    script; later presets win over earlier ones, and a project ``.js/jsrc.<name>``
-    wins over the global ``jsrc.<name>``. Missing files are simply skipped by the
+    script; later presets win over earlier ones, and each project ``.js/jsrc.<name>``
+    from the root down wins over the global ``jsrc.<name>`` and the ones above it. Missing files are simply skipped by the
     loader, so an unused preset is a no-op (the CLI warns when a name matches
     nothing)."""
     paths: list[Path] = []
@@ -375,12 +367,10 @@ def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[
         name = raw.strip()
         if not name:
             continue
-        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
-        local_path = _paths.project_home(project_dir) / f"jsrc.{name}"
         if not sources.ignore_global_config:
-            paths.append(global_path)
-        if not sources.ignore_local_config and not _same_config_path(local_path, global_path):
-            paths.append(local_path)
+            paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
+        if not sources.ignore_local_config:
+            paths.extend(directory / f"jsrc.{name}" for directory in _paths.project_dirs(project_dir))
     return paths
 
 
@@ -408,22 +398,47 @@ def run_settings(cwd: Path | None = None, *, sources: InvocationSources | None =
 
 
 def jsrc_paths(project_dir: Path, sources: InvocationSources = InvocationSources()) -> list[Path]:
-    """The jsrc files a run loads, lowest layer first, each once.
-
-    Run from the home directory, the project `.js/` is `~/.js` itself, so its
-    jsrc is the global layer and loads there only."""
+    """The jsrc files a run loads, lowest layer first, each once: the home
+    jsrc, then each project `.js/` from the root down to ``project_dir``,
+    its jsrc then its jsrc.local (`paths.project_dirs`)."""
     paths: list[Path] = []
-    global_path = _paths.global_config_file()
     if not sources.ignore_global_config:
-        paths.append(global_path)
+        paths.append(_paths.global_config_file())
     if not sources.ignore_local_config:
-        local_path = _paths.project_home(project_dir) / "jsrc"
-        if not _same_config_path(local_path, global_path):
-            paths.append(local_path)
-        paths.append(_paths.project_home(project_dir) / "jsrc.local")
+        for directory in _paths.project_dirs(project_dir):
+            paths.extend((directory / "jsrc", directory / "jsrc.local"))
     # Presets layer on top of the base jsrc files (still below env / --extra).
     paths.extend(_preset_config_paths(sources, project_dir))
     return list(dict.fromkeys(paths))
+
+
+def _instruction_choices(entry: Any) -> tuple[str, ...]:
+    """One PROJECT_INSTRUCTION_FILES entry as the names it tries, first
+    present wins: a name, or a list of names."""
+    if isinstance(entry, str):
+        return (entry,)
+    if isinstance(entry, list) and entry and all(isinstance(name, str) for name in entry):
+        return tuple(entry)
+    raise ValueError(f"PROJECT_INSTRUCTION_FILES entry must be a name or a list of names: {entry!r}")
+
+
+def instruction_files_for(project_dir: Path, setup_names: list[str], project_names: list) -> tuple[Path, ...]:
+    """The instruction files a run started in ``project_dir`` reads, lowest
+    layer first. The home reads ``setup_names`` (GLOBAL_INSTRUCTION_FILES).
+    Then, for each directory from the project root down to ``project_dir``:
+    its `.js/` reads ``setup_names`` too, and the directory itself reads each
+    ``project_names`` entry (PROJECT_INSTRUCTION_FILES), the first present
+    name of the entry. Nothing above the root is read, and outside a
+    repository only the home is."""
+    found = [_paths.home() / name for name in setup_names]
+    setup = {directory.parent: directory for directory in _paths.project_dirs(project_dir)}
+    choices = [_instruction_choices(entry) for entry in project_names]
+    for directory in _paths.project_chain(project_dir):
+        if directory in setup:
+            found.extend(setup[directory] / name for name in setup_names)
+        for names in choices:
+            found.extend(next(((directory / name,) for name in names if (directory / name).is_file()), ()))
+    return tuple(dict.fromkeys(path for path in found if path.is_file()))
 
 
 def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
@@ -585,8 +600,10 @@ def from_env(
         session_file = Path(os.devnull)
     debug = state_dir / "debug.log" if runtime_debug else None
 
-    global_instruction_files = tuple(_paths.home() / name for name in _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"))
-    project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
+    instruction_files = (() if options.skips_agents_md else instruction_files_for(
+        project_dir,
+        _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"),
+        _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES")))
     bind_formats(js_root_settings)
 
     prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else _paths.agent_roots(project_dir)
@@ -607,8 +624,7 @@ def from_env(
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
         prompt_roots=prompt_roots,
-        agents_files=() if options.skips_agents_md else tuple(
-            p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
+        agents_files=instruction_files,
         project_dir=project_dir,
         mcp=mcp,
         explicit_model=explicit_model,

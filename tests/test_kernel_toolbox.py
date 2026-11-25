@@ -33,7 +33,7 @@ needs_kernel = pytest.mark.skipif(HAVE_KERNEL is False,
 def ctx(tmp_path, monkeypatch):
     """A ToolContext whose toolbox writes into tmp_path, never the real config dir."""
     work = tmp_path / "work"
-    work.mkdir()
+    (work / ".git").mkdir(parents=True)
     monkeypatch.setattr(paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
     context = ToolContext(cwd=work)
     context.model = "test-model"
@@ -215,7 +215,7 @@ def test_revision_numbering_does_not_mix_global_and_project_archives(ctx):
     cwd = Path(ctx.cwd)
     for scope in ("global", "project"):
         tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n", scope=scope)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
     archive = global_dir / ".history" / "adder.r9.py"
     archive.parent.mkdir()
     archive.write_text("global revision nine")
@@ -292,7 +292,7 @@ def test_discover_records_a_syntax_error_as_broken_and_still_indexes_the_rest(ct
 
 def test_a_project_tool_shadows_a_global_tool_of_the_same_name(ctx):
     cwd = Path(ctx.cwd)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
     for directory, body in ((global_dir, "return 'global'"), (project_dir, "return 'project'")):
         directory.mkdir(parents=True)
         (directory / "who.py").write_text(f"def who():\n    {body}\n", encoding="utf-8")
@@ -1077,7 +1077,7 @@ def test_the_shipped_example_loads_and_calls_cleanly_in_a_fresh_kernel(ctx):
 def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shadows_it(ctx):
     """discover() lets project shadow global; save must not trust that view."""
     cwd = Path(ctx.cwd)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g1'\n",
                          model="qwen", scope="global")
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'p1'\n",

@@ -337,7 +337,7 @@ set PASTE_IMAGE_TIMEOUT 5
 
 set GLOBAL_INSTRUCTION_FILES ["JS.md", "JS.local.md"]
 
-set PROJECT_INSTRUCTION_FILES ["AGENTS.md", "AGENTS.local.md"]
+set PROJECT_INSTRUCTION_FILES [["JS.md", "AGENTS.md"], ["JS.local.md", "AGENTS.local.md"]]
 
 set LOCAL_API_KEY_PLACEHOLDER x
 
