@@ -125,7 +125,11 @@ def project_namespace(cwd: Path | None = None) -> Path:
     its `project_root`, or ``cwd`` itself outside any project. Sessions are
     filed under it, so every directory of one project shares them."""
     current = (cwd or Path.cwd()).resolve(strict=False)
-    return project_root(current) or current
+    root = project_root(current)
+    if root == user_home().resolve(strict=False):
+        border = isolation(current)
+        return border.directory if border is not None else current
+    return root or current
 
 
 def _chain_from(root: Path, current: Path) -> tuple[Path, ...]:

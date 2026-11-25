@@ -475,6 +475,9 @@ directory js started in, as an absolute path with `/` and `_` replaced by
 `~/.js/sessions/-home-me-js/`; each start record holds the directory the run
 started in (`cwd`).
 
+When the repository root is your home directory, sessions are filed by the
+start directory or its isolation border.
+
 `--session NAME` looks in the project's folder first, then in the start
 directory's own folder (sessions filed there before they were filed by
 project stay there, unmoved), then in every folder. A tail of a generated name
