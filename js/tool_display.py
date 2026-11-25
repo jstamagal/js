@@ -23,6 +23,7 @@ from .display import Theme, render_console, setting, theme
 from .text_layout import TAB, block_width, cells, cut_points
 from .toolkit.presentation import PATH_ARGS
 from .toolkit.tool_screen import ScreenResult, call_kind, declared, tool_output
+from .toolkit.tool_suites import display_name
 
 # Transcript marker for a tool exchange: typeable ASCII, one per exchange, so a
 # grep of a saved transcript finds every exchange the screen showed.
@@ -261,7 +262,7 @@ class _Block:
         mark = fset.setting_value({MARK: "EXCHANGE_MARK_RUNNING", OK: "EXCHANGE_MARK_OK", FAIL: "EXCHANGE_MARK_FAILED"}[self.state])
         style = fset.setting_value("EXCHANGE_HEADER_STYLE")
         row = Text.assemble((f"{mark} ", f"{style} {self.colour()}"),
-                            (f" {clean(name)} ", f"{style} {th.accent} on {th.panel}"))
+                            (f" {clean(display_name(name))} ", f"{style} {th.accent} on {th.panel}"))
         if malformed:
             row.append_text(Text(" ") + fset.to_rich(msgs.TOOL_ARGS_UNPARSED.body_runs(), th.error))
         if about is None:
@@ -377,7 +378,7 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     one, many = msgs.TOOL_FOLD_NOUNS[declared(name).fold_noun]
     about = msgs.TOOL_FOLD_COUNT.words(value=len(calls), value2=one if len(calls) == 1 else many)
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
-    room = block.inner - len(name) - len(about) - 10
+    room = block.inner - len(display_name(name)) - len(about) - 10
     shown: list[str] = []
     for index, label in enumerate(labels):
         more = len(labels) - index - 1

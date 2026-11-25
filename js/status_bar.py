@@ -10,6 +10,7 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.styles import Style
 
 from . import fset, messages as msgs, session_store, text_layout
+from .toolkit.tool_suites import display_name
 
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
@@ -72,7 +73,7 @@ def turn_centre(status, *, now: float) -> tuple[str, int | None]:
     if status.tool:
         extra = msgs.STATUS_TOOL_EXTRA.words(tool_extra=status.tool_extra) if status.tool_extra else ""
         elapsed = int(max(0.0, now - status.tool_started))
-        return msgs.STATUS_TOOL_ELAPSED.words(tool=status.tool, extra=extra, elapsed=elapsed), None
+        return msgs.STATUS_TOOL_ELAPSED.words(tool=display_name(status.tool), extra=extra, elapsed=elapsed), None
     if status.compacting:
         return _field(msgs.STATUS_COMPACTING), None
     if status.waiting_since and now - status.waiting_since >= 1:
