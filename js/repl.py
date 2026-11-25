@@ -78,6 +78,7 @@ from . import (
     supervisor,
     tool_display,
     transcript as transcript_mod,
+    turn_settings,
     usage as usage_mod,
     usage_display,
 )
@@ -854,6 +855,8 @@ class Repl:
             # A window's subagent launches from the main conversation, on its live settings.
             context = copy.copy(runtime.T.STOCK_CONTEXT)
             context.config = state.config_for_turn(cfg)
+            turn_settings.install(context, context.config)
+            context.tool_call_hooks = state.events
             return context
 
         child_windows.parent_context = window_parent_context

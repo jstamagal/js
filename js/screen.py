@@ -101,14 +101,11 @@ class View:
         return info.window_height if info is not None else None
 
 
-def _pane_height(rows: int | None, room: int) -> Dimension:
-    """A window's rows on a split screen: the ``rows`` it asks for, at most
-    ``room``; None shares the rows left evenly with the other windows that
-    ask for none."""
+def _pane_height(rows: int | None) -> Dimension:
+    """Sized panes ask for their rows first. Unsized panes share what is left."""
     if rows:
-        rows = max(1, min(rows, room))
-        return Dimension(min=rows, max=rows, preferred=rows)
-    return Dimension(min=1, preferred=10**6, weight=1)
+        return Dimension(min=1, max=rows, preferred=rows)
+    return Dimension(min=1, preferred=1)
 
 
 class Windows:
@@ -349,21 +346,11 @@ class Windows:
         each over a line naming it when there is more than one, each view
         keeping its own prompt_toolkit Window (and so its own scroll
         position)."""
-        def pane(view: View) -> Window:
+        def pane(view: View, *, split: bool = True) -> Window:
             if view.window is None:
                 view.window = make(view.scrollback)
-                view.window.height = lambda: _pane_height(view.height, room())
+            view.window.height = _pane_height(view.height if split else None)
             return view.window
-
-        def room() -> int:
-            """Rows one window may take: the screen less the status bar, the
-            input line, the labels, and a row for each other window."""
-            try:
-                rows = get_app().output.get_size().rows
-            except Exception:  # noqa: BLE001 - output not attached yet
-                rows = 24
-            shown = len(self.visible)
-            return rows - 2 - (shown if shown > 1 else 0) - (shown - 1)
 
         def label(view: View) -> Window:
             if view.label_window is None:
@@ -378,7 +365,13 @@ class Windows:
         def current() -> HSplit | Window:
             views = [self._views[n] for n in self.visible if n in self._views] or [self._views[1]]
             if len(views) == 1:
-                return pane(views[0])
+                return pane(views[0], split=False)
+            rows = get_app().output.get_size().rows
+            # Leave room for the input, status and an auxiliary line on short terminals.
+            if rows < len(views) + 3:
+                return pane(self._views[self.current], split=False)
+            if rows < 2 * len(views) + 3:
+                return HSplit([pane(view) for view in views])
             parts = []
             for view in views:
                 parts += [pane(view), label(view)]
