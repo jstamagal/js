@@ -920,7 +920,9 @@ def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
     tbmod.toolbox(action="save", name="revised", context=ctx)
     directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
     restored = {}
-    exec((directory / "revised.py").read_text(), restored)
+    body = (directory / "revised.py").read_text()
+    assert "from pathlib import Path as FilePath" in body
+    exec(body, restored)
 
     from dataclasses import dataclass
 
@@ -935,7 +937,7 @@ def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
 def test_dynamic_redefinition_never_saves_the_earlier_cell(ctx):
     python_kernel.kernel(code="def current(): return 1", context=ctx)
     tbmod.toolbox(action="save", name="current", context=ctx)
-    python_kernel.kernel(code="src = 'def current(): return 2'\nexec(src)", context=ctx)
+    python_kernel.kernel(code="from functools import cache\nexec('@cache\\ndef current(): return 2')", context=ctx)
 
     report = tbmod.toolbox(action="save", name="current", context=ctx)
 

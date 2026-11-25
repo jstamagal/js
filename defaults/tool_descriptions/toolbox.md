@@ -48,9 +48,10 @@ What is worth saving: a parser, a fetcher, a report formatter — a function
 that would otherwise be rewritten next session.
 
 Before writing, `save` hoists modules and importable functions and classes
-into the file, preserving their local aliases. It refuses the save if the definition still reads a name the
-file would not carry: a session constant, a client built in an earlier cell, a
-helper you defined but never saved. Calling another saved tool is fine — every
+into the file, preserving their local aliases. It refuses the save if the
+definition still reads a name the file would not carry, such as a session
+constant, a client built in an earlier cell, or an unsaved helper.
+Calling another saved tool is fine — every
 tool file execs into one namespace at load — so only names that would be absent
 there count. The ERROR names every one of them; save those as their own tools,
 inline them, or pass a complete definition in `source`. Nothing is written and

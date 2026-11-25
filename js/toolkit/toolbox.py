@@ -75,8 +75,8 @@ def __js_src(target_name):
             try:
                 return textwrap.dedent(inspect.getsource(target))
             except (OSError, TypeError):
-                if inspect.isfunction(target):
-                    # Raw exec strings can redefine a name from an earlier cell.
+                if not inspect.isclass(target):
+                    # A live callable may wrap a function created by raw exec.
                     return ''
         history = globals().get('In')
         if isinstance(history, list):
@@ -140,6 +140,13 @@ def __js_src(target_name):
             owner = sys.modules.get(module)
             if module == '__main__' or owner is None or vars(owner).get(exported) is not value:
                 continue
+            # Prefer a package's own export, e.g. pathlib.Path across Python versions.
+            package = module.rpartition('.')[0]
+            while package:
+                parent = sys.modules.get(package)
+                if parent is not None and vars(parent).get(exported) is value:
+                    module = package
+                package = package.rpartition('.')[0]
             statement = 'from ' + module + ' import ' + exported
         else:
             continue
