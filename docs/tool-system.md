@@ -450,10 +450,11 @@ subagent use those tools, add entries to that agent's `agent.yaml`.
 
 ## Generated Agent Tools
 
-Every agent directory under stock `defaults/agents/`, global
-`~/.js/agents/`, and project `.js/agents/` becomes a direct agent tool unless
-its name collides with a base tool (a notice names it). Each filename resolves independently: project over home over defaults.
-An empty file shadows its lower copy.
+js generates direct tools for agents in stock `defaults/agents/`, global
+`~/.js/agents/` and project `.js/agents/`. A nested agent such as
+`meta:workflow-creator` has the tool name `meta__workflow-creator`.
+Built-in tools and top-level agents keep their names in a collision. The
+nearest layer defining the full agent ID supplies its whole directory.
 
 Direct generated tools take `tasks` (required), and optional `model` and
 `reasoning`:

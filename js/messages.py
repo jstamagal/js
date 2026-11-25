@@ -661,7 +661,8 @@ OPT_LOGOUT = Message("Remove a saved provider login.")
 OPT_PROMPT = Message("Run one prompt and print the final answer. Reads stdin when the value is omitted or '-'.")
 OPT_FILE = Message("Attach a file or image to a one-shot prompt; with no -p, the files are the prompt. Repeatable. '-' reads stdin bytes.")
 OPT_AGENT = Message(
-    "Internal agent id. Sessions live in ~/.js/sessions/<start dir>, runtime state in ~/.js/state/<agent>.")
+    "Select an agent by name. Use ':' between nested directory names, e.g. -a meta:workflow-creator. "
+    "Sessions live in ~/.js/sessions/<start dir>, runtime state in ~/.js/state/<agent>.")
 OPT_MODEL = Message("Override the configured or env model for this session or prompt.")
 OPT_URL = Message(
     "Reach an endpoint with no saved login in one string: [wire+]scheme://model[:key]@host/path. "
@@ -1165,6 +1166,8 @@ TOOLSTATS_NO_SESSION = Message("toolstats: no session found.")
 TOOLDIAG_NO_TOOLS = Message("tooldiag: the surface matched no tools.")
 AGENT_DIR_UNREADABLE = Message("Agent dir {path} unreadable: {error}. Skipped.")
 AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool. Not exposed as a tool. Rename {root}/{agent}.")
+AGENT_TOOL_COLLISION = Message("Use task with agent_id={agent!r}. Another tool or agent uses the same tool name {tool!r}.")
+AGENT_TOOL_NAME_TOO_LONG = Message("Use task with agent_id={agent!r}. The tool name {tool!r} exceeds 64 characters.")
 TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.")
 TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.")
 TOOL_PROFILE_LEAVES_NO_TOOLS = Message("Tool profile {match!r} leaves no tools. Ignored.")
@@ -1685,7 +1688,7 @@ PASTE_MARKER_CHARACTERS = "[paste #{n} {value} chars]"
 
 IMAGE_PLACEHOLDER = "[image #{n}]"
 
-CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS = "agent id must contain only letters, numbers, '_' or '-'"
+CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS = "each colon-separated part of an agent id must contain one or more letters, numbers, '_' or '-'"
 
 CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL = "session path must be an existing .jsonl file: {session}"
 
@@ -2011,8 +2014,6 @@ MCP_CONFIG_MCP_SERVER_URL_MUST_NOT_CONTAIN_USERINFO = "mcp server {name!r}.url m
 MCP_CONFIG_MCP_SERVER_STDIO_FIELDS_REQUIRE_COMMAND = "mcp server {name!r} stdio fields require command"
 
 MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_A_JSON = "MCP_AGENT_POLICY must be a JSON object"
-
-MCP_CONFIG_MCP_AGENT_IDS_MAY_CONTAIN_ONLY_LETTERS = "mcp agent ids may contain only letters, numbers, '_' or '-'"
 
 MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r} policy must be an object"
 

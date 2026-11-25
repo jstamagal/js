@@ -106,6 +106,46 @@ def test_list_agents_is_every_agent_directory_of_every_layer(layers, capsys):
     assert json.loads(capsys.readouterr().out) == sorted(stock | set(AGENTS))
 
 
+def test_nested_agents_resolve_by_full_name_across_layers(layers, capsys):
+    child = layers[HOME] / "meta" / "worker"
+    child.mkdir(parents=True)
+    (child / "prompt.md").write_text("home child")
+    (child / "agent.yaml").write_text("model: home-model")
+    project_child = layers[PROJECT] / "meta" / "worker"
+    leaf = project_child / "group" / "leaf"
+    leaf.mkdir(parents=True)
+    (leaf / "user.md").write_text("leaf exchange")
+    (project_child / "notes.txt").write_text("resource")
+
+    assert cli.main(["--list-agents", "--json"]) == 0
+    assert [name for name in json.loads(capsys.readouterr().out) if name.startswith("meta")] == [
+        "meta", "meta:worker", "meta:worker:group:leaf",
+    ]
+    roots = tuple(layers.values())
+    assert paths.agent_dirs("meta:worker", roots) == (child,)
+    assert paths.agent_dirs("meta:worker:group:leaf", roots) == (leaf,)
+    assert cli.main(["--verify", "meta:worker:group", "--json"]) == 1
+    capsys.readouterr()
+
+    (project_child / "agent.yaml").write_text("model: project-model")
+    cfg = config.from_env(agent_id="meta:worker", save_session=False)
+    spec = persona.load_configured_prompt_spec(cfg, expand=False)
+    assert (cfg.prompts_dir, spec.system.strip(), spec.model) == ((project_child,), "", "project-model")
+
+
+@pytest.mark.parametrize("agent", [":meta", "meta:", "meta::worker", "meta:..:worker", "meta:/tmp", "meta/worker"])
+def test_invalid_qualified_agent_ids_are_rejected(layers, agent):
+    with pytest.raises(ValueError):
+        config.from_env(agent_id=agent, save_session=False)
+
+
+def test_nested_agent_without_explicit_roots_uses_stock_root():
+    cfg = config.Config(model="m", agent_id="meta:worker")
+    root = paths.defaults_dir() / "agents"
+    assert cfg.prompts_dir == root / "meta" / "worker"
+    assert persona.config_roots(cfg) == (root,)
+
+
 def test_verify_reads_every_layer_of_every_agent(layers, capsys):
     (layers[PROJECT] / "broken").mkdir()
     (layers[PROJECT] / "broken" / "agent.yaml").write_text("model: [\n", encoding="utf-8")

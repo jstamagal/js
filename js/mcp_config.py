@@ -16,10 +16,9 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import messages as msgs
+from . import messages as msgs, paths
 
 _NAME_PART_RE = re.compile(r"[^a-z0-9_-]+")
-_AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class MCPConfigError(ValueError):
@@ -210,8 +209,10 @@ def parse_agents(value: Mapping[str, Any]) -> Mapping[str, MCPPolicy]:
         raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_A_JSON.format())
     result: dict[str, MCPPolicy] = {}
     for agent_id, entry in value.items():
-        if not isinstance(agent_id, str) or _AGENT_ID_RE.fullmatch(agent_id) is None:
-            raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_IDS_MAY_CONTAIN_ONLY_LETTERS.format())
+        try:
+            paths.validate_agent_id(agent_id)
+        except ValueError as exc:
+            raise MCPConfigError(str(exc)) from exc
         if not isinstance(entry, dict):
             raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_AN_OBJECT.format(agent_id=agent_id))
         unknown = set(entry) - {"servers", "tools"}

@@ -6,8 +6,9 @@ EXIT_ARM_TIMEOUT
     press to quit the async REPL.
 
 DEFAULT_AGENT
-    Agent a run uses when neither --agent nor --commit names one: a prompt
-    directory id, letters, digits, '_' or '-'. Read once at startup, so a
+    Agent a run uses when neither --agent nor --commit names one. Each
+    directory name uses letters, digits, '_' or '-'. Join nested names
+    with ':', as in meta:workflow-creator. Read once at startup, so a
     `set` here reaches later runs through /save.
 
 MOTD_FILE

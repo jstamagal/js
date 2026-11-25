@@ -15,6 +15,7 @@ the bug was that the path was never passed.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from js import run_assembly
+from js.toolkit import ToolContext, subagents
 from js.toolkit.registry import registry_for_roots
 
 
@@ -44,6 +46,62 @@ def test_agent_in_a_config_root_becomes_a_selectable_tool(tmp_path):
 
     assert registry.resolve("reviewer") is not None
     assert "reviewer" in registry.select(["reviewer:lazy"]).by_name
+
+
+def _dispatched_agent(registry, tool_name, **args):
+    async def worker(idx, total, item, context, cfg, tools, agent_id, *rest):
+        return agent_id
+
+    ctx = ToolContext()
+    ctx.config = _cfg(())
+    ctx.subagent_assembly = subagents.SubagentAssembly(
+        registry_factory=lambda *a, **kw: registry, worker=worker)
+    tool = registry.resolve(tool_name)
+    return asyncio.run(subagents.dispatch_fan_out_async(tool, {"tasks": ["test"], **args}, ctx))
+
+
+def test_nested_agent_tool_selects_and_dispatches_its_qualified_id(tmp_path):
+    _agent_dir(tmp_path, "meta")
+    _agent_dir(tmp_path, "meta/workflow-creator")
+    registry = registry_for_roots((tmp_path,)).select(["meta:eager", "meta__workflow-creator:eager"])
+
+    assert _dispatched_agent(registry, "meta") == "meta"
+    child = registry.resolve("meta__workflow-creator")
+    assert child.openai_spec()["function"]["name"] == "meta__workflow-creator"
+    assert _dispatched_agent(registry, child.name) == "meta:workflow-creator"
+
+
+def test_flat_agent_keeps_a_tool_name_shared_with_a_nested_agent(tmp_path, capsys):
+    _agent_dir(tmp_path, "meta__worker")
+    _agent_dir(tmp_path, "meta/worker")
+    registry = registry_for_roots((tmp_path,))
+
+    assert _dispatched_agent(registry, "meta__worker") == "meta__worker"
+    assert _dispatched_agent(registry, "task", agent_id="meta:worker") == "meta:worker"
+    assert "meta:worker" in capsys.readouterr().err
+
+
+def test_ambiguous_nested_tool_name_is_available_only_via_task(tmp_path, capsys):
+    _agent_dir(tmp_path, "one/two__three")
+    _agent_dir(tmp_path, "one__two/three")
+    registry = registry_for_roots((tmp_path,))
+
+    assert registry.resolve("one__two__three") is None
+    warning = capsys.readouterr().err
+    for agent_id in ("one:two__three", "one__two:three"):
+        assert agent_id in warning
+        assert _dispatched_agent(registry, "task", agent_id=agent_id) == agent_id
+
+
+def test_nested_tool_names_fit_the_provider_limit(tmp_path, capsys):
+    fits = "w" * 58
+    _agent_dir(tmp_path, f"meta/{fits}")
+    _agent_dir(tmp_path, f"meta/{fits}x")
+    registry = registry_for_roots((tmp_path,))
+
+    assert registry.resolve(f"meta__{fits}") is not None
+    assert registry.resolve(f"meta__{fits}x") is None
+    assert f"meta:{fits}x" in capsys.readouterr().err
 
 
 def test_selector_for_a_config_agent_does_not_warn(tmp_path, capsys):

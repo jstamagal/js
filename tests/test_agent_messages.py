@@ -74,6 +74,20 @@ def test_only_keyword_files_load_and_other_markdown_is_not_read(tmp_path, monkey
     assert spec.system == "SYSTEM\n\nTROOP\n\nENV\n"
 
 
+def test_cli_selects_parent_and_child_prompts_independently(tmp_path, monkeypatch):
+    parent = _agent(tmp_path, monkeypatch, {})
+    child = parent / "workflow-creator"
+    child.mkdir()
+    (child / "01-prompt.md").write_text("CHILD %%CURRENT_SESSION_AGENT%%")
+    requests = _model(monkeypatch, ["first", "second"])
+
+    for agent in ("voice", "voice:workflow-creator"):
+        assert js(monkeypatch, "-a", agent, "--no-save", "-p", "hello") == 0
+    assert [request[0] for request in requests] == [
+        ("system", "SYSTEM\n"), ("system", "CHILD voice:workflow-creator\n"),
+    ]
+
+
 def test_env_files_can_be_left_out_and_prompt_files_replaced(tmp_path, monkeypatch):
     directory = _agent(tmp_path, monkeypatch, {"01-prompt.md": "MORE", "02-env.md": "ENV"})
     assert persona.load_prompt_spec(directory, env=False).system == "SYSTEM\n\nMORE\n"
@@ -206,21 +220,22 @@ def test_failed_startup_persists_its_prompt_without_sending_the_cli_prompt(tmp_p
     assert [message["content"] for message in memory.load_replay_messages(_saved(tmp_path))] == ["opening"]
 
 
-def test_task_agents_initialize_their_own_session(tmp_path, monkeypatch):
+@pytest.mark.parametrize("agent_id", ["worker", "team:worker"])
+def test_task_agents_initialize_their_own_session(tmp_path, monkeypatch, agent_id):
     directory = _agent(tmp_path, monkeypatch, {})
-    worker = directory.parent / "worker"
-    worker.mkdir()
+    worker = directory.parent.joinpath(*agent_id.split(":"))
+    worker.mkdir(parents=True)
     (worker / "01-user.md").write_text("%%CURRENT_SESSION_AGENT%%", encoding="utf-8")
     (worker / "01-agent.md").write_text("%%CURRENT_SESSION%%", encoding="utf-8")
     cfg = from_env(session="seeded")
     context = ToolContext(cwd=tmp_path)
     context.config = cfg
     requests = _model(monkeypatch, ["done"])
-    result = task(["work"], agent_id="worker", context=context)
+    result = task(["work"], agent_id=agent_id, context=context)
     assert "done" in result
     [child_session] = list(cfg.session_file.with_suffix("").glob("*.jsonl"))
-    assert requests[0][1:3] == [("user", "worker"), ("assistant", child_session.stem)]
-    assert [message["content"] for message in memory.load_replay_messages(child_session)][:2] == ["worker", child_session.stem]
+    assert requests[0][1:3] == [("user", agent_id), ("assistant", child_session.stem)]
+    assert [message["content"] for message in memory.load_replay_messages(child_session)][:2] == [agent_id, child_session.stem]
 
 
 def test_benchmarks_use_examples_in_each_fresh_context(tmp_path, monkeypatch):

@@ -111,7 +111,8 @@ run starts workers; poll, wait and kill act on a background handle.
 
 ### agent_id
 
-Worker agent id; loads that agent's persona and selected tools.
+Worker agent ID. Use the full name for a nested agent, e.g. `meta:workflow-creator`.
+Loads that agent's persona and selected tools.
 
 ### background
 

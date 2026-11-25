@@ -32,9 +32,12 @@ The locations js used before this layout are listed in `legacy_homes()`;
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
+import re
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import agent_files
 
 _ROOT = Path(os.path.realpath(__file__)).parent.parent
 _HOME: Path | None = None
@@ -317,28 +320,86 @@ def agent_roots(cwd: Path | None = None) -> tuple[Path, ...]:
             *(directory / "agents" for directory in project_dirs(cwd)))
 
 
+_AGENT_COMPONENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def validate_agent_id(agent_id: str) -> str:
+    if not isinstance(agent_id, str) or not all(_AGENT_COMPONENT.fullmatch(part) for part in agent_id.split(":")):
+        from . import messages as msgs
+
+        raise ValueError(msgs.CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS)
+    return agent_id
+
+
+def agent_path(agent_id: str) -> Path:
+    """The prompt directory relative to an agent root, e.g. meta/creator."""
+    return Path(*validate_agent_id(agent_id).split(":"))
+
+
 def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Path, ...]:
     """Agent ``agent_id``'s directory in the highest of ``roots`` (default
     `agent_roots()`) that has one, as a one-entry tuple: a nearer agent
     directory replaces a lower one whole. Every candidate when none has one.
     A directory that cannot be listed is a ValueError, so a lower layer never
     stands in for it."""
-    candidates = tuple(dict.fromkeys(root / agent_id for root in (agent_roots() if roots is None else roots)))
-    existing = []
+    relative = agent_path(agent_id)
+    candidates = tuple(dict.fromkeys(root / relative for root in (agent_roots() if roots is None else roots)))
+    selected = None
+    found_non_agent = False
     for candidate in candidates:
         try:
             if candidate.is_dir():
-                tuple(candidate.iterdir())
-                existing.append(candidate)
+                entries = tuple(candidate.iterdir())
+                if ":" not in agent_id or candidate.is_symlink() or agent_files.has_agent_source(entries):
+                    selected = candidate
+                else:
+                    found_non_agent = True
+            elif candidate.is_file():
+                found_non_agent = True
         except OSError as exc:
             raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc}") from exc
-    return tuple(existing[-1:]) or candidates
+    if selected is not None:
+        return (selected,)
+    if found_non_agent:
+        raise ValueError(f"unknown agent {agent_id!r}; searched " + searched(roots=candidates))
+    return candidates
+
+
+def walk_agent_dirs(root: Path, *, on_error: Callable[[OSError], None] | None = None) -> Iterator[tuple[str, Path]]:
+    """Discover flat agents and nested agents with source files. Directory
+    symlinks are leaves, so discovery never wakes a linked mount or follows a cycle."""
+    def visit(directory: Path, prefix: str) -> Iterator[tuple[str, Path]]:
+        try:
+            entries = sorted(directory.iterdir())
+            if ":" in prefix and agent_files.has_agent_source(entries):
+                yield prefix, directory
+        except OSError as exc:
+            if on_error:
+                on_error(exc)
+            return
+        for entry in entries:
+            if not _AGENT_COMPONENT.fullmatch(entry.name):
+                continue
+            agent_id = f"{prefix}:{entry.name}" if prefix else entry.name
+            try:
+                if entry.is_symlink():
+                    yield agent_id, entry
+                elif entry.is_dir():
+                    if not prefix:
+                        yield agent_id, entry
+                    yield from visit(entry, agent_id)
+            except OSError as exc:
+                if on_error:
+                    on_error(exc)
+
+    if root.is_dir():
+        yield from visit(root, "")
 
 
 def agent_names(roots: tuple[Path, ...] | None = None) -> list[str]:
-    """Sorted names of the agent directories in ``roots`` (default `agent_roots()`)."""
-    return sorted({entry.name for root in (agent_roots() if roots is None else roots)
-                   if root.is_dir() for entry in root.iterdir() if entry.is_dir()})
+    """Sorted qualified agent names across the selected roots."""
+    return sorted({name for root in (agent_roots() if roots is None else roots)
+                   for name, directory in walk_agent_dirs(root) if not directory.is_symlink() or directory.is_dir()})
 
 
 def _file_layers(rel: str | Path) -> tuple[Path, ...]:

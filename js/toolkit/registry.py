@@ -6,6 +6,7 @@ import difflib
 import os
 import re
 import threading
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
@@ -619,36 +620,33 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
 
     ``from_env`` passes stock ``defaults/agents/``, then ``~/.js/agents/``,
     then project ``.js/agents/``. Later roots shadow earlier roots for the same
-    agent id, matching prompt loading for main agents and subagents.
+    agent id. A nested id has a direct tool when replacing its separators
+    with double underscores gives a unique provider-safe name.
     """
-    roots = tuple(prompts_root) if isinstance(prompts_root, (list, tuple)) else (prompts_root,)
-    by_id: dict[str, Path] = {}
-    for root in roots:
-        if not root.is_dir():
+    def unreadable(exc: OSError) -> None:
+        output.notice(msgs.AGENT_DIR_UNREADABLE, path=exc.filename, error=exc.strerror)
+
+    roots = (prompts_root,) if isinstance(prompts_root, Path) else prompts_root
+    by_id = {agent_id: directory for root in roots
+             for agent_id, directory in paths.walk_agent_dirs(root, on_error=unreadable)}
+    names = {agent_id: agent_id.replace(":", "__") for agent_id in by_id}
+    uses = Counter(name.lower() for name in names.values())
+    reserved = {name.lower() for name in reserved}
+    tools = []
+    for agent_id, name in sorted(names.items()):
+        key = name.lower()
+        if ":" in agent_id:
+            if key in reserved or uses[key] > 1:
+                output.notice(msgs.AGENT_TOOL_COLLISION, agent=agent_id, tool=name)
+                continue
+            if len(name) > 64:
+                output.notice(msgs.AGENT_TOOL_NAME_TOO_LONG, agent=agent_id, tool=name)
+                continue
+        elif key in reserved:
+            output.notice(msgs.AGENT_NAME_IS_TOOL, agent=agent_id, root=by_id[agent_id].parent)
             continue
-        for agent_dir in sorted(root.iterdir()):
-            agent_id = agent_dir.name
-            try:
-                # A symlinked agent is trusted by name and checked when called:
-                # following it at startup wakes (or waits on) whatever host it
-                # points at, for an agent this run may never touch.
-                if not agent_dir.is_symlink() and not agent_dir.is_dir():
-                    continue
-            except OSError as exc:
-                # A symlinked agent on a sleeping NFS/automount host stats as
-                # ENODEV or ETIMEDOUT. One unreachable agent must not kill every run.
-                output.notice(msgs.AGENT_DIR_UNREADABLE, path=agent_dir, error=exc.strerror)
-                continue
-            if agent_id in reserved:
-                # A builtin tool owns this name, so the agent can never be selected.
-                # Silently skipping looked identical to "the directory isn't there",
-                # which is a long afternoon of debugging for whoever named an agent
-                # `read` or `task`.
-                output.notice(msgs.AGENT_NAME_IS_TOOL, agent=agent_id, root=root)
-                continue
-            # Later roots are more specific and shadow earlier prompt dirs.
-            by_id[agent_id] = agent_dir
-    return tuple(replace(subagents.named_agent_tool(agent_id), source="agent") for agent_id in sorted(by_id))
+        tools.append(replace(subagents.named_agent_tool(agent_id), name=name, source="agent"))
+    return tuple(tools)
 
 
 @cache
@@ -706,7 +704,7 @@ def build_default_registry(
             ("swarm", _swarm_tools()),
         )
     base_tools = tuple(replace(tool, source=source) for source, tools in suites for tool in tools)
-    reserved = {tool.name for tool in base_tools}
+    reserved = {name for tool in base_tools for name in (tool.name, *tool.aliases)}
     reserved.add(discovery.DISCOVERY_TOOL_NAME)
     roots = _default_prompts_root() if prompts_root is None else prompts_root
     all_tools = base_tools + _agent_tools(roots, reserved)

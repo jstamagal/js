@@ -236,9 +236,9 @@ js/swarm.py       swarm tools
 generated prompt-directory agent tools
 ```
 
-Generated agent tools come from directories with markdown files under repo
-`defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`. Files layer per relative name: project > home > defaults when roots define the same agent id. A
-prompt directory whose name collides with an existing tool is skipped.
+The nearest layer defining a full agent ID supplies its whole directory.
+Generated tool names use `__` for each `:` in a nested agent ID. Built-in
+tools and top-level agents keep their names in a collision.
 
 ## Tool Context
 

@@ -62,10 +62,11 @@ def test_resolve_both_transports_defaults_enabled_filtering_and_immutability():
         local.env["TOKEN"] = "changed"
 
 
-def test_active_agent_server_and_tool_allow_deny_rules_have_deny_precedence():
+@pytest.mark.parametrize("agent_id", ["writer", "meta:writer"])
+def test_active_agent_server_and_tool_allow_deny_rules_have_deny_precedence(agent_id):
     resolved = mcp_config.resolve(
-        {"MCP_SERVERS": _servers(), "MCP_AGENT_POLICY": _agents()},
-        "writer",
+        {"MCP_SERVERS": _servers(), "MCP_AGENT_POLICY": {agent_id: _agents()["writer"]}},
+        agent_id,
     )
 
     assert [server.name for server in resolved.servers] == ["Local Files"]

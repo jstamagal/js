@@ -34,7 +34,7 @@ def session_directory(agent_id: str, session_file: Path, *, state_dir: Path | No
     session = Path(session_file).expanduser().resolve(strict=False)
     if session == Path(os.devnull).resolve(strict=False):
         return None
-    safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or _settings.default_value("DEFAULT_AGENT")
+    safe_agent = "".join(ch if ch.isalnum() or ch in "-_:" else "-" for ch in agent_id) or _settings.default_value("DEFAULT_AGENT")
     safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.stem) or "session"
     session_hash = hashlib.sha256(str(session).encode("utf-8", "surrogateescape")).hexdigest()[:16]
     return (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"

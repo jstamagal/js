@@ -137,12 +137,13 @@ with control marks; see the compaction section for compaction commands.
 
 ## Setup Layers And Profiles
 
-Stock files live under `defaults/`. Copy a file to the same relative path in
-`~/.js/` to change it: `agents/defaultagent/01-prompt.md` changes that prompt
-while the stock manifest and environment still load. An empty file shadows the
-stock file. Names in listings are the union of the layers. Skills replace a
-whole directory by name. Project `.js/` overrides agents, skills, commands,
-toolbox and jsrc; themes, tool descriptions, help and snippets use stock and home.
+Stock files live under `defaults/`. A file such as `~/.js/themes/paper`
+shadows the stock file at the same relative path, even when empty.
+Agents and skills replace a whole directory by name. Nested agents use colons
+between directory names, so `js -a meta:workflow-creator` selects
+`agents/meta/workflow-creator/`. Names in listings are the union of the layers.
+Project `.js/` overrides agents, skills, commands, toolbox and jsrc.
+Themes, tool descriptions, help and snippets use stock and home.
 `jsrc` files layer settings, and `defaults/fset` loads before jsrc format entries.
 
 ```bash

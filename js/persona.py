@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from . import (
+    agent_files,
     messages as msgs,
     model_profiles,
     paths,
@@ -19,6 +20,7 @@ from . import (
     settings,
     snippets,
 )
+from .agent_files import AGENT_MANIFEST
 from .cli_options import current
 from .config import apply_route
 from .promptexpand import expand_prompt, session_variables
@@ -74,17 +76,10 @@ class AgentExchange:
     agent: str | None = None
 
 
-_MESSAGE_FILE = re.compile(r"(?:(\d+)[-_])?(user|agent)")
-
-
-def _is_message_file(path: Path) -> bool:
-    return _MESSAGE_FILE.fullmatch(path.stem) is not None
-
-
 def _load_exchanges(md_files: list[Path]) -> tuple[AgentExchange, ...]:
     numbered: dict[int, dict[str, str]] = {}
     for path in md_files:
-        match = _MESSAGE_FILE.fullmatch(path.stem)
+        match = agent_files.MESSAGE_FILE.fullmatch(path.stem)
         if match is None:
             continue
         number = int(match[1] or 0)
@@ -97,46 +92,12 @@ def _load_exchanges(md_files: list[Path]) -> tuple[AgentExchange, ...]:
     return tuple(AgentExchange(number, **numbered[number]) for number in sorted(numbered))
 
 
-def _is_zero_file(path: Path) -> bool:
-    stem = path.stem
-    return stem == "00" or stem.startswith("00-") or stem.startswith("00_")
-
-
-def _ends_in_keyword(path: Path, keyword: str) -> bool:
-    stem = path.stem
-    return stem == keyword or stem.endswith(f"-{keyword}") or stem.endswith(f"_{keyword}")
-
-
-def _is_benchmark_file(path: Path) -> bool:
-    """A NN-benchmark.md (or bare benchmark.md) file: a --bench turn, never part
-    of the system prompt."""
-    return _ends_in_keyword(path, "benchmark")
-
-
-# The kinds of .md file an agent directory holds, named by the stem's last
-# word: NN-prompt.md, NN-env.md, NN-benchmark.md, NN-user.md, NN-agent.md.
-# A .md file of any other name is not read.
-PROMPT_KIND = "prompt"
-ENV_KIND = "env"
-
-
-def _system_kind(path: Path) -> str | None:
-    """`prompt` or `env` for a file that is system-prompt text, else None."""
-    if _is_message_file(path):
-        return None
-    for kind in (PROMPT_KIND, ENV_KIND):
-        if _ends_in_keyword(path, kind):
-            return kind
-    return None
-
-
-AGENT_MANIFEST = "agent.yaml"
 _MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills", "models", "aliases")
 _MIGRATE_HINT = msgs.AGENT_MANIFEST_MIGRATION_HINT.format()
 
 
 def _find_yaml_zero_file(prompts_dir: Path) -> Path | None:
-    candidates = sorted(path for path in prompts_dir.glob("00*.yaml") if _is_zero_file(path))
+    candidates = sorted(path for path in prompts_dir.glob("00*.yaml") if agent_files.is_zero_file(path))
     return candidates[0] if candidates else None
 
 
@@ -156,9 +117,9 @@ def _load_yaml_manifest(path: Path) -> dict[str, Any]:
 def _refuse_legacy_manifest(md_files: list[Path]) -> None:
     for path in md_files:
         if (
-            _is_zero_file(path)
-            and not _is_message_file(path)
-            and not _is_benchmark_file(path)  # load_benchmarks reads its frontmatter
+            agent_files.is_zero_file(path)
+            and not agent_files.is_message_file(path)
+            and not agent_files.is_benchmark_file(path)  # load_benchmarks reads its frontmatter
             and path.read_text(encoding="utf-8").startswith("---")
         ):
             raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_NO_LONGER_READ.format(path=path, _MIGRATE_HINT=_MIGRATE_HINT))
@@ -272,9 +233,8 @@ def load_agent_prompt_spec(
     env: bool = True,
     prompt: str | None = None,
 ) -> PromptSpec:
-    """Assemble every agent filename from its directories in ``roots``,
-    lowest layer first, with ``agents_files`` ahead of the system prompt."""
-    spec = load_prompt_spec(paths.agent_dirs(agent_id, roots), env=env, prompt=prompt)
+    """Load the nearest definition of this agent, with ``agents_files`` ahead of its prompt."""
+    spec = load_prompt_spec(paths.agent_dirs(agent_id, roots), env=env, prompt=prompt, agent_id=agent_id)
     return _with_agents_files(spec, agents_files)
 
 
@@ -286,13 +246,17 @@ def _with_agents_files(spec: PromptSpec, agents_files) -> PromptSpec:
 
 
 def config_roots(cfg) -> tuple[Path, ...]:
-    """The roots ``cfg`` finds agents in: its ``prompt_roots``, or for a Config
-    built in code with none, the directory holding its ``prompts_dir``."""
+    """The configured agent roots, inferred from the prompt directory when omitted."""
     roots = tuple(getattr(cfg, "prompt_roots", ()) or ())
     if roots:
         return roots
     first = cfg.prompts_dir if isinstance(cfg.prompts_dir, Path) else cfg.prompts_dir[0]
+    if ":" in getattr(cfg, "agent_id", ""):
+        parts = paths.agent_path(cfg.agent_id).parts
+        if first.parts[-len(parts):] == parts:
+            return (first.parents[len(parts) - 1],)
     return (first.parent,)
+
 
 def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     """One agent.yaml as a PromptSpec with an empty system prompt."""
@@ -316,15 +280,19 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     )
 
 
-def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: bool = True, prompt: str | None = None) -> PromptSpec:
+def load_prompt_spec(
+    prompts_dir: Path | tuple[Path, ...] | list[Path], *,
+    env: bool = True, prompt: str | None = None, agent_id: str | None = None,
+) -> PromptSpec:
     """Load assembled files or directories, with each higher filename replacing
     its lower copy. ``env=False`` skips env files; ``prompt`` replaces prompt files."""
     sources = (prompts_dir,) if isinstance(prompts_dir, Path) else tuple(prompts_dir)
     if not any(source.is_dir() or source.is_file() for source in sources):
-        raise FileNotFoundError(f"unknown agent {sources[0].name!r}; searched " + paths.searched(roots=sources))
+        name = agent_id or sources[0].name
+        raise FileNotFoundError(f"unknown agent {name!r}; searched " + paths.searched(roots=sources))
     files = _prompt_files(sources)
     md_files = [path for path in files if path.suffix == ".md"]
-    legacy = next((path for path in files if path.suffix == ".yaml" and _is_zero_file(path)), None)
+    legacy = next((path for path in files if path.suffix == ".yaml" and agent_files.is_zero_file(path)), None)
     if legacy is not None:
         raise ValueError(msgs.AGENT_MANIFEST_IS_NO_LONGER_READ.format(legacy=legacy, _MIGRATE_HINT=_MIGRATE_HINT))
     _refuse_legacy_manifest(md_files)
@@ -333,10 +301,10 @@ def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: 
     parts: list[str] = []
     prompt_placed = False
     for path in md_files:
-        kind = _system_kind(path)
-        if kind == ENV_KIND and not env:
+        kind = agent_files.system_kind(path)
+        if kind == agent_files.ENV_KIND and not env:
             continue
-        if kind == PROMPT_KIND and prompt is not None:
+        if kind == agent_files.PROMPT_KIND and prompt is not None:
             if not prompt_placed and prompt.rstrip():
                 parts.append(prompt.rstrip())
             prompt_placed = True
@@ -391,7 +359,7 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         if options.system_prompt_file is not None or options.system_prompt is not None:
             system = options.prompt_text()
         elif options.agent is not None:
-            system = load_prompt_spec(cfg.prompts_dir, env=False).system
+            system = load_prompt_spec(cfg.prompts_dir, env=False, agent_id=options.agent).system
         else:
             system = ""
         spec = PromptSpec(system=system, tool_selectors=())
@@ -404,7 +372,8 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     env = not options.skips_env
     agents_files = () if options.skips_agents_md else tuple(getattr(cfg, "agents_files", ()))
 
-    spec = _with_agents_files(load_prompt_spec(cfg.prompts_dir, env=env, prompt=options.system_prompt), agents_files)
+    spec = load_prompt_spec(cfg.prompts_dir, env=env, prompt=options.system_prompt, agent_id=getattr(cfg, "agent_id", None))
+    spec = _with_agents_files(spec, agents_files)
     spec = _with_model_profile(spec, cfg, lambda agent_id: load_agent_prompt_spec(
         agent_id, config_roots(cfg), agents_files=agents_files, env=env, prompt=options.system_prompt).system)
     return _finish_configured_spec(spec, cfg, expand)
@@ -481,7 +450,7 @@ def load_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> list[Benchmark]:
     one-shot user turn with an optional `max_tokens` frontmatter override."""
     out: list[Benchmark] = []
     for path in _prompt_files(prompts_dir):
-        if path.suffix != ".md" or not _is_benchmark_file(path):
+        if path.suffix != ".md" or not agent_files.is_benchmark_file(path):
             continue
         frontmatter, body = split_frontmatter(path, path.read_text(encoding="utf-8"))
         body = body.strip()
@@ -497,7 +466,7 @@ def load_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> list[Benchmark]:
 
 def has_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> bool:
     """Whether this agent selects benchmark mode, including empty benchmark files."""
-    return any(path.suffix == ".md" and _is_benchmark_file(path) for path in _prompt_files(prompts_dir))
+    return any(path.suffix == ".md" and agent_files.is_benchmark_file(path) for path in _prompt_files(prompts_dir))
 
 
 def expand_agent_text(text: str, cfg) -> str:
@@ -553,6 +522,7 @@ def format_prompt_load_error(cfg, exc: Exception) -> str:
     instead of leaking the raw 'prompts directory missing at <path>'."""
     if isinstance(exc, FileNotFoundError) and isinstance(cfg.prompts_dir, Path) and not cfg.prompts_dir.is_dir():
         agents_dir = paths.global_agents_dir()
-        agent_id = getattr(cfg, "agent_id", "?")
-        return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
+        agent_id = getattr(cfg, "agent_id", None)
+        if agent_id:
+            return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / paths.agent_path(agent_id))
     return msgs.of_error(exc)

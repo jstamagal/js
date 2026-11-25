@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -26,8 +25,8 @@ from . import (
     turn_settings as _turn_settings,
 )
 from .cli_options import current
+from .paths import validate_agent_id as validate_agent_id
 
-_AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 def _norm_effort(raw: str | None) -> str | None:
     """An effort value as it is sent: the word as typed, without surrounding
@@ -35,12 +34,6 @@ def _norm_effort(raw: str | None) -> str | None:
     if raw is None:
         return None
     return raw.strip() or None
-
-
-def validate_agent_id(agent_id: str) -> str:
-    if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise ValueError(msgs.CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS.format())
-    return agent_id
 
 
 def _env_bool(raw: str) -> bool | None:
@@ -192,7 +185,7 @@ class Config(_turn_settings.ConfigSettings):
             object.__setattr__(self, "agent_dir", _paths.state_root() / self.agent_id)
         if self.prompts_dir is None:
             object.__setattr__(self, "prompts_dir", _paths.agent_dirs(self.agent_id, self.prompt_roots)
-                               if self.prompt_roots else _paths.defaults_dir() / "agents" / self.agent_id)
+                               if self.prompt_roots else _paths.defaults_dir() / "agents" / _paths.agent_path(self.agent_id))
         # A key that is not a setting (an old name such as retry_attempts)
         # would be read by nothing; refuse it as `set` does.
         unknown = _unknown_setting_keys(self.settings)
@@ -446,8 +439,7 @@ def instruction_files_for(project_dir: Path, setup_names: list[str], project_nam
 
 def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
     """The agent a run uses: ``agent_id`` (from --agent or --commit) when
-    given, else the ``DEFAULT_AGENT`` setting from ``settings``. Raises ValueError for
-    an id that is not letters, digits, '_' or '-'."""
+    given, else the ``DEFAULT_AGENT`` setting from ``settings``."""
     return validate_agent_id(agent_id or _settings.knob(settings, "DEFAULT_AGENT"))
 
 

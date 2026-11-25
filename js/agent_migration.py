@@ -31,7 +31,7 @@ from typing import Any
 
 import yaml
 
-from . import messages as msgs, paths, persona
+from . import agent_files, messages as msgs, paths, persona
 from .toolkit import policy
 from .toolkit.registry import registry_for_roots
 
@@ -190,7 +190,11 @@ def _is_manifest_candidate(path: Path) -> bool:
     """A `00*.md` that may hold a legacy frontmatter manifest. Message files
     (`00-user.md`, `00-agent.md`) and benchmark turns (`00-benchmark.md`) are
     their own kinds of file: frontmatter there is content, not settings."""
-    return persona._is_zero_file(path) and not persona._is_message_file(path) and not persona._is_benchmark_file(path)
+    return (
+        agent_files.is_zero_file(path)
+        and not agent_files.is_message_file(path)
+        and not agent_files.is_benchmark_file(path)
+    )
 
 
 def _zero_md_with_frontmatter(agent_dir: Path) -> Path | None:
@@ -391,14 +395,16 @@ def _finish_old(result: Result, old: Path, new_body: str | None, *, undo: Callab
 
 
 def migrate_root(root: Path, *, apply: bool = False, keep: Keep | None = None) -> list[Result]:
-    """Every agent dir directly under `root`. A symlinked agent is skipped: it is
-    converted where it lives."""
+    """Convert agents throughout `root`. A symlinked agent is converted where it lives."""
     keep = keep if keep is not None else tool_matcher(default_roots(root))
-    results = []
-    for agent_dir in sorted(root.iterdir()):
+    results: list[Result] = []
+
+    def report_error(exc: OSError) -> None:
+        results.append(Result(Path(exc.filename) if exc.filename else root, "error", _one_line(exc)))
+
+    for _, agent_dir in paths.walk_agent_dirs(root, on_error=report_error):
         if agent_dir.is_symlink():
             results.append(Result(agent_dir, "skip", msgs.AGENT_MIGRATE_SYMLINK.text(target=agent_dir.readlink())))
             continue
-        if agent_dir.is_dir():
-            results.append(migrate_agent_dir(agent_dir, apply=apply, keep=keep))
+        results.append(migrate_agent_dir(agent_dir, apply=apply, keep=keep))
     return results

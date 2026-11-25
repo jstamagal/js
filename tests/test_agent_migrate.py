@@ -113,14 +113,19 @@ def test_existing_agent_yaml_and_bad_yaml_are_left_alone(tmp_path):
 def test_main_walks_a_root_skips_symlinks_and_only_writes_with_apply(tmp_path, capsys):
     root = tmp_path / "agents"
     agent = _agent(root, "builder", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
+    nested = _agent(agent / "workflows", "review", {"00-tools.yaml": "model: reviewer\n"})
     elsewhere = _agent(tmp_path / "remote", "shared", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
     (root / "shared").symlink_to(elsewhere)
+    (nested / "remote").symlink_to(elsewhere.parent)
 
     assert agent_migrate.main([str(root)]) == 0
     assert (agent / "00-tools.yaml").exists()
+    assert (nested / "00-tools.yaml").exists()
 
     assert agent_migrate.main(["--apply", str(root)]) == 0
     assert (agent / "agent.yaml").exists() and not (agent / "00-tools.yaml").exists()
+    assert persona.load_agent_manifest(nested / "agent.yaml").model == "reviewer"
+    assert not (nested / "00-tools.yaml").exists()
     assert (elsewhere / "00-tools.yaml").exists() and not (elsewhere / "agent.yaml").exists()
 
 

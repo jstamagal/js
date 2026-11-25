@@ -541,7 +541,7 @@ re-read context.
 `defaults/` ships jsrc, fset, agents, themes, tool descriptions, skills, help,
 snippets and secret-patterns. The home overrides a file at the same relative
 path; files you have not copied keep coming from stock. Empty files shadow too.
-Names in listings union across layers. Skills replace whole directories by name.
+Names in listings union across layers. Agents and skills replace whole directories by name.
 Only jsrc, agents, skills, commands and toolbox use a project `.js/` layer.
 `defaults/jsrc`, home `jsrc`, project `jsrc`, project `jsrc.local`, env and
 `--extra` layer settings; `defaults/fset` loads before format lines in jsrc.
@@ -723,17 +723,31 @@ Native tools keep conversion, page schema/dedup, and ingest close-out determinis
 
 ## Prompt-Directory Agents
 
-Agents are assembled per file from `defaults/agents/`, home `agents/`, and
-project `.js/agents/`, lowest first. Copy only the files you want to change:
-a home `agents/defaultagent/01-prompt.md` replaces that file while the stock
-`agent.yaml` and `02-env.md` still load. A zero-byte override shadows the stock
-file too. Listings union the names across layers. An unknown agent is an error
-naming it and the searched directories.
+Use a colon between directory names to select a nested agent. For example,
+both of these agents can live under `~/.js/agents/meta/`.
 
-Each agent lives at `<root>/<agent_id>/`. `*-prompt.md` and `*-env.md` files
-concatenate in filename order; `NN-user.md` / `NN-agent.md` seed exchanges and benchmark files
-have their own roles. `agent.yaml` selects tools, model, effort and sampling.
-It follows the same per-file layering rule.
+```text
+~/.js/agents/meta/
+├── 01-prompt.md
+├── agent.yaml
+└── workflow-creator/
+    ├── 01-prompt.md
+    └── agent.yaml
+```
+
+`js -a meta` loads the parent. `js -a meta:workflow-creator` loads the
+child. Each uses the prompt files and `agent.yaml` directly in its own
+directory. js recognizes a nested agent by its `agent.yaml` or an agent
+file such as `01-prompt.md`. Intermediate directories can group children
+at any depth.
+
+js looks up each full agent name in stock `defaults/agents/`, home `agents/`,
+and project `.js/agents/`. The nearest matching agent supplies all its files.
+`js --list-agents` lists the names available across those layers.
+
+Within an agent, `*-prompt.md` and `*-env.md` files concatenate in filename
+order. `NN-user.md` and `NN-agent.md` seed exchanges. `agent.yaml` selects
+tools, model, effort and sampling.
 
 ```yaml
 tools:
@@ -754,8 +768,6 @@ Details: [tool-system.md](tool-system.md).
 A run without `--agent` uses the `DEFAULT_AGENT` setting: `set DEFAULT_AGENT slim` in
 `~/.js/jsrc` or a project `.js/jsrc`, or `JS_DEFAULT_AGENT=slim`. The built-in
 value is `defaultagent`.
-
-Use `js --list-agents` to see the agents installed across your layers.
 
 ## Shell Expectations
 

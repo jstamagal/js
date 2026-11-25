@@ -267,6 +267,8 @@ fset HOME_WOULD_LEAVE %C07%G%C Would leave $0: $1-
 fset SESSION_RECORDS_SKIPPED %C07%G%C $0: skipped $1 from an incompatible schema version. No migration to $2- yet. History may be incomplete.
 fset AGENT_DIR_UNREADABLE %C07%G%C Agent dir $0 unreadable: $1-. Skipped.
 fset AGENT_NAME_IS_TOOL %C07%G%C Agent $0: name collides with a builtin tool. Not exposed as a tool. Rename $1/$2-.
+fset AGENT_TOOL_COLLISION %C07%G%C Use task with agent_id=$0. Another tool or agent uses the same tool name $1-.
+fset AGENT_TOOL_NAME_TOO_LONG %C07%G%C Use task with agent_id=$0. The tool name $1- exceeds 64 characters.
 fset TOOL_ENTRY_UNMATCHED %C07%G%C Tool entry $0- matched no tool. Ignored.
 fset TOOL_ENTRY_UNMATCHED_FOR %C07%G%C Tool entry $0 for agent $1- matched no tool. Ignored.
 fset DESCRIPTION_PROBLEM %C07%G%C description: $0-

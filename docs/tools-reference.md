@@ -849,8 +849,9 @@ trace headers and prompt events include `tool_names` for the published schema se
 
 ## Generated Agent Tools
 
-Agent directories under stock `defaults/agents/`, global `~/.js/agents/`, and
-project `.js/agents/` become tools named after the directory. Files layer per relative name: project > home > defaults. The stock generated tools are:
+Top-level agents have tools named after their directories. Nested agents use
+`__` between directory names in direct tools, as in `meta__workflow-creator`.
+The stock generated tools include:
 
 - `commit`
 - `defaultagent`

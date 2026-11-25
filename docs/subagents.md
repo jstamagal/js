@@ -25,7 +25,8 @@ Schema:
 Rules:
 
 - `agent_id` is required to start workers.
-- Agent IDs contain only letters, numbers, underscores, and hyphens.
+- Each directory name in an agent ID uses letters, digits, underscores and
+  hyphens. Join nested names with a colon, e.g. `"agent_id": "meta:workflow-creator"`.
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
 - `session_id` is optional, takes a single task, and resumes that worker agent
@@ -37,8 +38,7 @@ Rules:
 
 ## Direct Agent Tools
 
-Prompt directories under stock `defaults/agents/`, global `~/.js/agents/`, and
-project `.js/agents/` become direct tools. Files layer per relative name: project > home > defaults:
+The `slim` agent can be called directly as a tool.
 
 ```json
 {
@@ -52,6 +52,12 @@ project `.js/agents/` become direct tools. Files layer per relative name: projec
 Direct tools call the same task implementation with the agent id fixed. They
 expose `tasks`, `model` and `reasoning`; they do not expose `agent_id` or
 `session_id`.
+
+For nested agents, use a double underscore between directory names in the
+tool name. An `agent.yaml` entry of `meta__workflow-creator:eager` exposes
+the `meta:workflow-creator` agent as the tool `meta__workflow-creator`.
+For a name collision or a generated tool name over 64 characters, use
+`task` with the colon-separated ID. Top-level agents keep their tool names.
 
 The stock `defaultagent` selects the `task` tool and the direct `commit` tool.
 
@@ -120,15 +126,10 @@ For each child task:
 
 Child agents do not inherit the parent's selected tool surface.
 
-The child loads:
-
-```text
-<root>/<agent_id>/*-prompt.md, *-env.md  # root is defaults/agents/, ~/.js/agents/, or project .js/agents/
-```
-
-Then selects tools from the full registry using that agent's `agent.yaml`
-`tools:` entries. A missing prompt directory returns an error before creating
-a worker session.
+The child loads `*-prompt.md` and `*-env.md` from its own agent directory
+in the nearest project, home or stock layer that defines it. Its `agent.yaml`
+`tools:` entries select tools from the full registry. A missing prompt
+directory returns an error before creating a worker session.
 
 Child contexts copy:
 
@@ -161,8 +162,8 @@ There are no typed worker classes like `research`, `commit`, `wiki`, or
 What exists today:
 
 - `task`: generic subagent runner.
-- prompt-directory agents: any `<root>/<agent_id>` directory under repo
-  `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
+- prompt-directory agents under stock `defaults/agents/`, global
+  `~/.js/agents/` and project `.js/agents/`.
 - generated direct tools for prompt directories.
 - bundled prompt dirs: `commit`, `defaultagent`, `slim`, `twotool`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
