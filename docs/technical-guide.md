@@ -54,7 +54,8 @@ persists each completed turn.
 | `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`) assembled from the `repl_*_commands` rows, dispatch, `/help`, `/load`, aliases and the startup run of the jsrc files |
 | `js/repl_agent_commands.py` | `/persona`, `/tools`, `/skill`, `/skills`: the system prompt, tools and skills a turn carries |
 | `js/repl_hook_commands.py` | `/on` and `/exec`: a command run on an event, and the shell command whose stdout is queued for the next user message |
-| `js/repl_job_commands.py` | `/jobs`, `/cancel`, `/window`, `/flush`: the supervisor's jobs and the subagent windows |
+| `js/repl_job_commands.py` | `/jobs`, `/cancel`, `/flush`: the supervisor's jobs |
+| `js/repl_window_commands.py` | `/window`: ircII's op chain over `screen.Windows` and the subagent windows |
 | `js/repl_model_commands.py` | `/model`, `/pick-model`, `/provider`, `/baseurl`, `/apikey`, `/login`, `/logout`, `/models`, `/refresh-model-catalog`; the model stamp a turn would write (`live_stamp`) |
 | `js/repl_session_commands.py` | `/reset`, `/wipe`, `/turns`, `/cost`, `/copy`, `/session`, `/name`, `/compact`, `/quit`: the session file and the conversation in it |
 | `js/repl_settings_commands.py` | `/set`, `/fset`, `/show`, `/save`, `/compact-auto`: the effective `/set` view, what `/save` compares against (`mark_saved`), and live state following a changed setting (`apply_settings_result`) |

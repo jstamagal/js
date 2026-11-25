@@ -693,9 +693,11 @@ def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: in
         shown = windows.on_screen()
         if shown is not None:
             launch = shown.launch
-            provider, model, agent_id = launch["provider"], launch["model"], launch["agent"]
-            session_file = Path(launch["session_file"]) if launch["session_file"] else None
-            context = shown.context or context
+            agent_id, session_file = shown.agent, None
+            if launch is not None:
+                provider, model = launch["provider"], launch["model"]
+                session_file = Path(launch["session_file"]) if launch["session_file"] else None
+                context = shown.context or context
             turn_active = shown.busy()
     if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
         model = model[len(provider) + 1:]
@@ -847,6 +849,14 @@ class Repl:
         windows = screen.Windows()
         child_windows = subagent_windows.SubagentWindows(windows, sup)
         state.windows = child_windows
+
+        def window_parent_context():
+            # A window's subagent launches from the main conversation, on its live settings.
+            context = copy.copy(runtime.T.STOCK_CONTEXT)
+            context.config = state.config_for_turn(cfg)
+            return context
+
+        child_windows.parent_context = window_parent_context
         opener_token = subagents.window_opener.set(child_windows.open)
 
         channel_instructed: set[str] = set()

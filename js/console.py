@@ -299,7 +299,7 @@ def _window_words(window: int | None) -> str:
     if window is None:
         return ""
     if window == 0:
-        return msgs.SUBAGENT_NO_WINDOW.words(last=Windows.LAST)
+        return msgs.SUBAGENT_NO_WINDOW.words(max=Windows.limit())
     return msgs.SUBAGENT_WINDOW.words(number=window)
 
 

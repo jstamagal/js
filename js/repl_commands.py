@@ -24,6 +24,7 @@ from . import (
     repl_session_commands,
     repl_settings_commands,
     repl_state,
+    repl_window_commands,
     repl_workspace_commands,
     setcmd,
     setting_layers,
@@ -167,6 +168,7 @@ _ROWS: dict[str, Command] = {
     **repl_session_commands.COMMANDS,
     **repl_agent_commands.COMMANDS,
     **repl_job_commands.COMMANDS,
+    **repl_window_commands.COMMANDS,
     **repl_workspace_commands.COMMANDS,
 }
 
