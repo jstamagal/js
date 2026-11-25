@@ -344,6 +344,10 @@
 # time. 0: no limit.
 #set SWARM_ACTIVE_MAX 0
 
+# Under `js acp`, how many seconds a cancelled turn keeps running for the
+# prompt that steers it. 0: a cancel ends the turn at once.
+#set ACP_STEER_WAIT 2
+
 
 ################################################################################
 #  TOOL OUTPUT SIZES  --  how much a tool result can hand the model

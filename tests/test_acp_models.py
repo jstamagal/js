@@ -85,6 +85,8 @@ def test_cache_discovery_obeys_session_isolation(cached_models, monkeypatch):
 
 
 def test_resumed_prompt_lock_is_held_until_cancellation_cleanup(cached_models, monkeypatch):
+    monkeypatch.setenv("JS_ACP_STEER_WAIT", "0")
+
     async def scenario():
         started = asyncio.Event()
         cleaning = asyncio.Event()
@@ -128,3 +130,87 @@ def test_resumed_prompt_lock_is_held_until_cancellation_cleanup(cached_models, m
         assert (await second.prompt(session_id, prompt)).stop_reason == "end_turn"
 
     asyncio.run(scenario())
+
+
+def _steering(cached_models, monkeypatch, run_turn):
+    """Two prompts to one session with a cancel between them, as a client
+    steers: the response to each, and whether the first came while the turn ran."""
+    async def scenario():
+        monkeypatch.setattr(acp_turn, "run_turn", run_turn)
+        agent = acp_agent.Agent([])
+        sent = []
+
+        async def session_update(session_id, update):
+            sent.append(update)
+
+        agent.on_connect(SimpleNamespace(session_update=session_update))
+        session_id = (await agent.new_session(str(cached_models))).session_id
+        first = asyncio.create_task(agent.prompt(session_id, [TextContentBlock(text="first")]))
+        await asyncio.sleep(0.05)
+        await agent.cancel(session_id)
+        cancelled = (await first).stop_reason
+        running = not agent.sessions[session_id].turn.done()
+        second = await agent.prompt(session_id, [TextContentBlock(text="second")])
+        return cancelled, running, second.stop_reason, sent
+
+    return asyncio.run(scenario())
+
+
+def test_a_prompt_after_a_cancel_steers_the_running_turn(cached_models, monkeypatch):
+    turns = []
+
+    async def run_turn(*, text, steers, emit, **kwargs):
+        turns.append(text)
+        while not steers.waiting:
+            await asyncio.sleep(0.01)
+            await emit({"type": "text", "delta": "working "})
+        turns.append(list(steers.waiting))
+        steers._taken(1)
+        await emit({"type": "text", "delta": "steered"})
+
+    cancelled, running, second, sent = _steering(cached_models, monkeypatch, run_turn)
+    assert (cancelled, running, second) == ("cancelled", True, "end_turn")
+    assert turns == ["first", ["second"]]
+    # What the turn said between the two requests reaches the client with the second.
+    assert sent[-1].content.text == "steered"
+    assert {update.content.text for update in sent[:-1]} == {"working "}
+
+
+def test_a_steer_the_turn_did_not_take_is_the_next_turn(cached_models, monkeypatch):
+    turns = []
+
+    async def run_turn(*, text, steers, **kwargs):
+        turns.append(text)
+        if text == "first":
+            while not steers.waiting:
+                await asyncio.sleep(0.01)
+
+    assert _steering(cached_models, monkeypatch, run_turn)[1:3] == (True, "end_turn")
+    assert turns == ["first", "second"]
+
+
+def test_a_cancel_no_prompt_follows_ends_the_turn(cached_models, monkeypatch):
+    monkeypatch.setenv("JS_ACP_STEER_WAIT", "1")
+    ended = []
+
+    async def run_turn(**kwargs):
+        try:
+            await asyncio.Future()
+        finally:
+            ended.append(True)
+
+    async def scenario():
+        monkeypatch.setattr(acp_turn, "run_turn", run_turn)
+        agent = acp_agent.Agent([])
+        agent.on_connect(SimpleNamespace())
+        session_id = (await agent.new_session(str(cached_models))).session_id
+        first = asyncio.create_task(agent.prompt(session_id, [TextContentBlock(text="first")]))
+        await asyncio.sleep(0.05)
+        await agent.cancel(session_id)
+        assert (await first).stop_reason == "cancelled"
+        assert not ended
+        await asyncio.sleep(1.2)
+        assert ended
+
+    asyncio.run(scenario())
+

@@ -290,6 +290,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SUBAGENT_WORKERS_MAX", "int", group="limits"),
     # --- swarm ---
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
+    # --- acp ---
+    SettingSpec("ACP_STEER_WAIT", "int", group="runtime"),
     # --- kernel ---
     SettingSpec("SHELL_PROGRAM", "str", group="shell"),
     SettingSpec("SHELL_WAIT", "int", group="shell"),

@@ -228,6 +228,12 @@ SWARM_ACTIVE_MAX
     How many agents of an in-process swarm may be mid-turn at once; 0 is no
     cap.
 
+ACP_STEER_WAIT
+    Seconds `js acp` keeps a cancelled turn running for the prompt that
+    steers it. A client steers with a cancel and then a prompt; the turn
+    takes that prompt at its next tool boundary. With no prompt in that
+    time the turn is ended. 0 ends it at the cancel.
+
 SHELL_PROGRAM
     Program the `shell` tool runs commands with: a name looked up on PATH,
     or a path. bash and zsh run with `-o pipefail`, so a pipeline fails when

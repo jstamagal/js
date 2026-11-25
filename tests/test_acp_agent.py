@@ -108,7 +108,8 @@ acp_turn.run_turn = worker
 raise SystemExit(acp_agent.run([]))
 """
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-c", code, env={**os.environ, "JS_HOME": str(tmp_path / "profile")},
+            sys.executable, "-c", code,
+            env={**os.environ, "JS_HOME": str(tmp_path / "profile"), "JS_ACP_STEER_WAIT": "0"},
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         )
 

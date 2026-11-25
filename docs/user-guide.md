@@ -98,7 +98,11 @@ T3 supplies the working directory and any session MCP servers. Each ACP
 session has its own saved js conversation, so T3 can resume it after a
 reconnect. Text responses, reasoning and tool activity stream into the thread.
 When js requests permission for a tool, T3 applies the thread's permission
-mode. Cancelling a prompt stops the active turn. Each prompt runs in a fresh
+mode. A message sent while a turn runs steers it: T3 sends a cancel and then
+the prompt, and js keeps the turn running and adds the prompt at its next tool
+boundary, so the tool call in progress finishes. A cancel with no prompt
+within `ACP_STEER_WAIT` seconds (2) stops the turn; 0 stops it at the cancel.
+Each turn runs in a fresh
 worker in the session directory. Conversation history and workspace files
 carry across prompts. In-memory shell, terminal and kernel handles last for
 the turn that opened them. The ACP input supports text and text resources.

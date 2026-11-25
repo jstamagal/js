@@ -9,7 +9,7 @@ import os
 import re
 import signal
 import sys
-from contextlib import contextmanager, redirect_stdout, suppress
+from contextlib import ExitStack, contextmanager, redirect_stdout, suppress
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib.metadata import version
@@ -20,7 +20,9 @@ from uuid import uuid4
 from acp import RequestError, run_agent, schema as acp
 from acp.stdio import stdio_streams
 
-from . import command_line, headless, logins, paths
+from . import command_line, headless, logins, paths, settings
+from .acp_turn import TurnInput
+from .config import run_settings
 from .mcp_config import MCPConfigError, parse_servers
 from .toolkit.reads import atomic_write
 
@@ -42,6 +44,13 @@ class Session:
     mcp_servers: dict
     turn: asyncio.Task | None = None
     cancelled: bool = False
+    updates: TurnUpdates | None = None
+    steers: TurnInput | None = None
+    # Between a cancel and what follows it: the prompt request the cancel
+    # answered is let go through ``released``, and ``stop`` ends the turn
+    # unless a prompt steers it first.
+    released: asyncio.Event | None = None
+    stop: asyncio.TimerHandle | None = None
 
 
 def _servers(definitions: list) -> dict:
@@ -135,9 +144,20 @@ class TurnUpdates:
         self.pending: dict[Any, str] = {}
         self.stop_reason = "end_turn"
         self.streamed_text = False
+        # Updates kept back while no prompt request is open, None when one is.
+        self.held: list | None = None
 
     async def send(self, update) -> None:
+        if self.held is not None:
+            self.held.append(update)
+            return
         await self.connection.session_update(session_id=self.session_id, update=update)
+
+    async def resume(self) -> None:
+        """Send what was kept back, in order, and send from here on."""
+        held, self.held = self.held or [], None
+        for update in held:
+            await self.send(update)
 
     async def finish_tool(self, call_id: str, status: str, text: str) -> None:
         await self.send(acp.ToolCallProgress(
@@ -317,53 +337,114 @@ class Agent:
         session = self.sessions.get(session_id)
         if session is None:
             raise RequestError.invalid_params({"message": "Unknown session"})
-        if session.turn is not None:
-            raise RequestError.invalid_request({"message": "A prompt is already running for this session"})
         text = _prompt_text(prompt)
-        marker = _session_marker(session.cwd, session_id)
-        with _session_lock(marker):
-            options = self.options
-            if self.pinned_model is None and (model := _saved_model(marker)) != MODEL_VALUE:
-                options = [*options, f"--model={model}"]
-            return await self._prompt(session, session_id, text, options)
+        if session.turn is not None and not session.turn.done():
+            if session.stop is None:
+                raise RequestError.invalid_request({"message": "A prompt is already running for this session"})
+            # A cancel and then a prompt is the client steering the turn: the
+            # turn goes on and takes the prompt at its next tool boundary.
+            session.stop.cancel()
+            session.stop = None
+            await session.steers.steer(text)
+            await session.updates.resume()
+        else:
+            if session.updates is not None:
+                # What the last turn said after its prompt request was answered.
+                await session.updates.resume()
+            marker = _session_marker(session.cwd, session_id)
+            held = ExitStack()
+            held.enter_context(_session_lock(marker))
+            session.cancelled = False
+            session.updates = TurnUpdates(self.connection, session_id, session.cwd)
+            session.steers = TurnInput()
+            session.turn = asyncio.create_task(self._turns(session, session_id, text, marker))
 
-    async def _prompt(
-        self, session: Session, session_id: str, text: str, options: list[str],
-    ) -> acp.PromptResponse:
+            def ended(turn: asyncio.Task) -> None:
+                held.close()
+                if not turn.cancelled():
+                    turn.exception()  # a turn no request is waiting on still ends observed
+
+            session.turn.add_done_callback(ended)
+        return await self._follow(session)
+
+    async def _turns(self, session: Session, session_id: str, text: str, marker: Path) -> None:
+        """The turn of ``text``, then one more for each steer no worker took:
+        it came after the last tool boundary."""
         from .acp_turn import run_turn
 
-        updates = TurnUpdates(self.connection, session_id, session.cwd)
-        session.cancelled = False
-        session.turn = asyncio.create_task(run_turn(
-            cwd=session.cwd, session_id=session_id, text=text, options=options,
-            mcp_servers=session.mcp_servers, emit=updates.emit, approve=updates.approve,
-        ))
+        updates, steers = session.updates, session.steers
+        options = self.options
+        if self.pinned_model is None and (model := _saved_model(marker)) != MODEL_VALUE:
+            options = [*options, f"--model={model}"]
         try:
-            await asyncio.shield(session.turn)
+            while True:
+                await run_turn(
+                    cwd=session.cwd, session_id=session_id, text=text, options=options,
+                    mcp_servers=session.mcp_servers, emit=updates.emit, approve=updates.approve,
+                    steers=steers,
+                )
+                if not steers.waiting:
+                    return
+                text = "\n\n".join(steers.waiting)
+                steers.waiting.clear()
+        except asyncio.CancelledError:
+            updates.held = None
+            with suppress(Exception):
+                await updates.finish_pending("Cancelled")
+            raise
+
+    async def _follow(self, session: Session) -> acp.PromptResponse:
+        """The response of a prompt request to the session's running turn."""
+        turn, updates = session.turn, session.updates
+        session.released = released = asyncio.Event()
+        let_go = asyncio.create_task(released.wait())
+        try:
+            await asyncio.wait({turn, let_go}, return_when=asyncio.FIRST_COMPLETED)
+            if not turn.done():
+                return acp.PromptResponse(stop_reason="cancelled")
+            await turn
             await updates.finish_pending("Turn ended before the tool returned")
             return acp.PromptResponse(stop_reason=updates.stop_reason)
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
-                if not session.turn.cancelling():
-                    session.turn.cancel()
+                if not turn.cancelling():
+                    turn.cancel()
                 with suppress(asyncio.CancelledError, ConnectionError):
-                    await session.turn
+                    await turn
                 raise
             if not session.cancelled:
                 raise
-            await updates.finish_pending("Cancelled")
             return acp.PromptResponse(stop_reason="cancelled")
         except Exception as exc:
             await updates.finish_pending("Turn failed")
             raise RequestError(-32603, _preview(str(exc)) or "js turn failed") from exc
         finally:
-            session.turn = None
+            let_go.cancel()
+            if session.turn is turn and turn.done():
+                session.turn = None
 
-    async def cancel(self, session_id: str, **kwargs: Any) -> None:
-        session = self.sessions.get(session_id)
-        if session and session.turn and not session.turn.done() and not session.cancelled:
+    def _stop(self, session: Session) -> None:
+        session.stop = None
+        if session.turn is not None and not session.turn.done():
             session.cancelled = True
             session.turn.cancel()
+
+    async def cancel(self, session_id: str, **kwargs: Any) -> None:
+        """End the session's turn, unless a prompt comes within ACP_STEER_WAIT
+        seconds: the protocol has no steer, so a client that steers sends a
+        cancel and then the prompt. The open prompt request is answered now."""
+        session = self.sessions.get(session_id)
+        if (session is None or session.turn is None or session.turn.done()
+                or session.cancelled or session.stop is not None):
+            return
+        wait = int(settings.knob(run_settings(session.cwd), "ACP_STEER_WAIT"))
+        if wait <= 0:
+            self._stop(session)
+            return
+        session.updates.held = []
+        session.stop = asyncio.get_running_loop().call_later(wait, self._stop, session)
+        if session.released is not None:
+            session.released.set()
 
 
 async def _serve(options: list[str]) -> int:

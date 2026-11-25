@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import os
+import queue
 import signal
 import sys
 import threading
@@ -19,6 +20,29 @@ Approve = Callable[[dict], Awaitable[str | None]]
 
 class TurnError(RuntimeError):
     """The worker could not complete the turn."""
+
+
+class TurnInput:
+    """What the client says to a turn while it runs. The worker adds a steer
+    to the conversation at its next tool boundary and reports how many it
+    took; ``waiting`` holds the ones no worker has taken."""
+
+    def __init__(self) -> None:
+        self.waiting: list[str] = []
+        self._stdin = None
+
+    async def steer(self, text: str) -> None:
+        self.waiting.append(text)
+        if self._stdin is not None:
+            await _write_input(self._stdin, _json_line({"steer": text}))
+
+    async def _attach(self, stdin) -> None:
+        self._stdin = stdin
+        for text in self.waiting:
+            await _write_input(stdin, _json_line({"steer": text}))
+
+    def _taken(self, count: int) -> None:
+        del self.waiting[:count]
 
 
 async def _write_input(stream, payload: bytes) -> None:
@@ -73,8 +97,10 @@ async def run_turn(
     mcp_servers: dict,
     emit: Emit,
     approve: Approve | None = None,
+    steers: TurnInput | None = None,
 ) -> None:
-    """Emit js JSON-stream records for a saved session. Cancel the task to stop."""
+    """Emit js JSON-stream records for a saved session. Cancel the task to stop.
+    ``steers`` reaches the worker for as long as it runs."""
     payload = _json_line({"prompt": text, "mcp_servers": mcp_servers,
                           "approval": approve is not None})
     launch = asyncio.create_task(asyncio.create_subprocess_exec(
@@ -97,6 +123,8 @@ async def run_turn(
     error = None
     try:
         await _write_input(process.stdin, payload)
+        if steers is not None:
+            await steers._attach(process.stdin)
         while True:
             try:
                 line = await process.stdout.readline()
@@ -120,6 +148,10 @@ async def run_turn(
                     refusal = "Invalid tool approval decision"
                 await _write_input(process.stdin, _json_line({"refusal": refusal}))
                 continue
+            if event["type"] == "steered":
+                if steers is not None:
+                    steers._taken(int(event.get("count", 0)))
+                continue
             if event["type"] == "error":
                 error = event.get("message") or error
             if event["type"] == "end":
@@ -131,6 +163,8 @@ async def run_turn(
             detail = error or diagnostic or ("missing end event" if end is None else "turn failed")
             raise TurnError(f"js worker exited with status {code}: {detail}")
     finally:
+        if steers is not None:
+            steers._stdin = None
         if process.returncode is None or not stderr.done():
             cleanup = asyncio.create_task(_stop(process, stderr))
             try:
@@ -145,15 +179,39 @@ def _json_line(value: dict) -> bytes:
     return (json.dumps(value) + "\n").encode()
 
 
+def _input_lines(fd: int):
+    """Each line the server writes to ``fd``. A raw read: a thread blocked in
+    it holds nothing that the exit of the worker waits for."""
+    rest = b""
+    while chunk := os.read(fd, 65536):
+        *lines, rest = (rest + chunk).split(b"\n")
+        yield from lines
+
+
 def _worker() -> int:
     from . import cli, headless, prompt_run
 
-    with os.fdopen(os.dup(0), encoding="utf-8") as decisions, open(os.devnull, "rb") as null:
+    decisions = _input_lines(os.dup(0))
+    with open(os.devnull, "rb") as null:
         os.dup2(null.fileno(), 0)
-        request = json.loads(decisions.readline())
+        request = json.loads(next(decisions))
         sys.stdin = io.StringIO(request["prompt"])
-
         lock = threading.Lock()
+        # The server's lines after the request: a steer at any time, an
+        # approval decision after each approval asked for.
+        refusals: queue.Queue[dict | None] = queue.Queue()
+        steers: list[str] = []
+
+        def read_input() -> None:
+            for line in decisions:
+                message = json.loads(line)
+                if "steer" in message:
+                    steers.append(message["steer"])
+                else:
+                    refusals.put(message)
+            refusals.put(None)
+
+        threading.Thread(target=read_input, daemon=True).start()
 
         def request_approval(call: dict) -> str | None:
             with lock:
@@ -161,16 +219,25 @@ def _worker() -> int:
                 if stream is None:
                     return "Tool approval stream unavailable"
                 stream.emit("approval", call=call)
-                line = decisions.readline()
-                if not line:
+                response = refusals.get()
+                if response is None:
                     return "Tool approval connection closed"
-                response = json.loads(line)
                 return response["refusal"]
 
         async def approve(call: dict) -> str | None:
             return await asyncio.to_thread(request_approval, call)
 
-        client = prompt_run.PromptClient(request["mcp_servers"], approve if request["approval"] else None)
+        def take_steer() -> dict | None:
+            taken = [steers.pop(0) for _ in range(len(steers))]
+            if not taken:
+                return None
+            with lock:
+                if (stream := headless.active) is not None:
+                    stream.emit("steered", count=len(taken))
+            return {"role": "user", "content": "\n\n".join(taken)}
+
+        client = prompt_run.PromptClient(request["mcp_servers"], approve if request["approval"] else None,
+                                         take_steer)
         token = prompt_run.prompt_client.set(client)
         try:
             return cli.main()

@@ -71,6 +71,48 @@ def test_saved_literal_prompt_and_runtime_denial(tmp_path, monkeypatch, acp_prov
     assert Path(starts[0]["file"]).stem == session_id
 
 
+def test_a_steer_joins_the_conversation_at_the_tool_boundary(tmp_path, monkeypatch, acp_provider):
+    base_url, requests = acp_provider
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "profile"
+    agent = home / "agents" / "defaultagent"
+    agent.mkdir(parents=True)
+    (agent / "agent.yaml").write_text("tools:\n  - read:eager\n")
+    (agent / "prompt.md").write_text("Read the requested file.")
+    (workspace / "workspace-note.txt").write_text("note")
+    for key in tuple(os.environ):
+        if key.startswith("JS_"):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "JS_HOME": str(home), "JS_PROVIDER": "llama.cpp", "JS_BASE_URL": base_url,
+        "JS_API_KEY": "fixture", "JS_MODEL": "acp-fixture", "NO_PROXY": "127.0.0.1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    steers = acp_turn.TurnInput()
+    output = []
+
+    async def emit(event):
+        output.append(event)
+
+    async def allow_and_steer(call):
+        # Sent while the tool waits on its approval: ahead of the tool boundary.
+        await steers.steer("and say it twice")
+        return None
+
+    async def run():
+        async with asyncio.timeout(20):
+            await acp_turn.run_turn(cwd=workspace, session_id=uuid4().hex, text="read the note", options=[],
+                                   mcp_servers={}, emit=emit, approve=allow_and_steer, steers=steers)
+
+    asyncio.run(run())
+    assert steers.waiting == []
+    messages = requests[1][1]["messages"]
+    assert [message["role"] for message in messages[-2:]] == ["tool", "user"]
+    assert messages[-1]["content"] == "and say it twice"
+    assert not any(event["type"] == "steered" for event in output)
+
+
 @pytest.mark.parametrize("stdout, diagnostic", [
     ("garbage", "Invalid js worker JSON stream"),
     ('{"type":"error","message":"model failed"}', "model failed"),

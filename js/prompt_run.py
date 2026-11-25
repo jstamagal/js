@@ -88,10 +88,12 @@ def _raise_keyboard_interrupt(*_args) -> None:
 
 @dataclass(frozen=True)
 class PromptClient:
-    """A protocol client supplies literal prompt text, session tools and approval."""
+    """A protocol client supplies literal prompt text, session tools, approval
+    and what its user says while the turn runs."""
 
     mcp_servers: dict
     approve: events.Approve | None
+    steer: Callable[[], dict | None] | None = None
 
 
 prompt_client: ContextVar[PromptClient | None] = ContextVar("prompt_client", default=None)
@@ -378,6 +380,8 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
         telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(inputs.events))
     if inputs.client is not None:
         turn_kwargs["approve"] = inputs.client.approve
+        if inputs.client.steer is not None:
+            turn_kwargs["steer"] = inputs.client.steer
     if inputs.maxout is not None:
         turn_kwargs["max_output_override"] = inputs.maxout
     prepared.started_at = time.time()

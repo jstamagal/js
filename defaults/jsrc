@@ -84,6 +84,9 @@ set SUBAGENT_WORKERS_MAX 8
 # --- swarm ---
 set SWARM_ACTIVE_MAX 0
 
+# --- acp ---
+set ACP_STEER_WAIT 2
+
 # --- kernel ---
 set KERNEL_VERBOSITY normal
 set KERNEL_LINES_MAX 24
