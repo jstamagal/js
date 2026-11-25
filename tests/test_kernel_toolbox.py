@@ -1172,3 +1172,83 @@ def test_an_agent_listing_kernel_and_toolbox_gets_them_with_default_settings(mon
 
     assert {"kernel", "toolbox"} <= set(surface.by_name)
     assert seen == []
+
+
+@needs_kernel
+def test_toolbox_load_and_save_refuse_while_a_cell_runs_and_leave_it_running(ctx):
+    ctx.kernel_wait_seconds = 0.2
+    python_kernel.kernel(code="def keep():\n    return 1\n", context=ctx)
+    python_kernel.kernel(code="import time\ntime.sleep(3)\nprint('cell done')", context=ctx)
+
+    started = time.monotonic()
+    load = tbmod.toolbox(action="load", context=ctx)
+    save = tbmod.toolbox(action="save", name="keep", note="n", context=ctx)
+
+    assert time.monotonic() - started < 2
+    assert load.startswith("ERROR") and load.splitlines()[-1].endswith("RUNNING")
+    assert save.startswith("ERROR") and save.splitlines()[-1].endswith("RUNNING")
+    finished = python_kernel.kernel(action="wait", timeout=30, context=ctx)
+    assert "cell done" in finished
+    assert "KeyboardInterrupt" not in finished
+
+
+@needs_kernel
+def test_output_over_the_cap_keeps_the_traceback_and_the_namespace_line(ctx):
+    ctx.max_tool_result_bytes = 4000
+    result = python_kernel.kernel(
+        code="for i in range(3000): print('row', i)\nraise ValueError('the real error')",
+        context=ctx,
+    )
+
+    model = result.model
+    assert len(model.encode()) <= 4000
+    assert "row 0" in model and "row 2999" in model
+    assert "ValueError: the real error" in model
+    assert model.splitlines()[-1].startswith("NAMESPACE ")
+
+
+@needs_kernel
+def test_a_call_after_the_kernel_died_starts_a_new_one_that_records_why(ctx):
+    python_kernel.kernel(code="x = 1", context=ctx)
+    ctx.kernel_session.manager.provisioner.process.kill()
+    ctx.kernel_session.manager.provisioner.process.wait()
+
+    result = python_kernel.kernel(code="print('fresh')", context=ctx)
+
+    assert ctx.kernel_session.replaced == "died"
+    assert "fresh" in result
+
+
+@needs_kernel
+def test_save_accepts_match_captures_and_calls_through_tools(ctx):
+    python_kernel.kernel(code=(
+        "def head(value):\n"
+        "    match value:\n"
+        "        case [first, *rest]:\n"
+        "            return first, rest\n"
+        "        case {'key': found, **others}:\n"
+        "            return found, others\n"
+        "    return tools.names()\n"
+    ), context=ctx)
+
+    report = tbmod.toolbox(action="save", name="head", note="n", context=ctx)
+
+    assert not report.startswith("ERROR")
+
+
+def test_type_parameters_bind_their_names():
+    assert tbmod.unbound_names("def first[T](items: list[T]) -> T:\n    return items[0]\n") == []
+
+
+def test_prune_keeps_a_finished_handle_whose_output_was_never_read():
+    session = python_kernel.KernelSession(cwd=Path("."), artifacts=Path("."))
+    for index in range(python_kernel.KEEP_FINISHED_HANDLES + 3):
+        handle = python_kernel.CellHandle(id=str(index), msg_id=str(index), code="",
+                                          started=float(index), finished=True)
+        handle.messages = [{}]
+        handle.delivered = 0 if index == 0 else 1
+        session.handles[handle.id] = handle
+
+    session.prune()
+
+    assert "0" in session.handles

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Kernel and toolbox fixes from an agent-style shakedown.**
+  - `toolbox load` and `save` refuse while a kernel cell is still running, instead of queueing behind it and interrupting it on their timeout.
+  - A kernel result over `TOOL_RESULT_MAX` cuts the middle of the printed output, so the traceback, `IMAGE` lines and the `HANDLE`/`NAMESPACE` line survive.
+  - A call that finds the kernel dead says the previous kernel died before it starts a new one.
+  - `toolbox save` accepts definitions that call js tools through `tools.<name>`, `match` capture patterns and PEP 695 type parameters.
+  - A finished cell whose output was never read keeps its handle.
 - **The `twotool` agent is gone.** `js --agent twotool` no longer exists; `kernel` and `toolbox` are listed in any agent.yaml like other tools.
 - **Dependencies bumped; ruff is no longer held back.**
   - The lock moves to current releases, including:

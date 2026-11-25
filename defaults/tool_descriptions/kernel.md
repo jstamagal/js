@@ -50,8 +50,10 @@ Output behavior:
   raises returns the real traceback, not a summary.
 - Images produced by matplotlib and friends are written to files under
   `~/.js/state/kernel/` and reported as `IMAGE <path>`.
-- The whole result is capped by `TOOL_RESULT_MAX` with a visible
-  truncation marker. Do not shrink output by hand; let the cap do it.
+- The whole result is capped by `TOOL_RESULT_MAX`. Past the cap the middle of
+  the printed output is cut, with a line saying how much; the traceback,
+  `IMAGE` lines and the closing `HANDLE` or `NAMESPACE` line always arrive.
+  Do not shrink output by hand; let the cap do it.
 
 Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`
 that ran out of time, from `action="interrupt"`, or from Ctrl-C on the turn that
@@ -80,7 +82,9 @@ instead of queueing behind it and waiting out its timeout.
 
 If the kernel process actually dies (a segfault, an `os._exit`, the OOM killer)
 the result says so plainly and names the cell. That is the one case where
-everything is gone and `restart=true` plus a rebuild is the answer.
+everything is gone and `restart=true` plus a rebuild is the answer. A kernel
+that died while you were away is replaced by the next call, which opens with
+`kernel started` and says the previous kernel died.
 
 Calling js tools from a cell: the namespace holds `tools`, and
 `tools.<name>(...)` calls the js tool `<name>` and returns its result as a

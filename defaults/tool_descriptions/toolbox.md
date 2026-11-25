@@ -31,6 +31,10 @@ the first `list` or `load` copies it into the global toolbox. It is an ordinary
 tool from then on — edit it, refine it, or delete it. Nothing overwrites a copy
 that already exists, including a reinstall.
 
+`load` and `save` run in the kernel, so they need it idle: while a cell is
+still running they return an ERROR naming its handle instead of queueing
+behind it.
+
 `load` execs every healthy tool file into the kernel namespace, then reports
 what arrived. Each file is exec'd separately, so one broken tool costs you that
 tool and nothing else. Until it has run, the kernel namespace has none of the
@@ -51,8 +55,9 @@ Before writing, `save` hoists the definition's module imports into the file so
 it stands alone, and refuses the save if the definition still reads a name the
 file would not carry: a session constant, a client built in an earlier cell, a
 helper you defined but never saved. Calling another saved tool is fine — every
-tool file execs into one namespace at load — so only names that would be absent
-there count. The ERROR names every one of them; save those as their own tools,
+tool file execs into one namespace at load — and so is calling js tools through
+`tools.<name>(...)`, which every kernel has, so a saved tool can be a whole
+workflow. Only names that would be absent there count. The ERROR names every one of them; save those as their own tools,
 inline them, or pass a complete definition in `source`. Nothing is written and
 no revision is bumped by a refused save. The same check runs on an explicit
 `source`.
