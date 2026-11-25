@@ -59,3 +59,13 @@ ARGUMENT_BAN_FALLBACKS = {
     member.name: member.replaces for suite in COMPATIBILITY_SUITES for member in suite.members
 }
 COMPATIBILITY_TOOL_NAMES = frozenset(ARGUMENT_BAN_FALLBACKS)
+
+_DISPLAY_NAMES = {
+    member.name: f"{suite.name}:{member.public_name}"
+    for suite in COMPATIBILITY_SUITES for member in suite.members
+}
+
+
+def display_name(name: str) -> str:
+    """The tool's label on the operator's screen."""
+    return _DISPLAY_NAMES.get(name, name)

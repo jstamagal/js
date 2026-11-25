@@ -69,6 +69,7 @@ def test_project_jsrc_paranoid_mode_masks_login_keys(monkeypatch, tmp_path: Path
     monkeypatch.delenv("JS_PARANOID_MODE", raising=False)
     project = tmp_path / "project"
     (project / ".js").mkdir(parents=True)
+    (project / ".git").mkdir()
     (project / ".js" / "jsrc").write_text("set PARANOID_MODE on\n")
     monkeypatch.chdir(project)
     assert _login_key_as_shown(monkeypatch, "--login", "openai") != "sk-1234567890abcd"

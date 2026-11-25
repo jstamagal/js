@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import ai
@@ -369,3 +369,27 @@ def sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message:
     if not changed:
         return msg
     return msg.model_copy(update={"parts": new_parts})
+
+
+def rewritten_call(pc: PendingToolCall, arguments_json: str, registry: ToolRegistry) -> PendingToolCall:
+    """``pc`` with the arguments an `on tool_call` handler rewrote it to. The
+    rewrite is held to the same schema and argument bans as the model's own
+    arguments; one that fails them refuses the call instead of running it.
+    History keeps the model's arguments: only the dispatch sees these."""
+    tool = registry.resolve(pc.name)
+    if tool is None:
+        return pc
+    schema = tool.openai_spec()["function"]["parameters"]
+    try:
+        parsed = json.loads(arguments_json)
+    except ValueError as exc:
+        return replace(pc, validation_error=f"ERROR: rewritten arguments do not parse: {exc}", refused=True)
+    prepared = tool.prepare_args(parsed) if tool.prepare_args else parsed
+    arguments = tool_args.without_underscore_extras(tool_args.coerce_to_schema(prepared, schema), schema)
+    problem = tool_args.schema_error(arguments, schema)
+    if problem is not None:
+        return replace(pc, validation_error=f"ERROR: an on tool_call handler rewrote {tool.name} to invalid arguments: {problem}", refused=True)
+    banned = registry.argument_refusal(tool.name, arguments)
+    if banned is not None:
+        return replace(pc, validation_error=banned, refused=True)
+    return replace(pc, arg_chunks=[compact_json(arguments)])

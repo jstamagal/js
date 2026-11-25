@@ -167,6 +167,7 @@ def test_compact_loads_the_jsrc_stack_its_command_line_names(monkeypatch, tmp_pa
     (tmp_path / ".js" / "jsrc.deep").write_text("set SUBAGENT_DEPTH_MAX 7\n", encoding="utf-8")
     project = tmp_path / "project"
     (project / ".js").mkdir(parents=True)
+    (project / ".git").mkdir()
     (project / ".js" / "jsrc").write_text("set FETCH_TIMEOUT 42\n", encoding="utf-8")
     monkeypatch.chdir(project)
     session_file = session_store.folder_for(project) / "compact-session.jsonl"

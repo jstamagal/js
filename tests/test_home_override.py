@@ -97,7 +97,7 @@ def test_selected_home_replaces_profile_even_when_started_in_user_home(tmp_path,
     from js.config import from_env
     cfg = from_env(save_session=False)
     assert cfg.model != 'real-profile'
-    assert cfg.prompt_roots[1:] == (selected / 'agents', selected / 'agents')
+    assert cfg.prompt_roots[1:] == (selected / 'agents',)
     assert paths.find('jsrc') == paths.defaults_dir() / 'jsrc'
 
 

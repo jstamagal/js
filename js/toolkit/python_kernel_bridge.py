@@ -77,6 +77,7 @@ def install_cell(socket_path: Path, token: str) -> str:
         "    module = types.ModuleType('js_tools')\n"
         f"    exec(compile({client_source()!r}, 'js_tools', 'exec'), module.__dict__)\n"
         "    sys.modules['js_tools'] = module\n"
+        "    get_ipython().ast_transformers.append(module.class_sources)\n"
         f"    globals()['tools'] = module.Tools({str(socket_path)!r}, {token!r})\n"
         "__js_install_tools()\n"
         "del __js_install_tools\n"
@@ -282,7 +283,9 @@ class ToolBridge:
         call_id = f"kernel-tools-{next(self._calls)}"
         with call_scope(call_id, for_model=False):
             hooks = context.tool_call_hooks
-            refusal = _hook_refusal(hooks, call_id, tool.name, arguments)
+            refusal, rewrite = _hook_decision(hooks, call_id, tool.name, arguments)
+            if refusal is None and rewrite is not None:
+                arguments, refusal = _rewritten_arguments(tool, rewrite, schema, registry)
             approval = context.tool_approval
             if refusal is None and approval is not None:
                 refusal = approval.refusal_from_thread(
@@ -329,10 +332,24 @@ def _emit(hooks: Any, event: str, **payload: Any) -> Any:
         return None
 
 
-def _hook_refusal(hooks: Any, call_id: str, name: str, arguments: dict) -> str | None:
-    """The refusal an `on tool_call` handler gives this call, or None. The
-    payload has the shape a direct call's has: arguments as JSON text."""
+def _hook_decision(hooks: Any, call_id: str, name: str, arguments: dict) -> tuple[str | None, str | None]:
+    """The refusal an `on tool_call` handler gives this call and the arguments
+    it rewrote the call to (JSON text), each None when no handler gave one.
+    The payload has the shape a direct call's has: arguments as JSON text."""
 
     emission = _emit(hooks, "tool_call", id=call_id, name=name,
                      arguments=json.dumps(arguments, default=str))
-    return events.refusal_of(emission)
+    return events.refusal_of(emission), events.arguments_of(emission)
+
+
+def _rewritten_arguments(tool: Any, rewrite: str, schema: dict, registry: Any) -> tuple[dict, str | None]:
+    """The arguments a handler rewrote a kernel call to, held to the schema
+    and argument bans the cell's own arguments met; the refusal when they fail."""
+    arguments = json.loads(rewrite)
+    if tool.prepare_args is not None:
+        arguments = tool.prepare_args(arguments)
+    arguments = tool_args.coerce_to_schema(arguments, schema)
+    problem = tool_args.schema_error(arguments, schema)
+    if problem is not None:
+        return arguments, f"ERROR: an on tool_call handler rewrote {tool.name} to invalid arguments: {problem}"
+    return arguments, registry.argument_refusal(tool.name, arguments)

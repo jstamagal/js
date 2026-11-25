@@ -63,6 +63,13 @@ def test_clean_strips_osc_csi_and_control_bytes_but_keeps_newline_and_tab():
     assert control_sequences.clean(raw) == "abc\tdefgh\nijkl"
 
 
+def test_pi_exchange_headers_use_suite_labels():
+    for name in ("read", "write", "bash", "edit"):
+        rows = _plain(_shown(f"pi_{name}", "ok", 2))
+        assert rows[0].split()[1] == f"pi:{name}"
+    assert _plain(_running("fs_search", {}, 2))[0].split()[1] == "fs_search"
+
+
 def test_292_line_result_at_each_tools_level():
     rows = [f"row {index} of the file" for index in range(1, 293)]
 

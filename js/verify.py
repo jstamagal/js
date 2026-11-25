@@ -47,8 +47,9 @@ def verify(agent: str | None = None) -> list[str]:
         validate_agent_id(agent)
         agent_ids = [agent]
     else:
-        configs = {paths.defaults_dir() / 'jsrc', home / 'jsrc', paths.project_home(project) / 'jsrc', paths.project_home(project) / 'jsrc.local'}
-        for directory in (home, paths.project_home(project)):
+        setup_dirs = ((home,) if paths.uses_home(project) else ()) + paths.project_dirs(project)
+        configs = {paths.defaults_dir() / 'jsrc', *(directory / 'jsrc' for directory in setup_dirs)}
+        for directory in setup_dirs:
             configs.update(directory.glob('jsrc.*'))
         for path in sorted(configs):
             if path.is_file():
@@ -74,9 +75,9 @@ def verify(agent: str | None = None) -> list[str]:
                     policy.expand(profile.tools or (), config, f"{location} models")
         check(location, validate_agent)
 
-    shared_project = paths.shared_skills_dir() if project.resolve() == paths.user_home().resolve() else project / '.agents' / 'skills'
-    skill_roots = (skills.BUILTIN_SKILLS_DIR, paths.global_skills_dir(), paths.shared_skills_dir(),
-                   shared_project, paths.project_home(project) / 'skills')
+    global_skills = (paths.global_skills_dir(), paths.shared_skills_dir()) if paths.uses_home(project) else ()
+    skill_roots = (skills.BUILTIN_SKILLS_DIR, *global_skills,
+                   *(root for layer in paths.project_skill_dirs(project) for root in layer))
     for root in skill_roots:
         for path in skills._skill_paths(root):
             check(path, lambda path=path: skills._index_skill(path, 'verify'))

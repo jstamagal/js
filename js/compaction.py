@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import (
+    cache_keepalive,
     compaction_flight,
     compaction_settings,
     compaction_summary,
@@ -97,6 +98,7 @@ def note_response(context: Any, *, model_key: str, cache_read: int | None, now: 
 def history_rewritten(context: Any) -> None:
     """A deliberate rewrite shrinks the next cache read; it is not a break."""
     context.cache_read_baseline = None
+    cache_keepalive.forget(context)
 
 
 def auto_paused(cfg: Config, context: Any) -> bool:

@@ -33,7 +33,7 @@ needs_kernel = pytest.mark.skipif(HAVE_KERNEL is False,
 def ctx(tmp_path, monkeypatch):
     """A ToolContext whose toolbox writes into tmp_path, never the real config dir."""
     work = tmp_path / "work"
-    work.mkdir()
+    (work / ".git").mkdir(parents=True)
     monkeypatch.setattr(paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
     context = ToolContext(cwd=work)
     context.model = "test-model"
@@ -215,7 +215,7 @@ def test_revision_numbering_does_not_mix_global_and_project_archives(ctx):
     cwd = Path(ctx.cwd)
     for scope in ("global", "project"):
         tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n", scope=scope)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
     archive = global_dir / ".history" / "adder.r9.py"
     archive.parent.mkdir()
     archive.write_text("global revision nine")
@@ -292,7 +292,7 @@ def test_discover_records_a_syntax_error_as_broken_and_still_indexes_the_rest(ct
 
 def test_a_project_tool_shadows_a_global_tool_of_the_same_name(ctx):
     cwd = Path(ctx.cwd)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
     for directory, body in ((global_dir, "return 'global'"), (project_dir, "return 'project'")):
         directory.mkdir(parents=True)
         (directory / "who.py").write_text(f"def who():\n    {body}\n", encoding="utf-8")
@@ -899,6 +899,65 @@ def test_a_tool_saved_from_the_kernel_loads_into_a_fresh_one_with_its_imports(ct
 
 
 @needs_kernel
+def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
+    python_kernel.kernel(code=(
+        "from pathlib import Path as FilePath\n"
+        "from dataclasses import replace as copy_with\n"
+        "from os.path import basename\n"
+        "def revised(record, path):\n"
+        "    return copy_with(record, name=basename(FilePath(path)))\n"
+    ), context=ctx)
+
+    tbmod.toolbox(action="save", name="revised", context=ctx)
+    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    restored = {}
+    body = (directory / "revised.py").read_text()
+    assert "from pathlib import Path as FilePath" in body
+    assert "from os.path import basename" in body
+    exec(body, restored)
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class Record:
+        name: str
+
+    assert restored["revised"](Record("old"), "/tmp/new") == Record("new")
+
+
+@needs_kernel
+def test_dynamic_redefinition_never_saves_the_earlier_cell(ctx):
+    python_kernel.kernel(code="def current(): return 1", context=ctx)
+    tbmod.toolbox(action="save", name="current", context=ctx)
+    python_kernel.kernel(code=(
+        "from functools import cache, wraps\n"
+        "exec('@cache\\n@wraps(current)\\ndef current(): return 2')"
+    ), context=ctx)
+
+    report = tbmod.toolbox(action="save", name="current", context=ctx)
+
+    record = tbmod.discover(Path(ctx.cwd))["current"]
+    assert report.startswith("ERROR") and "source" in report
+    assert record.revision == 1
+    assert archived_revisions(record) == []
+
+
+@needs_kernel
+def test_class_save_requires_the_source_of_the_live_class(ctx):
+    python_kernel.kernel(code="class Thing: v = 1", context=ctx)
+    tbmod.toolbox(action="save", name="Thing", context=ctx)
+    record = tbmod.discover(Path(ctx.cwd))["Thing"]
+    restored = {}
+    exec(record.path.read_text(), restored)
+    assert restored["Thing"].v == 1
+
+    python_kernel.kernel(code="exec('class Thing: v = 2')", context=ctx)
+    report = tbmod.toolbox(action="save", name="Thing", context=ctx)
+    assert report.startswith("ERROR") and "source" in report
+    assert tbmod.discover(Path(ctx.cwd))["Thing"].revision == 1
+
+
+@needs_kernel
 def test_load_reports_a_broken_tool_by_name_and_still_loads_the_healthy_ones(ctx):
     directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
     directory.mkdir(parents=True)
@@ -1067,7 +1126,7 @@ def test_the_shipped_example_loads_and_calls_cleanly_in_a_fresh_kernel(ctx):
 def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shadows_it(ctx):
     """discover() lets project shadow global; save must not trust that view."""
     cwd = Path(ctx.cwd)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g1'\n",
                          model="qwen", scope="global")
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'p1'\n",

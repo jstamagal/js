@@ -582,6 +582,7 @@ def say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str 
     words += command_line.options_argv(current())
     if _paths.custom_home():
         words += ["--home", str(_paths.home())]
+    words += command_line.argv(*command_line.isolate_argv())
     words += ["--session", hint]
     with transcript_mod.transcript_stdio(telemetry):
         msgs.warn(msgs.CONTINUE_HINT, command=shlex.join(words))

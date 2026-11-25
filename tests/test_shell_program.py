@@ -132,3 +132,13 @@ def test_registered_setting_can_disable_pipefail(tmp_path):
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SHELL_PIPEFAIL": False})))
     result = shell.shell("false | cat", context=context)
     assert _exit_code(result) == 0
+
+
+@needs_zsh
+def test_zsh_passes_an_unmatched_glob_through_like_bash(tmp_path):
+    context = ToolContext(cwd=tmp_path, shell_program="zsh")
+
+    result = shell.shell("printf %s --include=*.log", context=context)
+
+    assert _exit_code(result) == 0
+    assert "--include=*.log" in result

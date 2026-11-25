@@ -302,6 +302,7 @@ def run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[st
             except (OSError, UnicodeError):
                 continue
             stack.append(path.resolve(strict=False))
+            state.rc_baseline = copy.deepcopy(state.settings)
             try:
                 for lineno, raw in enumerate(lines, 1):
                     with contextlib.redirect_stdout(io.StringIO()):
@@ -313,6 +314,7 @@ def run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[st
     finally:
         state.settings = live
         state.rc_replay = False
+        state.rc_baseline = None
     if isinstance(live, dict):
         ran = setting_layers.over_jsrc_layer(paths, layer)
         changed: list[str] = []

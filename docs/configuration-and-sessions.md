@@ -34,18 +34,52 @@ file is read.
 
 1. `defaults/jsrc`, shipped in the package: the built-in defaults
 2. user `jsrc` (`~/.js/jsrc`)
-3. project `.js/jsrc`
-4. project `.js/jsrc.local`
+3. each project `.js/` from the repository root down to the working
+   directory: its `jsrc`, then its `jsrc.local`
+4. presets (`--preset NAME`: `~/.js/jsrc.NAME`, then each project `.js/jsrc.NAME`)
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 
-In one line: `defaults/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
-`.js/jsrc.local` < env vars < `--extra` CLI flags.
+The repository root is the nearest directory at or above the working directory
+holding a `.git`; inside a submodule it is the superproject's. Outside any
+repository there is no project layer. A `.js/` that is the home is the global
+layer only, so a repository rooted at `$HOME` reads `~/.js` once.
+
+### Isolation
+
+A `.isolate` file in a directory, or in its `.js/`, is a border: no layer
+above it is read. `~/.js` and every project `.js/` farther up are skipped for
+settings, presets, agents, skills (`~/.agents/skills` included), commands,
+toolbox, `tools.yaml` and instruction files, and so are the instruction files
+of the directories above. The marked directory's `.js/` and every chain layer
+below it stack as usual, over stock. js only reads markers; you `touch` and
+`rm` them.
+
+- js looks for a marker from the working directory up to, not including,
+  `$HOME` (every parent, outside `$HOME`). The nearest one is the border.
+- A marker inside a repository borders where it is. A marker above the
+  repository root still cuts `~/.js`, but the border sits at the root:
+  nothing above the root is read.
+- Outside a repository a marked directory is a root of its own, so
+  `touch ~/scratch/.isolate` makes `~/scratch/.js` the top layer for runs
+  from `~/scratch` and below.
+- A marker in `$HOME` or `~/.js` borders nothing, since only stock is under
+  the home.
+- A marker git tracks is ignored, and startup warns about it. Put `.isolate`
+  in your global gitignore (`~/.config/git/ignore`).
+
+`--isolate` puts the border at the nearest project `.js/` for one run, and
+`--no-isolate` ignores every marker for one run; together they are an error.
+Neither touches a file. The REPL banner names the border and what set it.
+Under isolation `/save` writes the border layer's `jsrc`, the topmost one the
+run reads. `~/.js` still holds sessions, logins, `.env`, key bindings, state
+and logs.
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. `set -<key>` drops what the layers in between set, so the setting takes its
-`defaults/jsrc` value again.
+`#`. `set -<key>` puts the setting back to what the layers below that file
+set: in `~/.js/jsrc` that is the `defaults/jsrc` value, in a project `.js/jsrc`
+it is what the home and the farther project layers set.
 
 `defaults/jsrc` holds one line per registered setting and is where every default value
 lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
@@ -317,7 +351,7 @@ project.
   logins/
     logins.toml
     models-cache.json
-  sessions/<start-dir>/   # the start directory, / and _ as - (~/js -> -home-me-js)
+  sessions/<project>/    # the project root, / and _ as - (~/js -> -home-me-js)
     <session>.jsonl      # the record, append-only
     <session>.txt        # its readable transcript
     <session>/           # its subagent runs
@@ -408,19 +442,21 @@ never leaves stray files.
 ### Agent prompts
 
 Agent prompts are discovered from stock `defaults/agents/`, global `~/.js/agents/`,
-and project `.js/agents/`; files layer per relative name: project > home > defaults.
+and each project `.js/agents/` in the chain. The nearest layer holding an agent's
+directory supplies the whole agent; lower copies of it are not read.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:
 
-- `JS.md` and `JS.local.md` from `~/.js/`. These are js's own
-  always-on operator context and load whatever directory js runs in. They are
-  deliberately NOT called `AGENTS.md`: that name is the per-repo convention a
-  dozen other tools also read, so a global one would silently apply
-  repo-shaped instructions everywhere.
-- `AGENTS.md` and `AGENTS.local.md` from the project, exactly the way any other
-  directory's project files load. A `~/.js/AGENTS.md` therefore applies
-  only when js is run from inside `~/.js`.
+- `JS.md` and `JS.local.md` (GLOBAL_INSTRUCTION_FILES) from `~/.js/` and from
+  each project `.js/` in the chain. `~/.js/JS.md` loads whatever directory js
+  runs in. These are deliberately NOT called `AGENTS.md`: that name is the
+  per-repo convention a dozen other tools also read, so a global one would
+  silently apply repo-shaped instructions everywhere.
+- From each directory from the repository root down to the working directory
+  (PROJECT_INSTRUCTION_FILES): `JS.md`, else `AGENTS.md`; then `JS.local.md`,
+  else `AGENTS.local.md`. Nothing above the root is read, and outside a
+  repository none of these is.
 
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
@@ -431,15 +467,26 @@ entries in `noun:modifier` form, and optional `model:`, `secondary_model:`,
 
 ## Session Resolution
 
-Sessions are filed by the directory js started in:
-`~/.js/sessions/<start-dir>/`, where the folder name is the absolute path with
-`/` and `_` replaced by `-`. An agent in `~/js/js/toolkit` greps
-`~/.js/sessions/-home-me-js-js-toolkit/*.txt`; a prefix glob
-(`-home-me-js*`) covers a tree.
+Sessions are filed by the project js started in:
+`~/.js/sessions/<project>/`, where `<project>` is the project root (the
+project chain's root: the nearest `.git`, lifted out of a submodule), else the
+directory js started in, as an absolute path with `/` and `_` replaced by
+`-`. A run in `~/js/js/toolkit` files its sessions in
+`~/.js/sessions/-home-me-js/`; each start record holds the directory the run
+started in (`cwd`).
+
+When the repository root is your home directory, sessions are filed by the
+start directory or its isolation border.
+
+`--session NAME` looks in the project's folder first, then in the start
+directory's own folder (sessions filed there before they were filed by
+project stay there, unmoved), then in every folder. A tail of a generated name
+that several sessions in one folder share resolves to the one started in this
+directory, when exactly one was.
 
 Prompt and pipe runs save by default. Without `--session`, a saved run reserves
 a new session named `YYYY-MM-DDTHHMM-xxxx` (local time, four hex digits) in the
-current directory's folder and prints a resume command after the answer. This
+project's folder and prints a resume command after the answer. This
 is the normal choice for an agent driver: use the same session for review and
 correction rounds so the model does not have to re-read all prior context.
 

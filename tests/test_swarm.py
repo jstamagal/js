@@ -394,6 +394,7 @@ def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
 # --------------------------------------------------------------------------
 
 def _agent_dir(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir(exist_ok=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("JS_DEFAULT_AGENT", "voice")

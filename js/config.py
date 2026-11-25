@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from . import (
     fset as _fset,
@@ -162,7 +163,7 @@ class Config(_turn_settings.ConfigSettings):
     reasoning_effort: str | None = None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
     debug_log: Path | None = None
     history_file: Path = field(default_factory=lambda: _paths.prompt_history_file())
-    sessions_dir: Path = field(default_factory=lambda: _session_store.folder_for(Path.cwd().resolve(strict=False)))
+    sessions_dir: Path = field(default_factory=lambda: _session_store.project_folder(Path.cwd()))
     session_file: Path = field(default_factory=lambda: Path(os.devnull))
     prompts_dir: Path | tuple[Path, ...] = None  # type: ignore[assignment]  # None: found in prompt_roots
     provider_headers: dict[str, str] = field(default_factory=dict)
@@ -274,13 +275,15 @@ def _existing_tail_match(root: Path, relative_path: Path, resolved_root: Path, f
     return None
 
 
-def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False) -> Path:
+def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False,
+                         start: Path | None = None) -> Path:
     """Resolve a session name to its file, optionally creating it in `sessions_dir`.
 
-    `sessions_dir` is the current directory's folder. An existing session is
-    looked up there first, then in every folder (`js.session_store.find`); a
-    name that more than one other folder holds is refused. A new session is
-    only ever created in `sessions_dir`."""
+    `sessions_dir` is the project's folder and ``start`` (default: here) the
+    directory the run started in. An existing session is looked up in the
+    project's folder first, then in ``start``'s own folder, then in every
+    folder (`js.session_store.find`); a name that more than one other folder
+    holds is refused. A new session is only ever created in `sessions_dir`."""
     raw_path = Path(session).expanduser()
     root = _paths.sessions_root()
     resolved_root = root.resolve(strict=False)
@@ -310,7 +313,7 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     found = (
         _existing_tail_match(sessions_dir, relative_path, resolved_sessions_dir)
         or _existing_tail_match(root, relative_path, resolved_root, first=0)
-        or _session_store.find(session, relative_path, sessions_dir)
+        or _session_store.find(session, relative_path, sessions_dir, Path.cwd() if start is None else start)
     )
     if found is not None:
         return found
@@ -341,15 +344,6 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     return concrete_path
 
 
-def _same_config_path(one: Path, other: Path) -> bool:
-    """True when two jsrc paths name the same file, however each is spelled.
-
-    The home directory reached through a second name (a symlink to it, or a
-    physical cwd where `$HOME` is the link) is still the home directory: its
-    jsrc is the global layer, so the project branch must not add it back."""
-    return one == other or one.resolve(strict=False) == other.resolve(strict=False)
-
-
 @dataclass(frozen=True)
 class InvocationSources:
     """What a command line adds to the settings a run loads: ``extras`` from
@@ -366,8 +360,8 @@ def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[
     """Resolve ``--preset foo,bar`` to ``jsrc.foo``/``jsrc.bar`` files, in order.
 
     Each preset name layers on top of the base jsrc files like another `set`
-    script; later presets win over earlier ones, and a project ``.js/jsrc.<name>``
-    wins over the global ``jsrc.<name>``. Missing files are simply skipped by the
+    script; later presets win over earlier ones, and each project ``.js/jsrc.<name>``
+    from the root down wins over the global ``jsrc.<name>`` and the ones above it. Missing files are simply skipped by the
     loader, so an unused preset is a no-op (the CLI warns when a name matches
     nothing)."""
     paths: list[Path] = []
@@ -375,12 +369,10 @@ def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[
         name = raw.strip()
         if not name:
             continue
-        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
-        local_path = _paths.project_home(project_dir) / f"jsrc.{name}"
-        if not sources.ignore_global_config:
-            paths.append(global_path)
-        if not sources.ignore_local_config and not _same_config_path(local_path, global_path):
-            paths.append(local_path)
+        if not sources.ignore_global_config and _paths.uses_home(project_dir):
+            paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
+        if not sources.ignore_local_config:
+            paths.extend(directory / f"jsrc.{name}" for directory in _paths.project_dirs(project_dir))
     return paths
 
 
@@ -408,22 +400,48 @@ def run_settings(cwd: Path | None = None, *, sources: InvocationSources | None =
 
 
 def jsrc_paths(project_dir: Path, sources: InvocationSources = InvocationSources()) -> list[Path]:
-    """The jsrc files a run loads, lowest layer first, each once.
-
-    Run from the home directory, the project `.js/` is `~/.js` itself, so its
-    jsrc is the global layer and loads there only."""
+    """The jsrc files a run loads, lowest layer first, each once: the home
+    jsrc, then each project `.js/` from the root down to ``project_dir``,
+    its jsrc then its jsrc.local (`paths.project_dirs`)."""
     paths: list[Path] = []
-    global_path = _paths.global_config_file()
-    if not sources.ignore_global_config:
-        paths.append(global_path)
+    if not sources.ignore_global_config and _paths.uses_home(project_dir):
+        paths.append(_paths.global_config_file())
     if not sources.ignore_local_config:
-        local_path = _paths.project_home(project_dir) / "jsrc"
-        if not _same_config_path(local_path, global_path):
-            paths.append(local_path)
-        paths.append(_paths.project_home(project_dir) / "jsrc.local")
+        for directory in _paths.project_dirs(project_dir):
+            paths.extend((directory / "jsrc", directory / "jsrc.local"))
     # Presets layer on top of the base jsrc files (still below env / --extra).
     paths.extend(_preset_config_paths(sources, project_dir))
     return list(dict.fromkeys(paths))
+
+
+def _instruction_choices(entry: Any) -> tuple[str, ...]:
+    """One PROJECT_INSTRUCTION_FILES entry as the names it tries, first
+    present wins: a name, or a list of names."""
+    if isinstance(entry, str):
+        return (entry,)
+    if isinstance(entry, list) and entry and all(isinstance(name, str) for name in entry):
+        return tuple(entry)
+    raise ValueError(f"PROJECT_INSTRUCTION_FILES entry must be a name or a list of names: {entry!r}")
+
+
+def instruction_files_for(project_dir: Path, setup_names: list[str], project_names: list) -> tuple[Path, ...]:
+    """The instruction files a run started in ``project_dir`` reads, lowest
+    layer first. The home reads ``setup_names`` (GLOBAL_INSTRUCTION_FILES).
+    Then, for each directory from the project root down to ``project_dir``:
+    its `.js/` reads ``setup_names`` too, and the directory itself reads each
+    ``project_names`` entry (PROJECT_INSTRUCTION_FILES), the first present
+    name of the entry. Nothing above the root is read, and outside a
+    repository only the home is. Under isolation to a project `.js/` the
+    home reads nothing."""
+    found = [_paths.home() / name for name in setup_names] if _paths.uses_home(project_dir) else []
+    setup = {directory.parent: directory for directory in _paths.project_dirs(project_dir)}
+    choices = [_instruction_choices(entry) for entry in project_names]
+    for directory in _paths.project_chain(project_dir):
+        if directory in setup:
+            found.extend(setup[directory] / name for name in setup_names)
+        for names in choices:
+            found.extend(next(((directory / name,) for name in names if (directory / name).is_file()), ()))
+    return tuple(dict.fromkeys(path for path in found if path.is_file()))
 
 
 def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
@@ -565,10 +583,10 @@ def from_env(
     options = current()
     mcp = None if options.skips_mcp else mcp_config.resolve(js_root_settings, agent_id)
 
-    # Sessions are filed by the directory js started in; what belongs to the
+    # Sessions are filed by the project js started in; what belongs to the
     # agent across directories (its latest session) lives in its state dir.
     # The REPL's prompt history is one file for every agent.
-    sessions_dir = _session_store.folder_for(project_dir)
+    sessions_dir = _session_store.project_folder(project_dir)
     state_dir = _paths.state_root() / agent_id
     state_dir.mkdir(parents=True, exist_ok=True)
     history_setting = _settings.knob(js_root_settings, "HISTORY_FILE")
@@ -576,7 +594,7 @@ def from_env(
 
     session_name = session if session is not None else env.get("JS_SESSION")
     if session_name is not None:
-        session_file = resolve_session_file(sessions_dir, session_name, create=save_session)
+        session_file = resolve_session_file(sessions_dir, session_name, create=save_session, start=project_dir)
         if save_session:
             _session_store.write_latest(state_dir, session_file)
     elif save_session:
@@ -585,8 +603,10 @@ def from_env(
         session_file = Path(os.devnull)
     debug = state_dir / "debug.log" if runtime_debug else None
 
-    global_instruction_files = tuple(_paths.home() / name for name in _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"))
-    project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
+    instruction_files = (() if options.skips_agents_md else instruction_files_for(
+        project_dir,
+        _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"),
+        _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES")))
     bind_formats(js_root_settings)
 
     prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else _paths.agent_roots(project_dir)
@@ -607,8 +627,7 @@ def from_env(
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
         prompt_roots=prompt_roots,
-        agents_files=() if options.skips_agents_md else tuple(
-            p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
+        agents_files=instruction_files,
         project_dir=project_dir,
         mcp=mcp,
         explicit_model=explicit_model,

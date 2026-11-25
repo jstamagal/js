@@ -19,6 +19,7 @@ def project(tmp_path, monkeypatch) -> Path:
     """A project directory to run js in, its home elsewhere."""
     root = tmp_path / "project"
     (root / ".js").mkdir(parents=True)
+    (root / ".git").mkdir()
     monkeypatch.chdir(root)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SHELL", "/bin/sh")

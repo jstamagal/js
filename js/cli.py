@@ -87,7 +87,7 @@ def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None,
     if name is None:
         return True
     try:
-        session_file = resolve_session_file(cfg.sessions_dir, name)
+        session_file = resolve_session_file(cfg.sessions_dir, name, start=cfg.project_dir)
     except ValueError:
         # No such session yet: the run starts it.
         return True
@@ -321,6 +321,7 @@ def _main(argv: list[str] | None = None) -> int:
     _validate_output_argv(parser, dispatch_argv)
     args = parser.parse_args(dispatch_argv)
     _validate_output_flags(parser, args)
+    _paths.configure_isolate(True if args.isolate else False if args.no_isolate else None)
     if args.last_prompt is not None:
         if args.prompt is not None:
             parser.error(msgs.LAST_PROMPT_WITH_PROMPT.text())
@@ -505,6 +506,8 @@ def _setup(args: argparse.Namespace, dispatch_argv: list[str]) -> Setup | int:
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
+    for marker in _paths.tracked_markers():
+        msgs.warn(msgs.ISOLATE_TRACKED, marker=marker)
     return Setup(sources)
 
 

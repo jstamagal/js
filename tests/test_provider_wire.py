@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import ai
 import httpx2
 import pytest
 
-from js import history_record, model_client, providers
+from js import history_record, model_client, providers, usage
 
 
 def _anthropic_reply():
@@ -47,6 +48,19 @@ def _stream(monkeypatch, provider, respond, messages, **kwargs):
             )
 
     return asyncio.run(drive())
+
+
+def test_custom_anthropic_stream_records_reported_thinking_tokens(monkeypatch, tmp_path):
+    stream = (Path(__file__).parent / "fixtures" / "cpa_sonnet_stream.sse").read_bytes()
+
+    def respond(_request):
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=stream)
+
+    result = _stream(monkeypatch, "anthropic-custom", respond, [ai.user_message("ping")])
+    session = tmp_path / "session.jsonl"
+    usage.record(result.usage, model="claude-sonnet-5-5", provider_id="anthropic-custom", session_file=session)
+    call = json.loads(session.read_text())["call"]
+    assert (call["reasoning_tokens"], call["output_tokens"]) == (3530, 8333)
 
 
 @pytest.mark.parametrize("enabled", [True, False])

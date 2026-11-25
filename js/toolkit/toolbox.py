@@ -58,24 +58,38 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 # NameErrors on load: `summarise` used `statistics.fmean`, `statistics` was
 # imported in a different cell, the saved file had no import, and the tool was
 # broken the moment the session that wrote it ended. So the probe resolves every
-# free name against the live namespace: modules become import lines prepended to
+# free name against the live namespace: importable objects become lines prepended to
 # the saved body. Whatever stays unbound in that body is what `save` refuses on
 # (see `unbound_names`), because a name the file does not carry is a NameError
 # waiting for the next session that loads it.
 #
 # `inspect.getsource` covers cells IPython registered with linecache and files a
-# previous `load` exec'd; the `In` scan is the fallback for anything it misses.
+# previous `load` exec'd. For interactive classes the kernel records the cell
+# and source span when the class statement runs.
 _SOURCE_PROBE = """
 def __js_src(target_name):
-    import ast, builtins, inspect, json, textwrap
+    import ast, builtins, inspect, json, sys, textwrap
 
     def _body():
         target = globals().get(target_name)
-        if target is not None and callable(target):
+        if target_name in globals():
+            kernel_client = sys.modules.get('js_tools')
+            if inspect.isclass(target) and kernel_client is not None:
+                source = kernel_client.class_sources.source(target)
+                if source:
+                    return source
+            def owns_definition(wrapper):
+                if not inspect.isfunction(wrapper):
+                    return False
+                # A raw exec can borrow an older definition's __wrapped__.
+                inspect.findsource(wrapper.__code__)
+                return wrapper.__code__.co_name == target_name
             try:
-                return textwrap.dedent(inspect.getsource(target))
-            except (OSError, TypeError):
-                pass
+                definition = inspect.unwrap(target, stop=owns_definition)
+                subject = definition.__code__ if inspect.isfunction(definition) else definition
+                return textwrap.dedent(inspect.getsource(subject))
+            except (OSError, TypeError, ValueError):
+                return ''
         history = globals().get('In')
         if isinstance(history, list):
             wanted = ('def ' + target_name, 'class ' + target_name)
@@ -115,20 +129,72 @@ def __js_src(target_name):
                 bound.update(node.names)
         seen, out = set(), []
         for name in used:
-            if name in bound or name in dir(builtins) or name in seen:
+            if name in bound or name in seen:
                 continue
             seen.add(name)
             out.append(name)
         return out
 
+    def _from_imports(names):
+        # A public re-export can live under a different name in its defining module.
+        found = {}
+        history = globals().get('In')
+        if not isinstance(history, list):
+            return found
+        for cell in reversed(history):
+            if not names:
+                break
+            if not isinstance(cell, str) or 'import' not in cell:
+                continue
+            try:
+                statements = ast.parse(cell).body
+            except SyntaxError:
+                continue
+            for node in reversed(statements):
+                if not isinstance(node, ast.ImportFrom) or node.level or node.module == '__main__':
+                    continue
+                owner = sys.modules.get(node.module)
+                if owner is None:
+                    continue
+                for alias in node.names:
+                    name = alias.asname or alias.name
+                    if name in names and vars(owner).get(alias.name, missing) is globals()[name]:
+                        found[name] = 'from ' + node.module + ' import ' + ast.unparse(alias)
+                        names.remove(name)
+        return found
+
     source = _body()
+    missing = object()
+    names = [name for name in _free(source) if name in globals()
+             and globals()[name] is not vars(builtins).get(name, missing)]
+    recorded = _from_imports(set(names))
     imports = []
-    for name in _free(source):
-        value = globals().get(name)
-        module = getattr(value, '__name__', None) if inspect.ismodule(value) else None
-        if module:
-            imports.append('import ' + module
-                           + ('' if module == name else ' as ' + name))
+    for name in names:
+        if name in recorded:
+            imports.append(recorded[name])
+            continue
+        value = globals()[name]
+        if inspect.ismodule(value):
+            exported = value.__name__
+            statement = 'import ' + exported
+        elif inspect.isclass(value) or inspect.isroutine(value):
+            module = getattr(value, '__module__', None)
+            exported = getattr(value, '__name__', '')
+            owner = sys.modules.get(module)
+            if module == '__main__' or owner is None or vars(owner).get(exported) is not value:
+                continue
+            # A loaded tool's imports are outside In. Prefer the public package
+            # re-export when it carries the same object as the defining module.
+            parent = module.rpartition('.')[0]
+            while parent:
+                package = sys.modules.get(parent)
+                if package is not None and vars(package).get(exported) is value:
+                    module = parent
+                parent = parent.rpartition('.')[0]
+            statement = 'from ' + module + ' import ' + exported
+        else:
+            continue
+        imports.append(statement + ('' if exported == name else ' as ' + name))
     return json.dumps({'source': source, 'imports': imports})
 print('__JS_SRC__' + __js_src(%(name)r))
 del __js_src
@@ -170,9 +236,21 @@ del __js_load
 """
 
 
-def toolbox_dirs(cwd: Path) -> tuple[Path, Path]:
-    """(global, project). Project wins on a name clash, mirroring agent precedence."""
-    return _paths.global_toolbox_dir(), _paths.project_home(Path(cwd)) / "toolbox"
+def toolbox_dirs(cwd: Path) -> tuple[Path, ...]:
+    """The global toolbox, then each project `.js/toolbox` from the root down
+    to ``cwd``. A nearer one wins on a name clash, mirroring agent precedence."""
+    homes = (_paths.global_toolbox_dir(),) if _paths.uses_home(Path(cwd)) else ()
+    return (*homes, *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
+
+
+def project_toolbox_dir(cwd: Path) -> Path | None:
+    """Where a project-scope save goes: the nearest project `.js/toolbox`,
+    else the first directory of the active project chain."""
+    found = _paths.project_dirs(Path(cwd))
+    if found:
+        return found[-1] / "toolbox"
+    chain = _paths.project_chain(Path(cwd))
+    return chain[0] / ".js" / "toolbox" if chain else None
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
@@ -250,7 +328,8 @@ def _render_header(meta: dict) -> str:
 def discover(cwd: Path) -> dict[str, ToolRecord]:
     """Index every tool file. A file that will not parse is recorded, never raised."""
     found: dict[str, ToolRecord] = {}
-    for scope, directory in zip(("global", "project"), toolbox_dirs(cwd), strict=True):
+    for directory in toolbox_dirs(cwd):
+        scope = "global" if directory == _paths.global_toolbox_dir() else "project"
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.py")):
@@ -308,6 +387,7 @@ def write_revision(
     note: str = "",
     scope: str = "global",
     stamp: float | None = None,
+    directory: Path | None = None,
 ) -> str:
     """Promote a body to disk as revision N+1, archiving revision N first."""
     if not _SAFE_NAME.match(name):
@@ -323,8 +403,10 @@ def write_revision(
     if not any(isinstance(node, definitions) and node.name == name for node in tree.body):
         return f"ERROR: source must define a top-level function or class named {name!r}"
 
-    global_dir, project_dir = toolbox_dirs(cwd)
-    directory = project_dir if scope == "project" else global_dir
+    if directory is None:
+        directory = project_toolbox_dir(cwd) if scope == "project" else _paths.global_toolbox_dir()
+    if directory is None:
+        return f"ERROR: {Path(cwd)} is not inside a repository, so it has no project toolbox"
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -406,7 +488,7 @@ def restore(cwd: Path, name: str, revision: int, *, model: str = "") -> str:
         return f"ERROR: could not read {archive}: {exc}"
     body = _HEADER.sub("", text).strip()
     return write_revision(cwd, name, body, model=model or "restore",
-                          note=f"rolled back to r{revision}", scope=record.scope)
+                          note=f"rolled back to r{revision}", scope=record.scope, directory=record.path.parent)
 
 
 @dataclass

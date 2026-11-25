@@ -28,6 +28,8 @@ variables and of any filename convention:
 | `CURRENT_SESSION_AGENT` | Active agent id. |
 | `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
 | `JS_HOME` | Absolute home selected by `--home`, `JS_HOME` or `~/.js`; always set. |
+| `CURRENT_PROJECT` | The project's name: the last component of `CURRENT_PROJECT_ROOT`, e.g. `monorepo`. |
+| `CURRENT_PROJECT_ROOT` | Absolute project root: the project chain's root, else the directory js started in. Sessions are filed under it. |
 
 ```text
 This is session %%CURRENT_SESSION%% using %%CURRENT_SESSION_MODEL%%.
@@ -108,19 +110,18 @@ the inline form when both could match.
 **execute code embedded in the prompt file**; they run by default (see below
 for opting out).
 
-Command execution captures stdout only; a trailing newline is stripped. A
-directive that exits nonzero after printing to stdout (grep with no match, a
-script ending on a false test) injects that stdout and warns with the exit
-code on stderr. A directive that fails to resolve — nonzero exit with no
-stdout, a failed `c` compile, missing interpreter/compiler, timeout, unknown
-subsystem — expands to **nothing**, with a one-line warning on stderr; it
-does not abort prompt assembly, and the raw directive never reaches the model.
-(Callers of `expand_prompt` can pass `on_error="raise"` for the strict
-behavior.) The
-default per-directive timeout is 300 seconds; set
-`INLINE_CODE_TIMEOUT` or `JS_INLINE_CODE_TIMEOUT` to override it.
-Output is capped at `SHELL_OUTPUT_MAX`. A failing directive's
-stderr goes into the warning; a succeeding one's stderr is discarded.
+Inline and fenced code directives insert stdout, with trailing newlines
+stripped. For example, `!{sh echo 'no GPU found'; exit 1}` expands to
+`no GPU found` and warns on stderr with exit code 1. A command such as
+`grep` that exits 1 with no matches and no stdout expands to nothing and
+warns. When a command exits nonzero with no stdout, the warning includes
+any captured stderr.
+
+A failed C compilation, missing interpreter or compiler, timeout, or unknown
+subsystem also expands to nothing and emits a warning. Callers of
+`expand_prompt` can pass `on_error="raise"` to raise on expansion failures.
+The default per-directive timeout is 300 seconds. Set `INLINE_CODE_TIMEOUT`
+or `JS_INLINE_CODE_TIMEOUT` to override it. `SHELL_OUTPUT_MAX` caps output.
 
 ## When and where directives run
 

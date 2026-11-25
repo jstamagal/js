@@ -13,6 +13,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `toolbox save` accepts definitions that call js tools through `tools.<name>`, `match` capture patterns and PEP 695 type parameters.
   - A finished cell whose output was never read keeps its handle.
 - **The `twotool` agent is gone.** `js --agent twotool` no longer exists; `kernel` and `toolbox` are listed in any agent.yaml like other tools.
+
+- **Idle cache keepalive.** While the REPL waits for input, js resends the
+  last request of a Claude route with a one-token output cap at 90% of
+  `COMPACTION_CACHE_TTL`, so the prompt cache stays warm and the next turn
+  reads it instead of writing the whole prefix again. Each refresh prints a
+  network line (cache read, cost, next refresh) and is charged to the
+  session; the status bar shows `warm HH:MM` for the next one. It stops after
+  `CACHE_KEEPALIVE_IDLE_MAX` (3600s), compacting a context of at least
+  `CACHE_KEEPALIVE_COMPACTION_TOKENS_MIN` tokens first
+  (`CACHE_KEEPALIVE_COMPACTION`), and on a refresh that misses or fails, a
+  model switch or a history rewrite. `CACHE_KEEPALIVE off` turns it off. GPT
+  routes are not refreshed.
+
+- **Project setup layers through the repository.** The project root is the
+  nearest directory holding a `.git` (a submodule lifts to its superproject).
+  Each `.js/` from the root down to the working directory is a layer over
+  `~/.js`, the nearest winning; outside a repository only `~/.js` is read.
+  - jsrc: each layer's `jsrc`, then its `jsrc.local`; presets the same way.
+    `set -KEY` in a file falls back to what the layers below that file set,
+    not to the stock value.
+  - Agents: the nearest layer holding an agent's directory supplies the whole
+    agent. Files no longer merge across layers, stock and home included: a
+    home `defaultagent/` with only an `agent.yaml` is now an agent with no
+    prompt.
+  - `--system-prompt-file` takes its tool surface from the run's agent
+    (`--agent` or `DEFAULT_AGENT`) instead of always `defaultagent`.
+  - Skills, commands, toolbox and `tools.yaml` read every layer; a nearer
+    skill, command or tool of a name replaces a farther one.
+  - Instructions: `JS.md`/`JS.local.md` from `~/.js` and from each project
+    `.js/`; from each directory of the chain, `JS.md` else `AGENTS.md`, then
+    `JS.local.md` else `AGENTS.local.md` (`PROJECT_INSTRUCTION_FILES` entries
+    may now be a list: its first file present is read). Nothing above the
+    root is read.
+
+- **Isolation.** A `.isolate` file in a directory or its `.js/` cuts off
+  every layer above it, `~/.js` included; its own `.js/` and the layers below
+  still stack over stock. The nearest marker wins. A marker above the
+  repository root cuts `~/.js` without reading above the root; outside a
+  repository a marked directory is a root. A marker git tracks is ignored
+  with a warning. `--isolate` /
+  `--no-isolate` force or ignore it for one run. The REPL banner names the
+  border, and `/save` writes the border layer's `jsrc`.
+
+- **Sessions are filed by project.** A run files its sessions under its
+  project root (the project chain's root), else under the directory it
+  started in: `~/monorepo` and `~/monorepo/packages/dingus` both use
+  `~/.js/sessions/-home-me-monorepo/`. Each start record still holds the
+  directory the run started in. `--session NAME` looks in the project's
+  folder, then in the start directory's own folder, where sessions filed
+  before this change stay, then everywhere; among several generated names
+  sharing a tail, the one started in this directory wins. Nothing is moved.
+  Prompts get `%%CURRENT_PROJECT%%` (the root's name) and
+  `%%CURRENT_PROJECT_ROOT%%` (its absolute path).
+
 - **Dependencies bumped; ruff is no longer held back.**
   - The lock moves to current releases, including:
     - ai 0.5.2 → 0.9.0

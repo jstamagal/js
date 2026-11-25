@@ -105,7 +105,8 @@ Project `.js/` layers still apply in the working directory.
 
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
 applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped with js: one line per setting, the built-in defaults), `~/.js/jsrc`,
-project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
+then each project `.js/jsrc` and `.js/jsrc.local` from the repository root down
+to the working directory; env vars override files and
 CLI `--extra key=value` overrides env. js never writes `~/.js/jsrc` on its
 own: it exists once you write it or run `/save`, and holds only what you set.
 `js/jsrc.template` lists every setting, described, at its stock value.
@@ -127,8 +128,8 @@ its line. Nothing from the environment, a login or the defaults goes in, every
 other line is left alone, and no backup copy is made.
 
 Everything js keeps outside a project lives in `~/.js/`: `jsrc`, `logins/`,
-saved sessions at `sessions/<start-dir>/<session>.jsonl`, filed by the
-directory js started in, each with a readable `.txt` transcript beside it,
+saved sessions at `sessions/<project>/<session>.jsonl`, filed by the
+project root (else the directory js started in), each with a readable `.txt` transcript beside it,
 global prompt-directory agents in `agents/`, skills in
 `skills/`, and per-agent runtime state in `state/`. On first start js moves its
 old XDG config and data directories in; `just migrate-home` previews that. Session memory is append-only JSONL

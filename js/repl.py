@@ -28,6 +28,7 @@ from prompt_toolkit.key_binding import merge_key_bindings
 from . import (
     agent_messages,
     attach,
+    cache_keepalive,
     clipimage,
     command_line,
     console,
@@ -44,6 +45,7 @@ from . import (
     logins,
     memory as M,
     messages as msgs,
+    model_client,
     motd,
     network_display,
     output,
@@ -100,6 +102,7 @@ def print_resume_hint(cfg: Config, state: ReplState) -> None:
     resume = command_line.argv(("--agent", cfg.agent_id if named else None),
                                ("--model", model if isinstance(model, str) and model else None),
                                ("--home", str(_paths.home()) if _paths.custom_home() else None),
+                               *command_line.isolate_argv(),
                                ("--session", session_store.session_hint_arg(cfg)))
     msgs.say(msgs.RESUME_HINT, command=shlex.join(["js", *resume]))
 
@@ -173,6 +176,7 @@ def exec_session(target: session_picker.SessionTarget) -> None:
         ("--session", str(target.path)),
         ("-a", target.agent or None),
         ("-C", target.cwd if target.jailed and target.cwd else None),
+        *command_line.isolate_argv(),
     )]
     sys.stdout.flush()
     sys.stderr.flush()
@@ -214,6 +218,14 @@ async def _close_session_mcp_host(state: ReplState) -> None:
         await host.close()
 
 
+def _isolation_lines() -> list[str]:
+    """The banner's line naming the isolation border this run is under, if any."""
+    found = _paths.isolation()
+    if found is None:
+        return []
+    return [msgs.STARTUP_ISOLATED.line(layer=found.layer, by=found.marker or "--isolate")]
+
+
 def _default_startup_banner(cfg: Config, state: ReplState, notices: list[str], errors: list[str]) -> str:
     """What the REPL prints into its scrollback when it is up: the MOTD
     (`js.motd`) raw with its colours reset after, then the startup line,
@@ -226,6 +238,7 @@ def _default_startup_banner(cfg: Config, state: ReplState, notices: list[str], e
         msgs.STARTUP_MODEL.line(model=state.model),
         msgs.STARTUP_PROMPT.line(prompt=", ".join(map(str, cfg.prompts_dir)) if isinstance(cfg.prompts_dir, tuple) else cfg.prompts_dir),
         msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
+        *_isolation_lines(),
         "",
         repl_state.repl_hint(msgs.STARTUP_HINT, state).line(),
         "",
@@ -475,8 +488,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
         try:
             if callable(line):
                 # The agent's startup exchanges, queued ahead of the first typed
-                # line: a turn like any other, so ^C cancels it.
-                job = sup.spawn(line(), kind="turn", label="startup")
+                # line, or the idle compaction the cache keepalive queues: a
+                # turn like any other, so ^C cancels it.
+                job = sup.spawn(line(), kind="turn", label=getattr(line, "job_label", "startup"))
                 with contextlib.suppress(asyncio.CancelledError):
                     await job.task
                 lines = []
@@ -661,7 +675,8 @@ def _live_level(state: ReplState, key: str) -> int:
     return value if isinstance(value, int) and value in range(4) else default
 
 
-def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: int) -> str:
+def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: int,
+                     keepalive_at: float | None = None) -> str:
     """The REPL status bar from live state: what is running, on what, how full.
     In a subagent's window it is that subagent's: its model, agent, session
     and turn."""
@@ -687,10 +702,12 @@ def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: in
     prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
     cached_tokens = int(getattr(context, "last_cached_tokens", 0) or 0)
     now = time.monotonic()
-    phase, output_tokens, throbber = "", None, ""
+    phase, output_tokens, throbber, keepalive = "", None, "", None
     if turn_active:
         throbber = status_bar.throbber_frame(now)
         phase, output_tokens = status_bar.turn_centre(context.turn_status, now=now)
+    elif context is runtime.T.STOCK_CONTEXT and keepalive_at is not None:
+        keepalive = cache_keepalive.clock_text(keepalive_at)
     return status_bar.status_line(
         width,
         clock=time.strftime("%H:%M"),
@@ -706,6 +723,7 @@ def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: in
         cost=usage_display.status_text(usage_mod.totals(session_file)) if session_file is not None else None,
         window=window,
         activity=activity,
+        keepalive=keepalive,
     )
 
 
@@ -776,6 +794,7 @@ class Repl:
     completer: replcomplete.JsCompleter = field(init=False)
     _sup: supervisor.Supervisor | None = field(init=False, default=None)
     _queue: asyncio.Queue | None = field(init=False, default=None)
+    _keepalive: cache_keepalive.CacheKeepalive | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.telemetry = runtime.Telemetry(debug_log=self.cfg.debug_log)
@@ -793,7 +812,8 @@ class Repl:
     def status(self, width: int) -> str:
         """The status bar, `width` columns wide."""
         turn_active = self._sup is not None and self._sup.turn_active()
-        return _status_bar_line(self.cfg, self.state, turn_active, width)
+        keepalive_at = self._keepalive.next_at if self._keepalive is not None else None
+        return _status_bar_line(self.cfg, self.state, turn_active, width, keepalive_at)
 
     async def idle(self) -> None:
         """Return once every line the running session has taken has had its
@@ -855,6 +875,26 @@ class Repl:
             queue.put_nowait(functools.partial(_initialize_repl_agent, cfg, state, telemetry, prompt_spec))
         consumer = loop.create_task(
             _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+        )
+
+        def queue_idle_compaction() -> None:
+            compact = functools.partial(conversation.idle_compact_async, cfg, state)
+            compact.job_label = "idle compaction"
+            queue.put_nowait(compact)
+
+        def live_cache_route():
+            active = _live_cfg_snapshot(cfg, state)
+            return (active.model, active.provider_id, active.provider_base_url, active.provider_api_key,
+                    model_client.turn_headers(active.provider_headers, active))
+
+        keepalive = self._keepalive = cache_keepalive.CacheKeepalive(
+            context=runtime.T.STOCK_CONTEXT,
+            live=lambda: state.settings,
+            busy=lambda: (sup.turn_active() or not queue.empty() or bool(steer_inbox)
+                          or runtime.T.STOCK_CONTEXT.turn_status.compacting),
+            route=live_cache_route,
+            compact=queue_idle_compaction,
+            telemetry=telemetry,
         )
 
         def drop_pending() -> int:
@@ -1013,7 +1053,14 @@ class Repl:
                         print(self.banner)
                     repl_state.emit_session_event(state, telemetry, cfg, "session_start")
                     _show_resume(state, telemetry, screen.ScreenLive(loop, scrollback, app).width())
-                    await app.run_async()
+                    keepalive_task = loop.create_task(keepalive.run())
+                    try:
+                        await app.run_async()
+                    finally:
+                        keepalive_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await keepalive_task
+                        self._keepalive = None
                 finally:
                     # Whatever still runs ends while stdout is the scrollback, so
                     # nothing reaches the terminal after the screen has closed.

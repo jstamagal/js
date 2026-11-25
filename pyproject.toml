@@ -28,15 +28,15 @@ dependencies = [
 
 [project.optional-dependencies]
 kernel = [
-    "ipykernel>=6.29",
-    "jupyter_client>=8.0",
+    "ipykernel>=6.29; sys_platform != 'android'",
+    "jupyter_client>=8.0; sys_platform != 'android'",
 ]
 vision = [
-    "Pillow>=10.0",
+    "Pillow>=10.0; sys_platform != 'android'",
 ]
 browser = [
     "js[vision]",
-    "playwright>=1.65.2",
+    "playwright>=1.65.2; sys_platform != 'android'",
 ]
 test = [
     "js[kernel,vision,browser]",

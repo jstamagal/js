@@ -19,6 +19,7 @@ def test_find_uses_files_and_preserves_empty_override(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, 'defaults_dir', lambda: stock)
     monkeypatch.setattr(paths, 'home', lambda: own)
     monkeypatch.chdir(tmp_path)
+    (tmp_path / '.git').mkdir()
     _write(stock / 'agents/a/01-prompt.md', 'stock')
     _write(own / 'agents/a/01-prompt.md', '')
     _write(tmp_path / '.js/agents/a/02-env.md', 'project')
@@ -33,19 +34,14 @@ def test_find_uses_files_and_preserves_empty_override(tmp_path, monkeypatch):
     assert paths.find('absent') is None
 
 
-def test_default_agent_overrides_prompt_only_and_can_remove_env(tmp_path, monkeypatch):
+def test_a_home_default_agent_replaces_the_stock_one_whole(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     own = paths.home()
     override = _write(own / 'agents/defaultagent/01-prompt.md', 'replacement prompt')
     roots = (paths.defaults_dir() / 'agents', own / 'agents', tmp_path / '.js/agents')
-    stock = persona.load_prompt_spec(roots[0] / 'defaultagent')
-    spec = persona.load_agent_prompt_spec('defaultagent', roots)
-    assert 'replacement prompt' in spec.system
-    assert spec.tool_selectors == stock.tool_selectors
-    assert (roots[0] / 'defaultagent/02-env.md').read_text().strip() in spec.system
-    _write(own / 'agents/defaultagent/02-env.md', '')
     spec = persona.load_agent_prompt_spec('defaultagent', roots)
     assert spec.system.strip() == override.read_text()
+    assert spec.tool_selectors == ()
 
 
 def test_home_and_stock_themes_list_and_empty_theme_wins(tmp_path, monkeypatch):
@@ -78,12 +74,12 @@ def test_descriptions_and_tools_yaml_are_file_overrides(tmp_path, monkeypatch):
     assert policy.load_tools_config().tags == {}
 
 
-def test_real_config_reports_all_agent_layers(tmp_path, monkeypatch):
+def test_real_config_reports_the_agent_directory_that_wins(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     own = paths.home() / 'agents/defaultagent'
     _write(own / '01-prompt.md', 'custom')
     cfg = config.from_env(cwd=tmp_path, save_session=False)
-    assert cfg.prompts_dir == (paths.defaults_dir() / 'agents/defaultagent', own)
+    assert cfg.prompts_dir == (own,)
     assert config.Config(model='test', prompts_dir=own).prompts_dir == own
 
 

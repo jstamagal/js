@@ -32,7 +32,7 @@ from .cli_options import current, invocation
 if TYPE_CHECKING:
     from .config import Config
 
-_METADATA_KIND = "session_metadata"
+_METADATA_KIND = session_store.START_KIND
 _METADATA_VERSION = 3
 _TITLE_KIND = "title"
 _MODEL_SWITCH_KIND = "model_switch"

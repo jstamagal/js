@@ -247,8 +247,12 @@ def cmd_set(arg: str, state: ReplState, cfg: Config) -> str | None:
     parts = arg.split(maxsplit=1)
     if len(parts) < 2 and not (parts and parts[0].startswith("-") and len(parts[0]) > 1):
         return _show_settings(state, cfg, parts[0] if parts else None)
-    # `set -key` goes back to the value the session started with.
-    baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
+    # `set -key` goes back to the value the session started with; in a jsrc
+    # replay, to what the layers below the running file set.
+    if state.rc_replay and state.rc_baseline is not None:
+        baseline = state.rc_baseline
+    else:
+        baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
     columns = None if state.rc_replay else text_layout.block_width()
     result = setcmd.set_command(state.settings, arg, baseline, columns=columns)
     if state.rc_replay:
@@ -321,7 +325,7 @@ def _cmd_save(arg: str, state: ReplState, cfg: Config) -> str | None:
     if not (keys or fset_names or extra):
         msgs.say(msgs.SAVE_NOTHING)
         return None
-    path = _paths.global_config_file()
+    path = _paths.save_config_file()
     try:
         count = jsrc_save.save_settings_to_jsrc(path, live, keys=keys, fset_names=fset_names,
                                                 extra_lines=extra)

@@ -24,6 +24,7 @@ from typing import Any
 import ai
 
 from . import (
+    cache_keepalive,
     compaction,
     context_budget,
     history_record,
@@ -335,6 +336,8 @@ class ModelCaller:
             tool_count=len(specs),
             tool_names=[spec["function"]["name"] for spec in specs],
         )
+        cache_keepalive.remember(self._context, request, messages=convo.ai, tools=ai_tools,
+                                 stream_limits=self._limits.stream)
         pending = model_client.stream_model_async(
             model_id=request.model,
             provider_id=request.provider_id,

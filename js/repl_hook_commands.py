@@ -32,7 +32,8 @@ def _cmd_exec(arg: str, state: ReplState | None, cfg: Config) -> str | None:
     """Run ``arg`` in the shell and queue its stdout for the next user message;
     with no ``state`` there is no next message and the stdout goes nowhere.
     Run by an `on` handler, the command reads the event as JSON on stdin with
-    JS_EVENT naming it. Exit status 2 or a timeout under tool_call refuses the call."""
+    JS_EVENT naming it. Exit status 2 or a timeout under tool_call refuses the call;
+    exit status 3 under tool_call runs it with the JSON object on stdout as its arguments."""
     command = arg.strip()
     if not command:
         return msgs.USAGE.said(usage="/exec <command>")
@@ -59,7 +60,7 @@ def _cmd_exec(arg: str, state: ReplState | None, cfg: Config) -> str | None:
         if outcome.returncode is None:
             failure = msgs.EXEC_TIMED_OUT.said(command=command, seconds=timeout)
             hookexec.refuse_unfinished(call, str(failure))
-        elif hookexec.apply_refusal(call, outcome):
+        elif hookexec.apply_refusal(call, outcome) or hookexec.apply_rewrite(call, outcome):
             return None
         elif outcome.returncode != 0:
             detail = next((line.strip() for line in (outcome.stderr or outcome.stdout).splitlines()
