@@ -1,12 +1,12 @@
-# js generate — candidate flags. One option per line.
+# js generate — flag ideas to prune. API support is unverified unless noted; some ideas require local code.
 
-# Freebies and necessities — operations
+# operations
 --t2i                         Generate an image from text.
 --i2i                         Edit or vary an input image.
 --inpaint                     Regenerate a masked image region.
 --outpaint                    Generate beyond the original image edges.
---upscale                     Enlarge an image with an upscaling model.
---variation                   Generate alternatives to a reference.
+--upscale                     Backend-specific upscaler or local processing. OpenAI Images has no upscale route.
+--variation                   Proposed shorthand for an image edit with a variation prompt. OpenAI retired its variations route.
 --t2v                         Generate video from text.
 --i2v                         Animate a still or interpolate between anchors.
 --r2v                         Generate video from subject or style references.
@@ -18,7 +18,7 @@
 --sfx                         Generate a sound effect or ambience.
 --audio-to-video              Drive video from a speech or music track.
 
-# Freebies and necessities — invocation and request
+# invocation and request
 -m, --model ID                Override the operation's configured model.
 -u, --url URL                 Send the request to this endpoint.
 --home DIR                    Use this js profile.
@@ -44,7 +44,7 @@
 --duration SEC                Set the generated audio or video length.
 --format NAME                 Request an output format such as png, webp, wav or mp4.
 
-# Freebies and necessities — files and conditioning
+# files and conditioning
 --image FILE                  Supply a base image for editing.
 --ref FILE                    Add an ordered reference asset; repeatable.
 --ref-name NAME=FILE          Give a reference an identifier for use in the prompt.
@@ -69,7 +69,7 @@
 --reference-url URL           Pass a remote reference URL.
 --reference-file FILE         Attach a supporting document or other source file.
 
-# Freebies and necessities — output
+# output
 -o, --output PATH             Save here, or use - for one binary artifact on stdout.
 --output-dir DIR              Write all outputs under a directory.
 --output-template PATTERN     Name outputs using fields such as index, seed or model.
@@ -82,7 +82,7 @@
 -q, --quiet                   Suppress ordinary status messages.
 --progress MODE               Choose terminal, plain-text or silent progress.
 
-# Freebies and necessities — image and diffusion request controls
+# image and diffusion request controls
 --background MODE             Request a transparent, opaque or automatic background.
 --background-color COLOR      Specify a solid background color.
 --compression N               Request output compression.
@@ -131,7 +131,7 @@
 --highres-steps N             Set the second pass's step count.
 --highres-denoise N           Set the second pass's denoising strength.
 
-# Freebies and necessities — video request controls
+# video request controls
 --fps RATE                    Set generated frames per second.
 --frames N                    Set the generated frame count.
 --audio                       Request synchronized audio with the video.
@@ -155,7 +155,7 @@
 --ambient-sound TEXT          Describe the background sound of a shot.
 --reference-audio FILE        Guide the generated soundtrack with reference audio.
 
-# Freebies and necessities — speech, music and sound requests
+# speech, music and sound requests
 --voice NAME                  Choose a speaking voice.
 --language CODE               Specify the language.
 --instructions TEXT           Give voice delivery directions separately from the script.
