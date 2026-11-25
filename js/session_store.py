@@ -26,6 +26,7 @@ records keep their ids, so the parent's message it split at is named by id.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -38,10 +39,12 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from . import messages as msgs
-from . import paths
+from . import messages as msgs, paths
+
+if TYPE_CHECKING:
+    from .config import Config
 
 SUFFIX = ".jsonl"
 TEXT_SUFFIX = ".txt"
@@ -64,7 +67,7 @@ class AmbiguousSession(ValueError):
 
     def __init__(self, session: str, found: list[Path]) -> None:
         self.found = found
-        super().__init__(msgs.SESSION_AMBIGUOUS.text(session=session, paths=", ".join(str(p) for p in found)))
+        super().__init__(msgs.SESSION_AMBIGUOUS.said(session=session, paths=", ".join(str(p) for p in found)))
 
 
 def slug(directory: Path | str) -> str:
@@ -135,7 +138,7 @@ def reserve(folder: Path, make_name: Callable[[], str] = generated_name) -> Path
         except FileExistsError:
             continue
         return path
-    raise RuntimeError(msgs.SESSION_NOT_RESERVED.text(folder=folder))
+    raise RuntimeError(msgs.SESSION_NOT_RESERVED.said(directory=folder))
 
 
 def _named(folder: Path, relative: Path) -> Path | None:
@@ -236,6 +239,7 @@ _ID_BYTES = 4
 _PATH_KINDS = frozenset({"message", "mark"})
 _HEAD = re.compile(rb'^\{"id":"([^"]+)","parent":(?:null|"[^"]*"),"(kind|role)":"([^"]*)"')
 _CACHED_CHAINS = 64
+_PREAD_CHUNK = 1 << 20
 
 
 def on_path(record: dict) -> bool:
@@ -293,15 +297,31 @@ def _chain(key: str, fd: int) -> tuple[_Chain, bool]:
     chain = _chains.pop(key, None)
     if chain is None or (chain.device, chain.inode) != (info.st_dev, info.st_ino) or info.st_size < chain.offset:
         chain = _Chain(info.st_dev, info.st_ino)
-    data = os.pread(fd, info.st_size - chain.offset, chain.offset) if info.st_size > chain.offset else b""
-    end = data.rfind(b"\n") + 1
-    for line in data[:end].splitlines():
-        chain.feed(line)
-    chain.offset += end
+    # Chunked: a cold cache on a 100+ MB session must not load the whole
+    # file at once just to collect ids. The
+    # read position advances by bytes READ; `chain.offset` stays at the byte
+    # after the last complete line, so a torn tail is re-fed on the next
+    # append. Chunks split on LF only, so a boundary inside a multibyte
+    # character cannot corrupt a line; the carry holds one partial line
+    # (bounded by the record size, never the file size).
+    read = chain.offset
+    carry = b""
+    while read < info.st_size:
+        chunk = os.pread(fd, min(_PREAD_CHUNK, info.st_size - read), read)
+        if not chunk:
+            break
+        read += len(chunk)
+        data = carry + chunk
+        fed = data.rfind(b"\n") + 1
+        for line in data[:fed].split(b"\n")[:-1]:
+            chain.feed(line)
+        carry = data[fed:]
+        if fed:
+            chain.offset = read - len(carry)
     _chains[key] = chain
     while len(_chains) > _CACHED_CHAINS:
         _chains.popitem(last=False)
-    return chain, end < len(data)
+    return chain, chain.offset < info.st_size
 
 
 def _encode(record: dict) -> bytes:
@@ -310,6 +330,33 @@ def _encode(record: dict) -> bytes:
 
 def _linked(record: dict, record_id: str, parent: str | None) -> dict:
     return {"id": record_id, "parent": parent, **{k: v for k, v in record.items() if k not in ("id", "parent")}}
+
+
+def _open_locked(session_file: Path, mode: str, **open_kw):
+    """Open `session_file`, take the exclusive lock, and make sure the
+    descriptor still names the file the path names. A `link_file` that
+    replaced the file between our open and our lock leaves us locked on the
+    unlinked old inode; a write there is lost. Reopen and relock until the
+    descriptor is the named file."""
+    attempt_mode = mode
+    for attempt in range(3):
+        stream = open(session_file, attempt_mode, **open_kw)
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            opened = os.fstat(stream.fileno())
+            named = os.stat(session_file)
+            if (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino):
+                if "a" in mode and attempt_mode != mode:
+                    # The retry lost O_APPEND (r+b); a write would land at the
+                    # front of the file. Seek to the end instead.
+                    stream.seek(0, os.SEEK_END)
+                return stream
+        except BaseException:
+            stream.close()
+            raise
+        stream.close()
+        attempt_mode = mode.replace("a", "r")
+    raise OSError(errno.ESTALE, "session file kept being replaced", str(session_file))
 
 
 def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
@@ -321,9 +368,8 @@ def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
         return dict(record)
     session_file.parent.mkdir(parents=True, exist_ok=True)
     key = str(session_file.resolve(strict=False))
-    with open(session_file, "a+b") as stream:
+    with _open_locked(session_file, "a+b") as stream:
         fd = stream.fileno()
-        fcntl.flock(fd, fcntl.LOCK_EX)
         with _chains_lock:
             chain, torn = _chain(key, fd)
             linked = _linked(record, new_id(chain.taken), chain.leaf)
@@ -379,10 +425,9 @@ def link_file(session_file: Path) -> int:
     has none, keeping its modification time. Returns how many records were
     given one; with none to give, the file is left untouched."""
     session_file = Path(session_file)
-    with open(session_file, "r+", encoding="utf-8", errors="surrogateescape") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+    with _open_locked(session_file, "r+", encoding="utf-8", errors="surrogateescape") as stream:
         info = os.fstat(stream.fileno())
-        lines, given = link_lines(stream.read().splitlines(keepends=True))
+        lines, given = link_lines(stream)
         if not given:
             return 0
         staging = session_file.with_name(f".{session_file.name}.{secrets.token_hex(4)}.tmp")
@@ -394,3 +439,10 @@ def link_file(session_file: Path) -> int:
         os.utime(staging, ns=(info.st_atime_ns, info.st_mtime_ns))
         os.replace(staging, session_file)
     return given
+
+
+def session_hint_arg(cfg: Config) -> str:
+    try:
+        return cfg.session_file.relative_to(cfg.sessions_dir).with_suffix("").as_posix()
+    except ValueError:
+        return display_name(cfg.session_file)

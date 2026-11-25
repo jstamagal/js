@@ -3,10 +3,15 @@ and output that is not a terminal is plain text."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import re
+from dataclasses import replace
 
-from js import cli, display, screen
+from repl_driver import run_async
+
+from js import debug_trace, display, screen_scrollback, text_layout, tool_display, transcript
+from js.config import from_env
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -69,6 +74,20 @@ def test_three_fenced_blocks_each_render_highlighted_once_and_are_never_redrawn(
         assert words in plain
 
 
+def test_text_the_throttle_held_back_is_drawn_when_no_more_text_comes():
+    live = RecordingLive()
+
+    async def stream_then_go_quiet() -> None:
+        sink = display.Display(lambda _text: None, live=live, refresh_s=0.02)
+        sink.chunk("text", "swarm-pick unt")
+        sink.chunk("text", "ouched.")
+        await asyncio.sleep(0.2)
+
+    asyncio.run(stream_then_go_quiet())
+
+    assert "swarm-pick untouched." in ANSI.sub("", live.events[-1][1])
+
+
 def test_not_a_terminal_writes_plain_bytes_as_they_arrive():
     out = io.StringIO()
     sink = display.Display.for_stream(out)
@@ -94,7 +113,7 @@ def test_markdown_off_on_a_terminal_writes_plain_bytes():
 
 
 def test_scrollback_live_answer_is_replaced_until_committed():
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     scrollback.append("before\n")
     scrollback.answer_update("a\n")
     scrollback.answer_update("ab\n")
@@ -108,7 +127,7 @@ def test_scrollback_live_answer_is_replaced_until_committed():
 
 
 def test_scrollback_live_answer_follows_a_collapsing_reasoning_block():
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     block = scrollback.reasoning(1)
     block.append("thinking hard\nstill thinking\n")
     scrollback.answer_update("x\n")
@@ -152,8 +171,8 @@ class _Log:
     def __init__(self) -> None:
         self.text = ""
 
-    def write(self, text: str) -> None:
-        self.text += text
+    def emit(self, event) -> None:
+        self.text += dict(event.fields)["text"]
 
     def flush(self) -> None:
         pass
@@ -161,7 +180,7 @@ class _Log:
 
 def test_debug_log_keeps_the_committed_answer_but_not_the_redraws():
     terminal, log = _Tty(), _Log()
-    sink = display.Display.for_stream(cli._StdoutTee(terminal, log))
+    sink = display.Display.for_stream(debug_trace.StdoutTee(terminal, log))
     sink.refresh_s = 0
     assert sink.pretty
 
@@ -175,3 +194,124 @@ def test_debug_log_keeps_the_committed_answer_but_not_the_redraws():
     # Cursor movement for the live region stays on the terminal.
     assert "\x1b[J" in terminal.getvalue()
     assert "\x1b[J" not in log.text
+
+
+def test_line_separator_in_a_paragraph_does_not_cut_the_block():
+    """U+2028 survives clean(); markdown-it numbers lines by \\n only, so the
+    commit must slice by \\n too or a block is cut in the middle."""
+    live = RecordingLive()
+    text = "First para has\u2028a line separator\u2028in it.\n\nSecond para.\n\nThird.\n"
+    _stream(text, display.Display(lambda _text: None, live=live, refresh_s=0), size=3)
+    commits = [ANSI.sub("", t) for kind, t in live.events if kind == "commit"]
+    holding = [t for t in commits if "First para" in t]
+    assert len(holding) == 1
+    assert "in it." in holding[0]
+    plain = "".join(commits)
+    for words in ("Second para.", "Third."):
+        assert plain.count(words) == 1
+
+
+def test_tool_result_name_is_cleaned_at_every_level():
+    evil = "evil\x1b]0;PWNED\x07\x1b[2J"
+    for level in (1, 2, 3):
+        out = (tool_display.render_exchange(evil, {}, None, level=level, width=80)
+               + tool_display.render_exchange(evil, {}, "ok", level=level, width=80))
+        assert "PWNED" not in out and "\x1b[2J" not in out and "\x07" not in out, level
+        assert "evil" in out
+
+
+def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
+    cfg.settings["RESUME_EXCHANGES"] = 1
+    cfg.settings["TOOLS_DISPLAY"] = 3
+    messages = [
+        {"role": "user", "content": "RESUMED_PROMPT"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": None, "function": {"name": "shell", "arguments": "{\"command\": \"ls\"}"}}]},
+        {"role": "tool", "tool_call_id": None, "content": "ORPHAN_RESULT"},
+    ]
+    exchanges: list[str] = []
+    for name in ("exchange_open", "exchange_update", "exchange_close"):
+        def record(self, *args, _real=getattr(screen_scrollback.Scrollback, name)):
+            exchanges.extend(arg for arg in args if isinstance(arg, str))
+            return _real(self, *args)
+        monkeypatch.setattr(screen_scrollback.Scrollback, name, record)
+    run_async(monkeypatch, cfg, [], messages=messages)
+    shown = capsys.readouterr().out + "".join(exchanges)
+    assert "RESUMED_PROMPT" in shown
+    assert "ORPHAN_RESULT" not in shown
+
+
+# One of every class of sequence the escape parser knows, some cut short.
+
+
+def test_an_open_tool_exchange_is_redrawn_where_it_stands_after_later_text():
+    scrollback = screen_scrollback.Scrollback()
+    scrollback.append("before\n")
+    span = scrollback.exchange_open("running\n")
+    scrollback.append("after\n")
+
+    scrollback.exchange_update(span, "running\nits output\n")
+    scrollback.flush()
+    assert scrollback.buffer.text == "before\nrunning\nits output\nafter\n"
+
+    scrollback.exchange_close(span, "finished\n")
+    scrollback.flush()
+    assert scrollback.buffer.text == "before\nfinished\nafter\n"
+
+
+def test_streaming_reasoning_rewraps_only_its_open_paragraph(monkeypatch):
+    wrapped: list[int] = []
+    real = text_layout.wrap_words
+
+    def counting(text: str, width: int) -> str:
+        wrapped.append(len(text))
+        return real(text, width)
+
+    monkeypatch.setattr(text_layout, "wrap_words", counting)
+    scroll = screen_scrollback.Scrollback()
+    block = scroll.reasoning(2)
+    text = "".join(f"paragraph {n} " + "x" * 30 + "\n" for n in range(200))
+    for start in range(0, len(text), 10):
+        block.append(text[start:start + 10])
+    assert sum(wrapped) < 8 * len(text), (sum(wrapped), len(text))
+    assert transcript.strip_ansi(scroll.buffer.text).count("paragraph") == 200
+
+
+def test_plain_streaming_shows_each_full_row_of_an_unbroken_run_as_it_arrives(monkeypatch):
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 40)
+    for char in ("漢", "x"):
+        out = io.StringIO()
+        sink = display.Display(out.write)
+        sink.speaker(*display.agent_speaker())
+        for _ in range(120):
+            sink.chunk("text", char)
+        shown = ANSI.sub("", out.getvalue())
+        assert shown.count(char) >= 60, (char, shown)  # the full rows are out before the turn ends
+        sink.finish()
+        assert ANSI.sub("", out.getvalue()).count(char) == 120
+
+
+def test_a_markdown_table_cell_wraps_instead_of_losing_its_tail(monkeypatch):
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 40)
+    live = RecordingLive()
+    live.width = lambda: 39
+    sink = display.Display(lambda _text: None, live=live, refresh_s=0)
+    sink.speaker(*display.agent_speaker())
+    _stream("| a | b |\n|---|---|\n| short | " + "x" * 26 + "TAIL |\n", sink, size=200)
+    shown = "".join(text for kind, text in live.events if kind == "commit")
+    assert "TAIL" in "".join(ANSI.sub("", shown).split()) and "…" not in ANSI.sub("", shown)
+
+
+def test_rendered_prose_shows_every_character_of_its_source():
+    # A command copied off the screen must run as the model wrote it.
+    for source in (
+        'case "$out" in *FLIPPED*|"choice "*" conf=0."[0-6]*) echo a;; esac',
+        "a *b* **c** _d_ ~~e~~ x_y_z",
+        r"grep \. \* \\ \$HOME",
+        "a &amp; b &lt;",
+        "use <program> to run <foo/>",
+        "<div>\nhi\n</div>",
+    ):
+        assert ANSI.sub("", display.render_markdown(source, 400)).rstrip("\n") == source

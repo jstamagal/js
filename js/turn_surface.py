@@ -22,7 +22,8 @@ class SurfaceJournal:
         self._file = session_file
         self._scope = {"version": 1, "agent_id": agent_id, "cwd": str(Path(cwd).resolve())}
         self._registry = registry
-        self._prior = memory.load_tool_surface(session_file) if session_file is not None else None
+        self._prior = (memory.load_tool_surface(session_file, scope=self._scope)
+                       if session_file is not None else None)
         self._last: dict | None = None
 
     async def restore(self) -> None:

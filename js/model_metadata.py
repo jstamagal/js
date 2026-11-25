@@ -2,17 +2,21 @@
 
 js keeps its own writable mirror of the models.dev catalog under ~/.js/cache.
 The bundled DB from the installed package is only the seed. On lookup we check
-whether the active catalog is older than 8 hours; if so, we refresh it into
+whether the active catalog exceeds MODEL_CATALOG_AGE_MAX (8 hours by default);
+when MODEL_CATALOG_AUTO_REFRESH is on, we refresh it into
 js's own DB and record when that happened. A forced refresh is available from
 js CLI/REPL commands.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sqlite3
+import tempfile
 from contextlib import closing
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -21,15 +25,30 @@ from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
-
 import modelsdotdev
-from modelsdotdev._internal import data as modelsdotdev_data
-from modelsdotdev._internal import sync as modelsdotdev_sync
+from modelsdotdev._internal import data as modelsdotdev_data, sync as modelsdotdev_sync
 
-from . import codex_auth, model_matching, paths, providers, settings as _settings, stream_transport
-from . import messages as msgs
+from . import (
+    messages as msgs,
+    model_matching,
+    paths,
+    providers,
+    settings as _settings,
+    stream_transport,
+)
 
-_CATALOG_MAX_AGE = timedelta(hours=8)
+_policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", default=None)
+
+
+def bind_settings(settings: dict | None) -> None:
+    """Use this invocation or turn's live store for metadata policy."""
+    _policy_settings.set(settings)
+    _settings.bind_live_settings(settings)
+
+
+def _policy(key: str):
+    return _settings.knob(_policy_settings.get(), key)
+
 _STATUS_VERSION = 1
 # A local server that has not answered in this many seconds is not up.
 _LOCAL_PROBE_MAX_S = 3.0
@@ -85,15 +104,25 @@ class _ModelRow:
     max_input_tokens: int | None
     family: str | None = None
     release_date: str | None = None
+    image_input: bool = False
 
 
-def _clear_caches() -> None:
+def _takes_image(model: Any) -> bool:
+    modalities = getattr(model, "modalities", None)
+    return any(
+        str(getattr(modality, "value", modality)).lower() == "image"
+        for modality in getattr(modalities, "input", ()) or ()
+    )
+
+
+def reset_caches() -> None:
+    """Drop every catalog lookup and probe answer held; the next lookup reads again."""
     _all_models.cache_clear()
     lookup_limits.cache_clear()
     model_prices.cache_clear()
     accepts_image_input.cache_clear()
     _image_inputs.cache_clear()
-    _probe_local_context_window_cached.cache_clear()
+    _probe_answers.clear()
 
 
 @lru_cache(maxsize=1)
@@ -111,6 +140,7 @@ def _all_models() -> tuple[_ModelRow, ...]:
                 max_input_tokens=None if limits is None else limits.input,
                 family=getattr(model, "family", None),
                 release_date=dates.get(f"{model.provider_id}:{model.id}"),
+                image_input=_takes_image(model),
             )
         )
     return tuple(rows)
@@ -132,8 +162,9 @@ def _release_dates() -> dict[str, str]:
 def _generate_database(*, output: Path) -> None:
     """Keep release dates from the same upstream payload as the limits."""
     payload = modelsdotdev_sync._load_providers(modelsdotdev_sync.API_URL)
-    staged = output.with_name(output.name + ".refresh")
-    try:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent, prefix=f".{output.name}.") as staging_dir:
+        staged = Path(staging_dir) / output.name
         modelsdotdev_sync._write_database(payload, staged, modelsdotdev_sync.API_URL)
         with closing(sqlite3.connect(staged)) as connection:
             connection.execute(
@@ -148,19 +179,15 @@ def _generate_database(*, output: Path) -> None:
             )
             connection.commit()
         os.replace(staged, output)
-    finally:
-        staged.unlink(missing_ok=True)
 
 
-def _provider_candidates(provider_id: str | None) -> tuple[str, ...]:
+def _provider_candidates(provider_id: str | None, *, include_sdk: bool = True) -> tuple[str, ...]:
     candidates: list[str] = []
     normalized = providers.normalize_provider_id(provider_id) if provider_id else None
     if normalized:
         provider = providers.get_provider(normalized)
-        if provider is not None and provider.effective_sdk_provider_id:
+        if include_sdk and provider is not None and provider.effective_sdk_provider_id:
             candidates.append(provider.effective_sdk_provider_id)
-        if codex_auth.is_codex_provider(normalized):
-            candidates.append("openai")
         candidates.append(normalized)
     seen: set[str] = set()
     ordered: list[str] = []
@@ -173,23 +200,32 @@ def _provider_candidates(provider_id: str | None) -> tuple[str, ...]:
 
 def _normalize_request(model_id: str, provider_id: str | None) -> tuple[str, str | None]:
     parsed_provider, parsed_model = providers.parse_model_prefix(model_id)
-    if parsed_provider is not None and parsed_model is not None:
+    if parsed_provider is not None and parsed_model is not None and (
+        provider_id is None
+        or providers.normalize_provider_id(provider_id) == parsed_provider
+    ):
         return parsed_model, parsed_provider
     return model_id, provider_id
 
 
 @lru_cache(maxsize=256)
-def accepts_image_input(model_id: str) -> bool | None:
+def accepts_image_input(model_id: str, *, refresh=None) -> bool | None:
     """Whether models.dev records image as an input modality for ``model_id``.
 
     Keyed on the MODEL, not the provider: the same model reached through a proxy,
-    a router prefix, or a local server has the same input modalities. Returns None
-    when the catalog has never heard of the model, so the caller can fall back.
+    a router prefix, or a local server has the same input modalities. The row
+    that answers is the one routed limits come from (maker first, an effort
+    suffix like ``-high`` dropped); with none, any catalog model of that bare
+    name taking image says yes. Returns None when the catalog has never heard
+    of the model, so the caller can fall back.
     """
-    ensure_fresh_catalog()
+    (ensure_fresh_catalog if refresh is None else refresh)()
     wanted = _bare_model_name(model_id)
     if not wanted:
         return None
+    matched, _method = model_matching.match_routed(model_id, _all_models())
+    if matched is not None:
+        return matched.image_input
     return _image_inputs().get(wanted)
 
 
@@ -200,12 +236,7 @@ def _image_inputs() -> dict[str, bool]:
     found: dict[str, bool] = {}
     for model in modelsdotdev.iter_models():
         name = _bare_model_name(model.id)
-        modalities = getattr(model, "modalities", None)
-        image = any(
-            str(getattr(modality, "value", modality)).lower() == "image"
-            for modality in getattr(modalities, "input", ()) or ()
-        )
-        found[name] = found.get(name, False) or image
+        found[name] = found.get(name, False) or _takes_image(model)
     return found
 
 
@@ -272,7 +303,7 @@ def _server_root_url(base_url: str) -> str:
 
 
 def _request_json(method: str, url: str, *, json_body: dict[str, Any] | None = None) -> Any:
-    timeout = min(float(_settings.default_value("limits.fetch_timeout_s")), _LOCAL_PROBE_MAX_S)
+    timeout = min(float(_settings.default_value("FETCH_TIMEOUT")), _LOCAL_PROBE_MAX_S)
     with httpx.Client(timeout=timeout) as client:
         response = client.request(method, url, json=json_body)
         response.raise_for_status()
@@ -315,18 +346,29 @@ def _probe_llamacpp_context_window(base_url: str, model_id: str) -> int | None:
     return _extract_context_window(payload)
 
 
-@lru_cache(maxsize=256)
+_PROBES = {
+    "ollama": lambda base_url, model_id: _probe_ollama_context_window(base_url, model_id),
+    "llama.cpp": lambda base_url, model_id: _probe_llamacpp_context_window(base_url, model_id),
+    "openai": lambda base_url, model_id: _probe_openai_context_window(base_url, model_id),
+}
+# What each server answered, keyed by (probe kind, base URL, model). A probe
+# that failed is not kept: a server still loading is asked again next time.
+_probe_answers: dict[tuple[str, str, str], int | None] = {}
+
+
 def _probe_local_context_window_cached(probe_kind: str, base_url: str, model_id: str) -> int | None:
+    key = (probe_kind, base_url, model_id)
+    if key in _probe_answers:
+        return _probe_answers[key]
+    probe = _PROBES.get(probe_kind)
+    if probe is None:
+        return None
     try:
-        if probe_kind == "ollama":
-            return _probe_ollama_context_window(base_url, model_id)
-        if probe_kind == "llama.cpp":
-            return _probe_llamacpp_context_window(base_url, model_id)
-        if probe_kind == "openai":
-            return _probe_openai_context_window(base_url, model_id)
+        window = probe(base_url, model_id)
     except Exception:  # noqa: BLE001 - local metadata probes are strictly best-effort
         return None
-    return None
+    _probe_answers[key] = window
+    return window
 
 
 def probe_local_context_window(
@@ -340,6 +382,8 @@ def probe_local_context_window(
     An explicit ``provider_id`` is the route's provider and wins over a
     provider-like prefix in the model name: ``Alibaba/Qwen3.8-27B`` behind a
     local openai-compatible server is probed at that server, not at Alibaba."""
+    if not _policy("MODEL_CONTEXT_PROBE"):
+        return None
     parsed_provider, parsed_model = providers.parse_model_prefix(model_id)
     if parsed_provider is not None and parsed_model is not None and (
         provider_id is None
@@ -396,7 +440,7 @@ def _read_db_metadata(path: Path) -> dict[str, str] | None:
     if not path.is_file():
         return None
     try:
-        with closing(sqlite3.connect(path)) as connection:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
             rows = connection.execute("SELECT key, value FROM metadata").fetchall()
     except sqlite3.Error:
         return None
@@ -409,13 +453,18 @@ def _status_from_db(path: Path, *, refreshed_at: datetime | None = None) -> Cata
     metadata = _read_db_metadata(path)
     if metadata is None:
         return None
+    try:
+        provider_count = int(metadata["provider_count"]) if metadata.get("provider_count") else None
+        model_count = int(metadata["model_count"]) if metadata.get("model_count") else None
+    except ValueError:
+        return None
     return CatalogStatus(
         db_path=path,
         generated_at=_parse_dt(metadata.get("generated_at")),
         refreshed_at=refreshed_at,
         source=metadata.get("source"),
-        provider_count=int(metadata["provider_count"]) if metadata.get("provider_count") else None,
-        model_count=int(metadata["model_count"]) if metadata.get("model_count") else None,
+        provider_count=provider_count,
+        model_count=model_count,
     )
 
 
@@ -477,12 +526,15 @@ def catalog_is_stale(status: CatalogStatus | None, *, now: datetime | None = Non
     if checked_at is None:
         return True
     current = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
-    if current - checked_at >= _CATALOG_MAX_AGE:
+    if current - checked_at >= timedelta(seconds=float(_policy("MODEL_CATALOG_AGE_MAX"))):
         return True
-    with closing(sqlite3.connect(status.db_path)) as connection:
-        return connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_release_dates'"
-        ).fetchone() is None
+    try:
+        with closing(sqlite3.connect(status.db_path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            return connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_release_dates'"
+            ).fetchone() is None
+    except sqlite3.Error:
+        return True
 
 
 def refresh_catalog(*, force: bool = False) -> CatalogStatus:
@@ -496,12 +548,18 @@ def refresh_catalog(*, force: bool = False) -> CatalogStatus:
     output.parent.mkdir(parents=True, exist_ok=True)
     _generate_database(output=output)
     _activate_database(output)
-    refreshed_at = datetime.now(tz=UTC)
-    status = _status_from_db(output, refreshed_at=refreshed_at)
+    status = record_refreshed(output)
+    reset_caches()
+    return status
+
+
+def record_refreshed(db_path: Path, *, refreshed_at: datetime | None = None) -> CatalogStatus:
+    """Write the status file that records the catalog at ``db_path`` as
+    refreshed at ``refreshed_at`` (now by default), and return that status."""
+    status = _status_from_db(db_path, refreshed_at=refreshed_at or datetime.now(tz=UTC))
     if status is None:
-        raise RuntimeError(f"refreshed models.dev catalog missing metadata: {output}")
+        raise RuntimeError(f"refreshed models.dev catalog missing metadata: {db_path}")
     _write_status_file(status)
-    _clear_caches()
     return status
 
 
@@ -516,18 +574,18 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    if not force and not catalog_is_stale(current):
+    if not force and (not _policy("MODEL_CATALOG_AUTO_REFRESH") or not catalog_is_stale(current)):
         return current
     if not force and _refresh_failure is not None:
         if current is None:
             raise RuntimeError(_refresh_failure)
         return current
-    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.text())
+    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
     try:
         status = refresh_catalog(force=True)
     except Exception as exc:
         _refresh_failure = " ".join(f"{type(exc).__name__}: {exc}".split())
-        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.text(error=_refresh_failure))
+        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.said(error=_refresh_failure))
         if current is not None:
             _activate_database(current.db_path)
             return current
@@ -536,12 +594,44 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     return status
 
 
+def run_refresh_model_catalog(args: argparse.Namespace) -> int | None:
+    """`js --refresh-model-catalog`: refresh the catalog now. Exits 1 when the
+    refresh fails and 0 when it is the only mode on the command line; None lets
+    the mode beside it run."""
+    if not force_refresh_model_catalog():
+        return 1
+    if (
+        args.prompt is None
+        and not args.commit
+        and args.compact is None
+        and args.target is None
+        and args.bench is None
+        and not args.migrate_config
+    ):
+        return 0
+    return None
+
+
+def force_refresh_model_catalog() -> bool:
+    try:
+        status = ensure_fresh_catalog(force=True)
+    except Exception as e:  # noqa: BLE001
+        msgs.say(msgs.CATALOG_REFRESH_FAILED, error=f"{type(e).__name__}: {e}")
+        return False
+    checked_at = status.refreshed_at or status.generated_at
+    stamp = checked_at.isoformat(timespec="seconds") if checked_at else "unknown"
+    models = "?" if status.model_count is None else str(status.model_count)
+    providers_count = "?" if status.provider_count is None else str(status.provider_count)
+    msgs.say(msgs.CATALOG_REFRESHED, stamp=stamp, providers=providers_count, models=models, path=status.db_path)
+    return True
+
+
 def _is_wrapper_request(catalog_id: str, request: str) -> bool:
     """True when ``request`` is ``catalog_id`` plus a wrapper suffix, e.g. the
     catalog id ``deepseek-v4-pro`` against the request ``deepseek-v4-pro:cloud``.
 
     Requires an exact prefix match followed by a boundary that is not itself
-    part of a bare model slug (letters, digits, ``-`` all continue one), so a
+    part of a bare model slug (letters, digits, ``-`` and ``.`` continue one), so a
     genuinely distinct sibling model — ``gpt-5-mini-2026`` against the catalog
     id ``gpt-5`` — is rejected: ``-`` continues the slug, it isn't a wrapper
     marker like ``:``.
@@ -549,7 +639,7 @@ def _is_wrapper_request(catalog_id: str, request: str) -> bool:
     if not request.startswith(catalog_id):
         return False
     tail = request[len(catalog_id):]
-    return not tail or not (tail[0].isalnum() or tail[0] == "-")
+    return not tail or not (tail[0].isalnum() or tail[0] in "-.")
 
 
 @lru_cache(maxsize=512)
@@ -563,7 +653,9 @@ def lookup_limits(model_id: str, provider_id: str | None = None) -> ModelLimits 
     model_id, provider_id = _normalize_request(model_id, provider_id)
     candidates = _provider_candidates(provider_id)
 
-    for candidate in (() if "-latest" in model_id.lower() else candidates):
+    # A provider-pinned exact id answers first, `-latest` ids included: OpenAI
+    # ships real ids like gpt-5.2-chat-latest with their own limits.
+    for candidate in candidates:
         model = modelsdotdev.get_model_by_id(f"{candidate}:{model_id}")
         if model is not None:
             limits = getattr(model, "limits", None)
@@ -657,14 +749,14 @@ def cached_server_context_ceiling(model_id: str, provider_id: str | None = None)
     return None if metadata is None else metadata.training_context_window
 
 
-def context_window(model_id: str, provider_id: str | None = None) -> int | None:
-    ensure_fresh_catalog()
+def context_window(model_id: str, provider_id: str | None = None, *, refresh=None) -> int | None:
+    (ensure_fresh_catalog if refresh is None else refresh)()
     limits = lookup_limits(model_id, provider_id)
     return None if limits is None else limits.context_window
 
 
-def max_output_tokens(model_id: str, provider_id: str | None = None) -> int | None:
-    ensure_fresh_catalog()
+def max_output_tokens(model_id: str, provider_id: str | None = None, *, refresh=None) -> int | None:
+    (ensure_fresh_catalog if refresh is None else refresh)()
     limits = lookup_limits(model_id, provider_id)
     return None if limits is None else limits.max_output_tokens
 
@@ -683,9 +775,9 @@ def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ..
     million tokens, lowest ``min_context`` first; None when the catalog has no
     price for it.
 
-    A call with a provider is priced only by that provider's own catalog row
-    (or the rows its SDK or login maps to), so a local server running a model
-    that some API sells is not charged that API's price. A call with no
+    A call with a provider is priced only by that provider's own catalog row,
+    so a local server running a model that some
+    API sells is not charged that API's price. A call with no
     provider goes through the gateway and is priced by the routed row. Looking
     up a provider that is not built in refreshes a stale catalog, as every
     provider lookup does; results are cached per model and provider.
@@ -693,10 +785,10 @@ def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ..
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    names = [f"{candidate}:{model_id}" for candidate in _provider_candidates(provider_id)]
+    names = [f"{candidate}:{model_id}" for candidate in _provider_candidates(provider_id, include_sdk=False)]
     bare_model, bare_provider = _normalize_request(model_id, provider_id)
     if bare_provider:
-        names += [f"{candidate}:{bare_model}" for candidate in _provider_candidates(bare_provider)]
+        names += [f"{candidate}:{bare_model}" for candidate in _provider_candidates(bare_provider, include_sdk=False)]
     else:
         limits = lookup_limits(bare_model, None)
         if limits is not None and limits.provider_id is not None:

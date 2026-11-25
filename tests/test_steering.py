@@ -1,4 +1,4 @@
-"""Input typed while a turn runs (runtime.steer).
+"""Input typed while a turn runs (STEER_MODE).
 
 now: the line reaches the model at the running turn's next tool boundary, as a
 user message after the tool results; a turn with no boundary left gets it as
@@ -14,15 +14,16 @@ import threading
 import ai
 import ai.types.usage
 from ai.providers import history_utils
+from repl_driver import run_async, thread_event, within
+from turn_driver import one_turn
 
-from js import cli, runtime, settings
+from js import cli, repl_state, runtime, turn_budget
 from js.config import Config, from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
-from repl_driver import run_async
 
 
 def _text(text: str) -> ModelStreamResult:
@@ -101,7 +102,7 @@ def test_steered_message_follows_the_tool_results_and_precedes_the_next_call(mon
     offered = [{"role": "user", "content": "turn left instead", "steered": True}]
     messages = [{"role": "user", "content": "go"}]
 
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
         tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
         steer=lambda: offered.pop() if offered else None,
@@ -120,16 +121,7 @@ def test_a_steered_message_does_not_start_a_new_turn_for_compaction():
         {"role": "assistant", "content": "", "tool_calls": []},
         {"role": "user", "content": "also this", "steered": True},
     ]
-    assert runtime._last_user_message_index(messages) == 0
-
-
-def test_steer_knob_accepts_the_three_modes_only():
-    spec = next(s for s in settings.REGISTRY if s.key == "runtime.steer")
-    assert spec.default == "now"
-    for mode in ("now", "batch", "one", "BATCH"):
-        value, error = settings.coerce_value(spec, mode)
-        assert error is None and value == mode.lower()
-    assert settings.coerce_value(spec, "sideways")[1] is not None
+    assert turn_budget.last_user_message_index(messages) == 0
 
 
 # --------------------------------------------------------------------------
@@ -175,7 +167,7 @@ class _Harness:
             return _text(f"reply {len(self.calls)}")
 
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.delenv("JS_AGENT", raising=False)
+        monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
         monkeypatch.delenv("JS_SESSION", raising=False)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_with_hold)
@@ -191,8 +183,7 @@ class _Harness:
         run_async(self.monkeypatch, from_env(), run_script)
 
     async def wait_hold(self) -> None:
-        while not self.hold_started.is_set():
-            await asyncio.sleep(0.01)
+        await thread_event(self.hold_started, "the turn to reach the hold tool")
 
     def transcript(self) -> str:
         found = list((self.tmp_path / ".js" / "logs" / "transcript").rglob("*.log"))
@@ -232,7 +223,7 @@ def test_steer_now_without_a_boundary_left_arrives_after_the_turn(monkeypatch, t
 
     async def script(on_line, h):
         await on_line("first")
-        await h.text_gate_entered.wait()
+        await within(h.text_gate_entered.wait(), "the turn's first model call")
         await on_line("one more thing")
         await on_line("and another")
         h.text_gate.set()
@@ -242,45 +233,6 @@ def test_steer_now_without_a_boundary_left_arrives_after_the_turn(monkeypatch, t
     assert len(h.calls) == 2
     assert _user_texts(h.calls[1])[-1] == "one more thing\nand another"
     assert [m["role"] for m in h.session()] == ["user", "assistant", "user", "assistant"]
-
-
-def test_steer_batch_sends_lines_typed_during_a_turn_as_one_message(monkeypatch, tmp_path):
-    h = _Harness(monkeypatch, tmp_path)
-
-    async def script(on_line, h):
-        await on_line("/set runtime.steer batch")
-        await on_line("first")
-        await h.wait_hold()
-        await on_line("second")
-        await on_line("third")
-        h.hold_release.set()
-
-    h.run(script)
-
-    # Turn one: tool call + answer. Turn two: both queued lines, one message.
-    assert len(h.calls) == 3
-    assert "second" not in "".join(_user_texts(h.calls[1]))
-    assert _user_texts(h.calls[2])[-1] == "second\nthird"
-    session = h.session()
-    assert [m["role"] for m in session] == ["user", "assistant", "tool", "assistant", "user", "assistant"]
-
-
-def test_steer_one_runs_a_turn_per_line(monkeypatch, tmp_path):
-    h = _Harness(monkeypatch, tmp_path)
-
-    async def script(on_line, h):
-        await on_line("/set runtime.steer one")
-        await on_line("first")
-        await h.wait_hold()
-        await on_line("second")
-        await on_line("third")
-        h.hold_release.set()
-
-    h.run(script)
-
-    assert len(h.calls) == 4
-    assert _user_texts(h.calls[2])[-1] == "second"
-    assert _user_texts(h.calls[3])[-1] == "third"
 
 
 def test_flush_drops_lines_waiting_to_steer(monkeypatch, tmp_path):
@@ -300,36 +252,17 @@ def test_flush_drops_lines_waiting_to_steer(monkeypatch, tmp_path):
     assert [m["role"] for m in h.session()] == ["user", "assistant", "tool", "assistant"]
 
 
-def test_steered_line_is_in_the_transcript_where_the_model_receives_it(monkeypatch, tmp_path):
-    h = _Harness(monkeypatch, tmp_path)
-
-    async def script(on_line, h):
-        await on_line("first")
-        await h.wait_hold()
-        await on_line("actually check the logs")
-        h.hold_release.set()
-
-    h.run(script)
-
-    # The line was typed before the tool returned; the transcript has it after
-    # the tool result, where it entered the conversation. At the default
-    # ui.tools 1 the exchange's `>` line is printed once the result is in.
-    log = h.transcript()
-    assert log.count("actually check the logs") == 1
-    assert log.index("first") < log.index("> hold") < log.index("actually check the logs")
-
-
 def test_steered_line_goes_through_the_input_event(monkeypatch, tmp_path):
     h = _Harness(monkeypatch, tmp_path)
     inputs: list[str] = []
-    real_emit = cli._emit_repl_event
+    real_emit = repl_state.emit_repl_event
 
     def recording_emit(state, telemetry, event, **payload):
         if event == "input":
             inputs.append(payload["text"])
         return real_emit(state, telemetry, event, **payload)
 
-    monkeypatch.setattr(cli, "_emit_repl_event", recording_emit)
+    monkeypatch.setattr(repl_state, "emit_repl_event", recording_emit)
 
     async def script(on_line, h):
         await on_line("first")

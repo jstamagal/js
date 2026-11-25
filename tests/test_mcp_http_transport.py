@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import threading
+import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from js.mcp.client import MCPClient
+from js.mcp.protocol import JSONRPCPeer
 from js.mcp.transports import StreamableHTTPTransport, StreamableHTTPTransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
@@ -35,6 +39,12 @@ class State:
         self.post_started = threading.Event()
         self.release_post = threading.Event()
         self.post_finished = threading.Event()
+        self.long_post_followup = False
+        self.get_frames: list = []
+        self.get_resume: list[str | None] = []
+        self.get_times: list[float] = []
+        self.gets_done = threading.Event()
+        self.post_frame = b""
 
     def record(self, method, headers, body=None):
         with self.lock:
@@ -53,7 +63,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(length))
+        self.answer(json.loads(self.rfile.read(length)))
+
+    def answer(self, body):
         self.state.record("POST", self.headers, body)
         method = body.get("method")
         if self.state.delay_post_headers:
@@ -87,6 +99,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(payload)
                 self.wfile.flush()
+                if self.state.long_post_followup:
+                    self.state.release_post.wait(3)
+                    self.wfile.write(b'data: {"jsonrpc":"2.0","method":"still-streaming"}\n\n')
+                    self.wfile.flush()
                 self.state.stop.wait(3)
             else:
                 self._body(200, "text/event-stream; charset=utf-8", payload, session=True)
@@ -109,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"id: event-one\nretry: 1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"first\"}\n\n")
             self.wfile.flush()
             return
-        if self.state.timeout_reconnect and self.state.gets == 1:
+        if self.state.gets <= self.state.timeout_reconnect:
             self.state.stop.wait(0.2)
             return
         notification = self.state.notification
@@ -139,9 +155,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def server():
+def server(handler=Handler):
     state = State()
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.state = state
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -156,6 +172,62 @@ def server():
 
 def request(method="test/json", request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method}
+
+
+def test_sse_initialization_defers_get_until_protocol_version_is_negotiated():
+    negotiated = "2025-03-26"
+    early_get = threading.Event()
+    get_observed = threading.Event()
+
+    class NegotiatingHandler(Handler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.state.record("POST", self.headers, body)
+            if body["method"] == "initialize":
+                result = {
+                    "protocolVersion": negotiated,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "older-server", "version": "1"},
+                }
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                early_get.wait(0.2)
+                payload = {"jsonrpc": "2.0", "id": body["id"], "result": result}
+                self.wfile.write(b"data: " + json.dumps(payload).encode() + b"\n\n")
+                self.wfile.flush()
+            elif self.headers.get("MCP-Protocol-Version") != negotiated:
+                self._body(400, "application/json", b"")
+            elif body["method"] == "notifications/initialized":
+                self._body(202, "application/json", b"")
+            else:
+                payload = {"jsonrpc": "2.0", "id": body["id"], "result": {"tools": []}}
+                self._body(200, "application/json", json.dumps(payload).encode())
+
+        def do_GET(self):
+            self.state.record("GET", self.headers)
+            if self.headers.get("MCP-Protocol-Version") != negotiated:
+                early_get.set()
+                self._body(400, "application/json", b"")
+            else:
+                self._body(405, "application/json", b"")
+            get_observed.set()
+
+    async def scenario(url):
+        client = MCPClient(lambda: StreamableHTTPTransport(url, reconnect_attempts=0))
+        try:
+            assert (await client.initialize(timeout=1)).protocol_version == negotiated
+            assert await client.list_tools(timeout=1) == []
+            assert await asyncio.to_thread(get_observed.wait, 1)
+        finally:
+            await client.close()
+
+    with server(NegotiatingHandler) as (state, url):
+        run(scenario(url))
+        assert not early_get.is_set()
+        gets = [headers for method, headers, _body in state.requests if method == "GET"]
+        assert gets and all(headers["Mcp-Protocol-Version"] == negotiated for headers in gets)
 
 
 def test_json_and_sse_post_replies_track_session_and_event_fields():
@@ -327,13 +399,45 @@ def test_cancelled_post_before_headers_remains_owned_through_close():
         # tracked socket down, the request thread errors out promptly, and
         # ownership is still settled before close returns.
         await asyncio.wait_for(closing, 2)
-        assert not transport._request_tasks
-        assert not transport._active
+        assert transport.posts_in_flight == 0
+        assert transport.open_responses == 0
         state.release_post.set()
 
     with server() as (state, url):
         state.delay_post_headers = True
         run(scenario(state, url))
+
+
+def test_request_deadline_does_not_wait_for_http_dns_cleanup(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_dns(*_args, **_kwargs):
+        entered.set()
+        release.wait(3)
+        raise socket.gaierror("controlled DNS failure")
+
+    monkeypatch.setattr(socket, "getaddrinfo", blocked_dns)
+
+    async def drive():
+        transport = StreamableHTTPTransport("http://127.0.0.1:9/mcp", timeout=1)
+        peer = await JSONRPCPeer.connect(lambda: transport)
+        task = asyncio.create_task(peer.request("slow", timeout=0.01))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            done, _pending = await asyncio.wait({task}, timeout=0.3)
+            assert task in done
+            with pytest.raises(TimeoutError):
+                await task
+            assert transport.posts_in_flight
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await peer.close()
+        assert transport.posts_in_flight == 0
+        assert transport.open_responses == 0
+
+    run(drive())
 
 
 def test_cancellation_and_close_unblock_long_lived_get():
@@ -438,92 +542,128 @@ def test_close_unblocks_https_operation_stalled_in_tls_handshake():
     run(drive())
 
 
+class ScriptedHandler(Handler):
+    """Each GET serves the next of state.get_frames, then 405 ends the stream.
+
+    A frame is bytes, or a list of bytes written and flushed one by one and
+    threading.Events the handler waits on between them. A ``test/sse-script``
+    POST answers with state.post_frame followed by its reply event.
+    """
+
+    def answer(self, body):
+        if body.get("method") != "test/sse-script":
+            return super().answer(body)
+        self.state.record("POST", self.headers, body)
+        reply = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": {"ok": "script"}}).encode()
+        self._body(200, "text/event-stream", self.state.post_frame + b"data: " + reply + b"\n\n")
+
+    def do_GET(self):
+        state = self.state
+        with state.lock:
+            index = len(state.get_times)
+            state.get_times.append(time.monotonic())
+            state.get_resume.append(self.headers.get("Last-Event-ID"))
+        if index >= len(state.get_frames):
+            self._body(405, "application/json", b"")
+            state.gets_done.set()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        frame = state.get_frames[index]
+        for part in frame if isinstance(frame, list) else [frame]:
+            if isinstance(part, threading.Event):
+                part.wait(3)
+            else:
+                self.wfile.write(part)
+                self.wfile.flush()
+
+
+@contextmanager
+def scripted(*get_frames, post_frame=b""):
+    with server(ScriptedHandler) as (state, url):
+        state.get_frames = list(get_frames)
+        state.post_frame = post_frame
+        yield state, url
+
+
+async def open_get_stream(url, **options):
+    """A transport past its first request, its notification stream started."""
+    transport = StreamableHTTPTransport(url, **{"reconnect_backoff": 0, "reconnect_attempts": 0, **options})
+    await transport.send(request())
+    assert (await asyncio.wait_for(transport.receive(), 1))["id"] == 1
+    return transport
+
+
+async def finish_get_stream(transport, state):
+    """Wait until every scripted GET was served, then show nothing else arrived."""
+    assert await asyncio.to_thread(state.gets_done.wait, 5), "the GET stream never finished"
+    await transport.send(request("test/json", "after"))
+    assert (await asyncio.wait_for(transport.receive(), 1))["id"] == "after"
+    await transport.close()
+
+
 def test_sse_id_commits_only_at_event_boundary_and_eof_discards_partial():
-    class FakeStream:
-        def __init__(self, payload: bytes):
-            self._lines = payload.splitlines(keepends=True)
-
-        def read1(self, _limit):
-            return self._lines.pop(0) if self._lines else b""
-
-    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
-    received = []
-
     complete = b'id: one\ndata: {"jsonrpc":"2.0","method":"a"}\n\n'
     partial = b'id: lost\ndata: {"jsonrpc":"2.0","method":"b"}\n'  # no boundary
-    transport._consume_sse(FakeStream(complete + partial), received.append)
 
-    assert [m["method"] for m in received] == ["a"]
-    assert transport.last_event_id == "one"
+    async def scenario(state, url):
+        transport = await open_get_stream(url)
+        assert (await asyncio.wait_for(transport.receive(), 1))["method"] == "a"
+        await finish_get_stream(transport, state)
+        assert transport.last_event_id == "one"
 
-
-class ReadlineStream:
-    """read1() delivering LF-split chunks, like a buffered HTTP response."""
-
-    def __init__(self, payload: bytes):
-        self._payload = payload
-        self._pos = 0
-
-    def read1(self, _limit):
-        if self._pos >= len(self._payload):
-            return b""
-        index = self._payload.find(b"\n", self._pos)
-        end = len(self._payload) if index == -1 else index + 1
-        chunk = self._payload[self._pos:end]
-        self._pos = end
-        return chunk
+    with scripted([complete, partial]) as (state, url):
+        run(scenario(state, url))
+        assert state.get_resume == [None, "one"]
 
 
 def test_sse_grammar_cr_terminators_bom_and_empty_id_reset():
-    received = []
-    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
-
     # Lone-CR terminated stream with a leading BOM.
-    cr_stream = (
-        b'\xef\xbb\xbfid: cr-one\rdata: {"jsonrpc":"2.0","method":"a"}\r\r'
-    )
-    transport._consume_sse(ReadlineStream(cr_stream), received.append)
-    assert [m["method"] for m in received] == ["a"]
-    assert transport.last_event_id == "cr-one"
-
+    cr_stream = b'\xef\xbb\xbfid: cr-one\rdata: {"jsonrpc":"2.0","method":"a"}\r\r'
     # A completed empty id resets resume state to the empty string.
     reset_stream = b"id\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"b\"}\n\n"
-    transport._consume_sse(ReadlineStream(reset_stream), received.append)
-    assert [m["method"] for m in received] == ["a", "b"]
-    assert transport.last_event_id == ""
-
     # Non-digit retry values are ignored per the grammar.
-    before = transport._retry_seconds
-    transport._consume_sse(ReadlineStream(b"retry: -5\nretry: x\n\n"), received.append)
-    assert transport._retry_seconds == before
+    retry_stream = b"retry: 250\nretry: -5\nretry: x\n\n"
+
+    async def scenario(state, url):
+        transport = await open_get_stream(url)
+        assert (await asyncio.wait_for(transport.receive(), 1))["method"] == "a"
+        assert (await asyncio.wait_for(transport.receive(), 1))["method"] == "b"
+        await finish_get_stream(transport, state)
+        assert transport.last_event_id == ""
+
+    with scripted(cr_stream, reset_stream, retry_stream) as (state, url):
+        run(scenario(state, url))
+        # An empty committed id omits the header on the next GET.
+        assert state.get_resume == [None, "cr-one", None, None]
+        assert state.get_times[3] - state.get_times[2] >= 0.25
 
 
 def test_lone_cr_events_deliver_promptly_on_a_live_stream():
-    class Read1Stream:
-        """Each read1 call is one network arrival; EOF only at the end."""
-
-        def __init__(self, chunks, probe):
-            self._chunks = list(chunks)
-            self._probe = probe
-
-        def read1(self, _limit):
-            self._probe()
-            return self._chunks.pop(0) if self._chunks else b""
-
-    received = []
-    deliveries_before_read = []
-    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
-    chunks = [
+    first_delivered = threading.Event()
+    second_delivered = threading.Event()
+    live = [
         b'id: live\rdata: {"jsonrpc":"2.0","method":"a"}\r\r',
+        first_delivered,
         b'data: {"jsonrpc":"2.0","method":"b"}\r\r',
+        second_delivered,
     ]
-    stream = Read1Stream(chunks, lambda: deliveries_before_read.append(len(received)))
-    transport._consume_sse(stream, received.append)
-    assert [m["method"] for m in received] == ["a", "b"]
-    # The first event was delivered before the second network read, and the
-    # second before the EOF read: no waiting for LF or EOF.
-    assert deliveries_before_read == [0, 1, 2]
-    assert transport.last_event_id == "live"
+
+    async def scenario(state, url):
+        transport = await open_get_stream(url)
+        # Each event arrives while the server holds the stream open: no
+        # waiting for an LF or for EOF.
+        assert (await asyncio.wait_for(transport.receive(), 1))["method"] == "a"
+        first_delivered.set()
+        assert (await asyncio.wait_for(transport.receive(), 1))["method"] == "b"
+        second_delivered.set()
+        await finish_get_stream(transport, state)
+        assert transport.last_event_id == "live"
+
+    with scripted(live) as (state, url):
+        run(scenario(state, url))
 
 
 def test_crlf_and_bom_split_across_network_reads():

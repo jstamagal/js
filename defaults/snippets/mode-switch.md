@@ -1,0 +1,1 @@
+<js-reminder>This conversation {{COURSE}}. {{PRESENCE}}</js-reminder>

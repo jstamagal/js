@@ -1,0 +1,24 @@
+{"kind":"message","message":{"role":"user","content":"a1"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"k1","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"k1","content":"value"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"assistant","content":"a2"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"message","message":{"role":"user","content":"b1"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"assistant","content":"b2","reasoning_content":"thinking b2","reasoning_parts":[{"type":"thinking","signature":"sig-b2"}],"reasoning_from":{"provider":"anthropic","model":"model-a"}},"stamp":{"model":"model-a","provider":"anthropic","reasoning":"high"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"mark","marker":"rollback_to:5","ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"message","message":{"role":"user","content":"b1 edited"},"ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"message","message":{"role":"assistant","content":"b2 again","reasoning_content":"thinking b2 again","reasoning_parts":[{"type":"thinking","signature":"sig-b2 again"}],"reasoning_from":{"provider":"anthropic","model":"model-a"}},"stamp":{"model":"model-b","provider":"openai","reasoning":null},"ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}
+{"kind":"message","message":{"role":"user","content":"c1"},"ts":1790000010.0,"version":1,"id":"r010","parent":"r009"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"k2","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000011.0,"version":1,"id":"r011","parent":"r010"}
+{"kind":"mark","marker":"turn_interrupted","ts":1790000012.0,"version":1,"id":"r012","parent":"r011"}
+{"kind":"message","message":{"role":"user","content":"c2"},"ts":1790000013.0,"version":1,"id":"r013","parent":"r012"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"CS\",\"keep_from\":4,\"forced\":false,\"rehydrated\":{\"role\":\"user\",\"content\":\"<post-compaction-files>\\nfile.py\\n</post-compaction-files>\"}}","ts":1790000014.0,"version":1,"id":"r014","parent":"r013"}
+{"kind":"message","message":{"role":"assistant","content":"d1"},"ts":1790000015.0,"version":1,"id":"r015","parent":"r014"}
+{"kind":"message","message":{"role":"user","content":"d2"},"ts":1790000016.0,"version":1,"id":"r016","parent":"r015"}
+{"kind":"mark","marker":"rollback_to:5","ts":1790000017.0,"version":1,"id":"r017","parent":"r016"}
+{"kind":"message","message":{"role":"user","content":"d2 edited"},"ts":1790000018.0,"version":1,"id":"r018","parent":"r017"}
+{"kind":"mark","marker":"session_reset","ts":1790000019.0,"version":1,"id":"r019","parent":"r018"}
+{"kind":"message","message":{"role":"user","content":"e1"},"ts":1790000020.0,"version":1,"id":"r020","parent":"r019"}
+{"kind":"message","message":{"role":"assistant","content":"e2"},"ts":1790000021.0,"version":1,"id":"r021","parent":"r020"}
+{"kind":"message","message":{"role":"user","content":"e3"},"ts":1790000022.0,"version":1,"id":"r022","parent":"r021"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"CS2\",\"keep_from\":2,\"forced\":false}","ts":1790000023.0,"version":1,"id":"r023","parent":"r022"}
+{"kind":"message","message":{"role":"user","content":"e4"},"ts":1790000024.0,"version":1,"id":"r024","parent":"r023"}

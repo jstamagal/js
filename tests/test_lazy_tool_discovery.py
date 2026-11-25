@@ -7,16 +7,15 @@ from pathlib import Path
 import ai
 import ai.types.messages
 import ai.types.usage
+from turn_driver import one_turn, run
 
-from js import context_budget, runtime
-from js import skills as skills_mod
+from js import context_budget, runtime, skills as skills_mod
 from js.config import Config
 from js.mcp.host import MCPHost
 from js.mcp_config import MCPConfiguration, MCPPolicy
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-
 
 
 def _without_builtin_skills(monkeypatch, tmp_path):
@@ -79,7 +78,7 @@ def _cfg(tmp_path: Path, settings: dict | None = None) -> Config:
     )
 
 
-def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
+def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path, monkeypatch):
     allowed = build_default_registry().select(["browser_probe:lazy", "terminal_session:lazy", "read:lazy"])
     surface = allowed.lazy_surface(tmp_path)
 
@@ -94,14 +93,8 @@ def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
     assert json.loads(surface.discover(query="terminal session"))["results"][0]["source"] == "terminal"
     assert surface.discover(load="native:wiki_search").startswith("ERROR: no allowed catalog entry")
 
-    _, rejected = runtime._dispatch(
-        "browser_probe",
-        "{}",
-        runtime.Telemetry(None),
-        cap_bytes=4096,
-        registry=surface,
-        tool_context=ToolContext(cwd=tmp_path),
-    )
+    turn = run(tmp_path, monkeypatch, allowed, [[("probe", "browser_probe", "{}")]])
+    rejected = turn.results()["probe"]
     assert "native:browser_probe" in rejected
     assert "<retry>" not in rejected
 
@@ -175,6 +168,42 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert denied["loaded"] == []
     assert denied["denied_tools"] == ["browser_probe"]
     assert forbidden.resolve("browser_probe") is None
+
+
+def test_turn_and_skill_tool_use_supplied_catalog(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    instructions = "Inspect the assembly's own files.\n"
+    _skill_file(tmp_path / "assembly-skills", "inspect").write_text(
+        "---\ndescription: Inspect assembly files\ntools: [read]\n---\n" + instructions,
+    )
+    catalog = skills_mod.SkillCatalog.discover(
+        project, builtin_dir=tmp_path / "builtin-skills",
+        global_dir=tmp_path / "assembly-skills", user_dir=tmp_path / "user-skills",
+    )
+    registry = build_default_registry().select(["skill:eager", "read:lazy"])
+    context = ToolContext(cwd=project)
+    calls = []
+
+    def stream(**kwargs):
+        assert context.skill_catalog is catalog
+        found = json.loads(context.tool_registry.discover(kind="skill"))["results"]
+        assert [item["id"] for item in found] == ["skill:inspect"]
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _result(("load-skill", "skill", json.dumps({"name": "inspect"})))
+        assert "read" in [tool.name for tool in kwargs["tools"]]
+        return _result(text="done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    messages = [{"role": "user", "content": "Inspect the assembly"}]
+    one_turn(
+        _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+        tool_registry=registry, tool_context=context, skill_catalog=catalog,
+        suppress_output=True,
+    )
+    assert [m["content"] for m in messages if m["role"] == "tool"] == [instructions]
+    assert len(calls) == 2
 
 
 def test_user_only_skill_is_absent_from_catalog_and_not_loadable(tmp_path):
@@ -316,7 +345,7 @@ def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch,
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "inspect"}]
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path),
         "system",
         messages,
@@ -350,10 +379,10 @@ def test_runtime_ignores_configured_alias_that_uses_discovery_name(monkeypatch, 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _cfg(
         tmp_path,
-        {"tools": {"alias_profiles": [{"match": ["offline"], "aliases": {"read": "tool_discovery"}}]}},
+        {"TOOL_ALIASES": [{"match": ["offline"], "aliases": {"read": "tool_discovery"}}]},
     )
     messages = [{"role": "user", "content": "find tools"}]
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -387,12 +416,12 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn
     registry = build_default_registry().select(["browser_probe:lazy", "read:lazy"])
     cfg = _cfg(
         tmp_path,
-        {"tools": {"alias_profiles": [{"match": ["offline"], "aliases": {"browser_probe": "Probe"}}]}},
+        {"TOOL_ALIASES": [{"match": ["offline"], "aliases": {"browser_probe": "Probe"}}]},
     )
     messages = [{"role": "user", "content": "inspect"}]
     context = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(cfg, "system", messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
+    one_turn(cfg, "system", messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
 
     assert "Probe" not in [tool.name for tool in calls[0]]
     assert "Probe" in [tool.name for tool in calls[1]]
@@ -409,7 +438,7 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn
     ]
 
     later_messages = [{"role": "user", "content": "again"}]
-    runtime.run_turn(cfg, "system", later_messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
+    one_turn(cfg, "system", later_messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
     assert "Probe" in [tool.name for tool in calls[3]]
 
 
@@ -431,7 +460,7 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     context = ToolContext(cwd=tmp_path)
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path),
         "system",
         [{"role": "user", "content": "inspect"}],
@@ -441,11 +470,11 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
     )
 
     assert estimates[1] > estimates[0]
-    assert context.context_budget_state._anchor.tool_tokens == estimates[1]
+    assert context.context_budget_state.anchor.tool_tokens == estimates[1]
 
 
 def test_persisted_call_names_canonicalize_even_for_unloaded_lazy_tools(tmp_path):
-    from js.runtime import _canonical_tool_call_name
+    from js.tool_calls import canonical_tool_call_name
 
     allowed = build_default_registry().select(["read:lazy", "browser_probe:lazy"])
     surface = allowed.aliased({"browser_probe": "Probe"}).lazy_surface(tmp_path)
@@ -453,5 +482,5 @@ def test_persisted_call_names_canonicalize_even_for_unloaded_lazy_tools(tmp_path
     # browser_probe is lazy and unloaded: no Tool object in this batch,
     # but history must still record the canonical name for its alias.
     assert batch.resolve("Probe") is None
-    assert _canonical_tool_call_name("Probe", batch) == "browser_probe"
-    assert _canonical_tool_call_name("unknown_thing", batch) == "unknown_thing"
+    assert canonical_tool_call_name("Probe", batch) == "browser_probe"
+    assert canonical_tool_call_name("unknown_thing", batch) == "unknown_thing"

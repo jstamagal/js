@@ -1,6 +1,6 @@
 """Named key actions for the REPL input and the keys file that remaps them.
 
-The keys file (`keys.file`, unset = ~/.js/keys) is a script in jsrc's
+The keys file (`KEYBINDS_FILE`, unset = ~/.js/keys) is a script in jsrc's
 grammar, one command per line; blank lines and `#` comments, whole-line or
 after the last word, are skipped:
 
@@ -20,13 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import KEY_ALIASES, Keys
 from prompt_toolkit.search import SearchDirection
 
-from . import messages as msgs
-from . import paths
-from . import setcmd
+from . import jsrc_line, messages as msgs, paths, settings as _settings
 
 KeySequence = tuple[str, ...]
 Keymap = dict[str, tuple[KeySequence, ...]]
@@ -45,37 +42,50 @@ class Action:
 
 
 ACTIONS: tuple[Action, ...] = (
-    Action("submit", INPUT, (("enter",),), "Send the input line (emacs mode)."),
+    Action("submit", INPUT, (("enter",),), msgs.KEY_ACTION_SUBMIT.format()),
     Action("history_search", INPUT, (("c-r",),),
-           "Search every prompt in the history; pressed again, the next older match."),
-    Action("ex_open", INPUT, ((":",),), "Open the ex line (vi normal mode)."),
-    Action("ex_run", EX, (("enter",),), "Run the ex line."),
-    Action("ex_cancel", EX, (("escape",),), "Close the ex line without running it."),
-    Action("interrupt", SCREEN, (("c-c",),), "Cancel the running turn and drop queued prompts."),
-    Action("eof", SCREEN, (("c-d",),), "Delete the next character; on an empty line, quit."),
-    Action("suspend", SCREEN, (("c-z",),), "Suspend js to the shell."),
-    Action("reasoning_toggle", SCREEN, (("c-o",),), "Collapse or expand reasoning blocks."),
-    Action("redraw", SCREEN, (("c-l",),), "Redraw the screen."),
-    Action("scroll_up", SCREEN, (("pageup",),), "Scroll the output up a page."),
-    Action("scroll_down", SCREEN, (("pagedown",),), "Scroll the output down a page."),
-    Action("complete", SCREEN, (("tab",),), "Complete the word at the cursor, or cycle completions."),
+           msgs.KEY_ACTION_HISTORY_SEARCH.words()),
+    Action("ex_open", INPUT, ((":",),), msgs.KEY_ACTION_EX_OPEN.format()),
+    Action("ex_run", EX, (("enter",),), msgs.KEY_ACTION_EX_RUN.words()),
+    Action("ex_cancel", EX, (("escape",),), msgs.KEY_ACTION_EX_CANCEL.words()),
+    Action("interrupt", SCREEN, (("c-c",),), msgs.KEY_ACTION_INTERRUPT.words()),
+    Action("cancel_turn", INPUT, (("escape",),), msgs.KEY_ACTION_CANCEL_TURN.words()),
+    Action("eof", SCREEN, (("c-d",),), msgs.KEY_ACTION_EOF.words()),
+    Action("suspend", SCREEN, (("c-z",),), msgs.KEY_ACTION_SUSPEND.words()),
+    Action("reasoning_toggle", SCREEN, (("c-o",),), msgs.KEY_ACTION_REASONING_TOGGLE.words()),
+    Action("redraw", SCREEN, (("c-l",),), msgs.KEY_ACTION_REDRAW.words()),
+    Action("scroll_up", SCREEN, (("pageup",),), msgs.KEY_ACTION_SCROLL_UP.words()),
+    Action("scroll_down", SCREEN, (("pagedown",),), msgs.KEY_ACTION_SCROLL_DOWN.words()),
+    Action("complete", SCREEN, (("tab",),), msgs.KEY_ACTION_COMPLETE.words()),
+    # ircII's window keys: Ctrl-W then a digit. Ctrl-W followed by any other
+    # key is still prompt_toolkit's delete-word-before-the-cursor.
+    *(Action(f"window_{n}", SCREEN, (("c-w", str(n)),), msgs.KEY_ACTION_WINDOW.words(n=n))
+      for n in range(1, 10)),
 )
 ACTION_BY_NAME: dict[str, Action] = {action.name: action for action in ACTIONS}
 
-_KEY_NAMES = frozenset(key.value for key in Keys)
+# prompt_toolkit's pseudo-keys (`<any>`, `<sigint>`, `<bracketed-paste>`, ...) are
+# not keys a person presses; `bind <any> redraw` would fire on every keypress.
+_KEY_NAMES = frozenset(key.value for key in Keys if not key.value.startswith("<"))
 
 
 def keys_file(settings: dict | None) -> Path:
-    """The keys file `keys.file` names, or ~/.js/keys when it is unset."""
-    from . import settings as _settings
+    """The keys file `KEYBINDS_FILE` names, or ~/.js/keys when it is unset."""
 
-    value = _settings.knob(settings, "keys.file")
+    value = _settings.knob(settings, "KEYBINDS_FILE")
     return Path(value).expanduser() if value else paths.keys_file()
 
 
-def default_keymap() -> Keymap:
-    return {action.name: action.keys for action in ACTIONS}
+def default_keymap(actions: tuple[Action, ...] | None = None) -> Keymap:
+    return {action.name: action.keys for action in (ACTIONS if actions is None else actions)}
 
+
+
+def action_for(keymap: Keymap, key: str | KeySequence) -> str | None:
+    """The action bound to a picker key or sequence; None for search text."""
+    sequence = (key,) if isinstance(key, str) else key
+    return next((action for action, sequences in keymap.items()
+                 if any(_same(sequence, bound) for bound in sequences)), None)
 
 def _canonical(key: str) -> str:
     key = KEY_ALIASES.get(key, key)
@@ -87,7 +97,7 @@ def key_error(key: str) -> str | None:
     canonical = _canonical(key)
     if canonical in _KEY_NAMES or len(canonical) == 1:
         return None
-    return msgs.KEYS_BAD_KEY.text(key=key)
+    return msgs.KEYS_BAD_KEY.said(key=key)
 
 
 def _same(a: KeySequence, b: KeySequence) -> bool:
@@ -98,13 +108,14 @@ def _overlaps(a: str, b: str) -> bool:
     return a == b or SCREEN in (a, b)
 
 
-def bind(keymap: Keymap, sequence: KeySequence, action: str) -> Keymap:
+def bind(keymap: Keymap, sequence: KeySequence, action: str, *, actions: tuple[Action, ...] | None = None) -> Keymap:
     """``keymap`` with ``sequence`` added to ``action`` and taken off every
     other action that can fire in the same place."""
-    context = ACTION_BY_NAME[action].context
+    registry = ACTION_BY_NAME if actions is None else {item.name: item for item in actions}
+    context = registry[action].context
     result: Keymap = {}
     for name, sequences in keymap.items():
-        if name != action and _overlaps(ACTION_BY_NAME[name].context, context):
+        if name != action and _overlaps(registry[name].context, context):
             sequences = tuple(seq for seq in sequences if not _same(seq, sequence))
         result[name] = sequences
     if not any(_same(seq, sequence) for seq in result[action]):
@@ -118,65 +129,63 @@ def unbind(keymap: Keymap, sequence: KeySequence) -> Keymap:
             for name, sequences in keymap.items()}
 
 
-def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
+def apply_line(keymap: Keymap, line: str, *, actions: tuple[Action, ...] | None = None) -> tuple[Keymap, str | None]:
     """One keys-file line applied to ``keymap``: ``(keymap, error)``. A line
     with an error leaves the keymap as it was."""
-    parsed = setcmd.split_command(line)
+    registry = ACTION_BY_NAME if actions is None else {item.name: item for item in actions}
+    parsed = jsrc_line.split_command(line)
     if parsed is None:
         return keymap, None
     verb, arg = parsed
-    words = setcmd._strip_load_comment(arg).split()
+    # Words are split on whitespace and never quoted, so a `#` word after at
+    # least one other word starts the trailing comment; a key that is a lone
+    # quote stays a key, and a first word `#` is the # key.
+    words = arg.split()
+    for index, word in enumerate(words[1:], start=1):
+        if word.startswith("#"):
+            words = words[:index]
+            break
     if verb == "bind":
         if len(words) < 2:
-            return keymap, msgs.KEYS_BIND_USAGE.text()
+            return keymap, msgs.KEYS_BIND_USAGE.said()
         *sequence, action = words
-        if action not in ACTION_BY_NAME:
-            return keymap, msgs.KEYS_UNKNOWN_ACTION.text(action=action)
+        if action not in registry:
+            return keymap, msgs.KEYS_UNKNOWN_ACTION.said(action=action)
     elif verb == "unbind":
         if not words:
-            return keymap, msgs.KEYS_UNBIND_USAGE.text()
+            return keymap, msgs.KEYS_UNBIND_USAGE.said()
         sequence, action = words, None
     else:
-        return keymap, msgs.KEYS_UNKNOWN_VERB.text(verb=verb)
+        return keymap, msgs.KEYS_UNKNOWN_VERB.said(verb=verb)
     for key in sequence:
         if (error := key_error(key)) is not None:
             return keymap, error
     if action is None:
         return unbind(keymap, tuple(sequence)), None
-    return bind(keymap, tuple(sequence), action), None
+    return bind(keymap, tuple(sequence), action, actions=actions), None
 
 
-def parse(text: str, path: Path | str) -> tuple[Keymap, list[str]]:
+def parse(text: str, path: Path | str, *, actions: tuple[Action, ...] | None = None) -> tuple[Keymap, list[str]]:
     """The keymap a keys file's ``text`` gives, starting from the defaults, and
     one `path:line: error` line per line that did not apply."""
-    keymap = default_keymap()
+    keymap = default_keymap(actions)
     errors: list[str] = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        keymap, error = apply_line(keymap, line)
+        keymap, error = apply_line(keymap, line, actions=actions)
         if error is not None:
-            errors.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=error))
+            errors.append(msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error))
     return keymap, errors
 
 
-def load(path: Path) -> tuple[Keymap, list[str]]:
+def load(path: Path, *, actions: tuple[Action, ...] | None = None) -> tuple[Keymap, list[str]]:
     """The keymap in the keys file at ``path``; the defaults when there is none."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return default_keymap(), []
+        return default_keymap(actions), []
     except (OSError, UnicodeError) as exc:
-        return default_keymap(), [msgs.KEYS_UNREADABLE.text(path=path, error=exc)]
-    return parse(text, path)
-
-
-def describe(sequence: KeySequence) -> str:
-    """A key sequence as the screen names it: `c-o` is Ctrl-O."""
-    def one(key: str) -> str:
-        if key.startswith("c-") and len(key) == 3:
-            return "Ctrl-" + key[2:].upper()
-        return {"escape": "Esc"}.get(key, key)
-
-    return " ".join(one(key) for key in sequence)
+        return default_keymap(actions), [msgs.KEYS_UNREADABLE.said(path=path, error=exc)]
+    return parse(text, path, actions=actions)
 
 
 def history_search(event) -> None:
@@ -190,10 +199,3 @@ def history_search(event) -> None:
         search.start_search(direction=SearchDirection.BACKWARD)
 
 
-def prompt_bindings(keymap: Keymap) -> KeyBindings:
-    """The keymap's bindings a plain prompt_toolkit prompt (the --blocking
-    REPL) runs: history_search. Its other keys are prompt_toolkit's own."""
-    kb = KeyBindings()
-    for sequence in keymap.get("history_search", ()):
-        kb.add(*sequence)(history_search)
-    return kb

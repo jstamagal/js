@@ -1,8 +1,8 @@
 """Markdown-backed model-facing tool descriptions with conditional sections.
 
-Descriptions live under ``tool_descriptions/<tool>.md``, cut to what a model
-can act on: contracts it cannot infer, cross-references to co-present tools,
-nothing the schema already carries.
+Descriptions and parameter prose live under ``tool_descriptions/<tool>.md``.
+The main text carries contracts and cross-references to co-present tools.
+The ``<!--parameters-->`` section supplies the parameter schema descriptions.
 
 Two independent conditional axes flip parts of a description on and off:
 
@@ -36,13 +36,11 @@ Two independent conditional axes flip parts of a description on and off:
 from __future__ import annotations
 
 import re
-
-from .. import messages as msgs
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 
-_DESCRIPTIONS_ROOT = Path(__file__).with_name("tool_descriptions")
+from .. import messages as msgs, output, paths, snippets
 
 _IF_BLOCK = re.compile(r"[ \t]*<!--if:([A-Za-z0-9_]+)-->\n?(.*?)\n?[ \t]*<!--endif-->\n?", re.DOTALL)
 
@@ -65,18 +63,31 @@ _NAME_BLOCK = re.compile(
 # block regex could not pair — surfaced once, left literal, never a crash.
 _STRAY_MARKER = re.compile(r"\{\{#(?:if|unless)\b|\{\{/(?:if|unless)\}\}")
 
+_PARAMETERS = "<!--parameters-->"
+_PARAMETER_HEADING = re.compile(r"^### ([A-Za-z0-9_.-]+)\n", re.MULTILINE)
+
 _WARNED: set[str] = set()
+
+
+def reset_warnings() -> None:
+    """Forget which warnings were shown; each shows again once."""
+    _WARNED.clear()
 
 
 def _warn_once(message: str) -> None:
     if message in _WARNED:
         return
     _WARNED.add(message)
-    msgs.warn(msgs.DESCRIPTION_PROBLEM, problem=message)
+    output.notice(msgs.DESCRIPTION_PROBLEM, problem=message)
+
+
+def reset_cache() -> None:
+    """Drop the descriptions read; the next load reads its file again."""
+    _load_description.cache_clear()
 
 
 def description_dir() -> Path:
-    return _DESCRIPTIONS_ROOT
+    return paths.defaults_dir() / "tool_descriptions"
 
 
 def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) -> str:
@@ -84,18 +95,29 @@ def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) ->
     blocks whose flag is in ``flags``. Co-present-tool-name blocks
     ({{#if}}/{{#unless}}) are left intact here and resolved later at the
     registry boundary."""
-    return _load_description(name, tuple(flags))
+    return _load_description(_description_path(name), tuple(flags))
+
+
+def _description_path(name: str) -> Path:
+    path = paths.find(Path("tool_descriptions") / f"{name}.md")
+    if path is None:
+        raise FileNotFoundError(f"missing tool description {name!r}; searched {paths.searched('tool_descriptions')}")
+    return path
+
+
+def _read_description(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        raise ValueError(f"invalid tool description {path}: {exc}") from None
 
 
 @cache
-def _load_description(name: str, flags: tuple[str, ...]) -> str:
-    path = _DESCRIPTIONS_ROOT / f"{name}.md"
+def _load_description(path: Path, flags: tuple[str, ...]) -> str:
     try:
-        text = path.read_text(encoding="utf-8").strip()
+        text = _read_description(path).strip()
     except FileNotFoundError:
         raise FileNotFoundError(f"missing tool description: {path}") from None
-    if not text:
-        raise ValueError(f"empty tool description: {path}")
 
     active = frozenset(flags)
 
@@ -103,7 +125,26 @@ def _load_description(name: str, flags: tuple[str, ...]) -> str:
         flag, body = m.group(1), m.group(2)
         return (body + "\n") if flag in active else ""
 
-    return _IF_BLOCK.sub(_resolve, text).strip()
+    return _IF_BLOCK.sub(_resolve, text.split(_PARAMETERS, 1)[0]).strip()
+
+
+def load_parameter_description(name: str, parameter: str, **values: object) -> str:
+    """Read parameter prose from the same markdown file as its tool contract."""
+    path = _description_path(name)
+    text = _read_description(path)
+    if not text.strip():
+        return ""
+    _, separator, parameters = text.partition(_PARAMETERS)
+    if separator:
+        headings = list(_PARAMETER_HEADING.finditer(parameters))
+        for index, heading in enumerate(headings):
+            if heading[1] == parameter:
+                end = headings[index + 1].start() if index + 1 < len(headings) else len(parameters)
+                try:
+                    return snippets.substitute(parameters[heading.end():end].strip(), values)
+                except KeyError as exc:
+                    raise ValueError(f"parameter {parameter!r} in {path} needs {{{{{exc.args[0]}}}}}") from None
+    raise ValueError(f"missing parameter description {parameter!r} in {path}")
 
 
 def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = "") -> str:
@@ -131,11 +172,11 @@ def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = 
             return m.group(0)
         body = m.group("body")
         if "{{#if" in body or "{{#unless" in body:
-            _warn_once(msgs.DESCRIPTION_NESTED_BLOCK.text(label=label))
+            _warn_once(msgs.DESCRIPTION_NESTED_BLOCK.said(label=label))
             return m.group(0)
         names = m.group("names").split()
         if not names:
-            _warn_once(msgs.DESCRIPTION_BLOCK_NAMES_NO_TOOL.text(label=label))
+            _warn_once(msgs.DESCRIPTION_BLOCK_NAMES_NO_TOOL.said(label=label))
             return m.group(0)
         keep = any(n in active for n in names)
         if m.group("kind") == "unless":
@@ -146,5 +187,5 @@ def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = 
     # A marker surviving where every BALANCED block (escaped ones still match the
     # block regex) has been stripped is a genuinely unpaired open/close tag.
     if _STRAY_MARKER.search(_NAME_BLOCK.sub("", text)):
-        _warn_once(msgs.DESCRIPTION_UNBALANCED.text(label=label))
+        _warn_once(msgs.DESCRIPTION_UNBALANCED.said(label=label))
     return rendered.strip()

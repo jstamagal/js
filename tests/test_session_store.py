@@ -12,12 +12,22 @@ from pathlib import Path
 
 import ai
 import pytest
+from repl_driver import stub_screen, turn_stub
+from session_marks import append_compaction_mark
 
-from js import cli, runtime, session_store, supervisor, usage
-from js import memory as M
+from js import (
+    cli,
+    context_window,
+    memory as M,
+    run_assembly,
+    runtime,
+    session_store,
+    supervisor,
+    usage,
+)
 from js.config import from_env
 from js.memory import load_messages
-from js.model_client import ModelStreamResult, ModelToolCall
+from js.model_client import ModelStreamResult
 from js.session_catalog import (
     append_title,
     branch_session,
@@ -27,16 +37,15 @@ from js.session_catalog import (
     session_title,
 )
 from js.toolkit import ToolContext
-from js.toolkit.meta import task
-from repl_driver import LineSession
+from js.toolkit.subagents import task
 
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -45,14 +54,6 @@ def _text(text: str) -> ModelStreamResult:
         text=text, tool_calls=[], reasoning="",
         usage=ai.types.usage.Usage(input_tokens=0, output_tokens=len(text)),
         finish_reason="stop", assistant_message=ai.assistant_message(text),
-    )
-
-
-def _call(label: str, name: str, arguments: dict) -> ModelStreamResult:
-    return ModelStreamResult(
-        text=label, tool_calls=[ModelToolCall(id="call-1", name=name, arguments=json.dumps(arguments))],
-        reasoning="", usage=ai.types.usage.Usage(input_tokens=0, output_tokens=1),
-        finish_reason="tool_calls", assistant_message=ai.assistant_message(label),
     )
 
 
@@ -98,40 +99,6 @@ def test_a_new_session_lands_in_its_start_directory_folder_under_a_dated_name(mo
 
 
 # --- the .txt transcript -----------------------------------------------------
-
-
-def test_the_txt_has_the_fixed_header_numbered_rows_and_no_tool_output(monkeypatch, tmp_path):
-    work = _dir(tmp_path, "work")
-    monkeypatch.chdir(work)
-    monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=work))
-    command = "printf 'hid%s' den\necho second-line"
-    _replies(monkeypatch, _call("look at it", "shell", {"command": command}), _text("done"))
-
-    assert cli.main(["-p", "run it\nplease"]) == 0
-
-    [session] = _all_sessions()
-    lines = session.with_suffix(".txt").read_text(encoding="utf-8").splitlines()
-    assert lines[0].startswith("agent: defaultagent")
-    assert f"dir: {work}" in lines[0] and "mode: -p" in lines[0]
-    assert lines[1].startswith("models: ")
-    assert lines[2].startswith("started: ") and "turns: 1" in lines[2]
-    assert lines[3] == "branched-from: -"
-    assert lines[4].startswith("tags: ")
-    assert lines[5] == ""
-    rows = lines[6:]
-    assert rows[0].startswith("#0001 ") and rows[0].endswith("you  run it")
-    assert rows[1].startswith(" ") and rows[1].strip() == "please"
-    tool = next(row for row in rows if "tool:shell" in row)
-    assert tool.startswith("#0003 ")
-    assert "look at it" in tool and "$ printf 'hid%s' den" in tool and "exit 0" in tool
-    assert re.search(r"\d+B$", tool)
-    assert rows[-1].startswith("#0004 ") and rows[-1].endswith("ape  done")
-    text = "\n".join(lines)
-    assert "hidden" not in text and "second-line" not in text
-    # The output is in the record, at the same message number.
-    records = [json.loads(line) for line in session.read_text(encoding="utf-8").splitlines()]
-    messages = [record["message"] for record in records if record.get("kind") == "message"]
-    assert messages[2]["role"] == "tool" and "hidden" in messages[2]["content"]
 
 
 def test_the_txt_follows_the_record_as_the_session_goes_on(monkeypatch, tmp_path):
@@ -205,14 +172,14 @@ def test_a_subagent_run_is_filed_under_its_parent_session(monkeypatch, tmp_path)
 
 def _repl(monkeypatch, argv, lines, models):
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
+    stub_screen(monkeypatch, lines, wait=True)
 
     def turn(cfg, system, messages, *a, **k):
         models.append(cfg.model)
         messages.append({"role": "assistant", "content": f"on {cfg.model}"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", turn)
-    assert cli.main(["--blocking", *argv]) == 0
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    assert cli.main([*argv]) == 0
 
 
 def test_a_session_resumes_on_the_model_it_was_switched_to(monkeypatch, tmp_path):
@@ -296,40 +263,58 @@ def test_a_prompt_run_records_its_model_flag_in_the_start_record(monkeypatch, tm
     assert last_stamp(session)["model"] == "model-y"
 
 
-def _capture_repl_state(monkeypatch) -> list[dict]:
-    states: list[dict] = []
-    build = cli._repl_state
+def test_a_start_record_keeps_the_provider_a_resume_comes_back_on(monkeypatch, tmp_path):
+    from js import logins
 
-    def capturing(*args, **kwargs):
-        states.append(build(*args, **kwargs))
-        return states[-1]
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
+    calls: list[dict] = []
 
-    monkeypatch.setattr(cli, "_repl_state", capturing)
-    return states
+    def stream(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+
+    assert cli.main(["--session", "died", "--model", "deepseek/deepseek-v4-pro", "-p", "one"]) == 1
+    [session] = _all_sessions()
+    assert first_metadata(session)["model"] == "deepseek-v4-pro"
+    assert first_metadata(session)["provider"] == "deepseek"
+
+    assert cli.main(["--session", "died", "-p", "two"]) == 1
+    assert (calls[-1]["provider_id"], calls[-1]["model_id"]) == ("deepseek", "deepseek-v4-pro")
+
+
+@pytest.mark.parametrize("name", ["2026-09-29T0802-6d65", "task-3-beef"])
+def test_a_generated_session_name_that_matches_nothing_is_an_error(monkeypatch, tmp_path, name):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    _replies(monkeypatch, _text("OK"))
+
+    assert cli.main(["--session", name, "-p", "hi"]) == 2
+    assert _all_sessions() == []
 
 
 def test_the_status_bar_shows_the_running_model_and_follows_model(monkeypatch, tmp_path):
     from repl_driver import run_async
 
     monkeypatch.chdir(_dir(tmp_path, "work"))
-    states = _capture_repl_state(monkeypatch)
+    built: dict = {}
     bars: list[str] = []
 
     async def turn(cfg, system, messages, telemetry, **kwargs):
         messages.append({"role": "assistant", "content": f"on {cfg.model}"})
 
     async def script(on_line):
-        [state] = states
-        bars.append(cli._status_bar_line(cfg, state, False, 200))
+        bars.append(built["status"](200))
         await on_line("/model model-y")
-        bars.append(cli._status_bar_line(cfg, state, False, 200))
+        bars.append(built["status"](200))
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
     cfg = from_env()
     configured = cfg.model
     assert configured not in ("model-x", "model-y")
 
-    run_async(monkeypatch, cfg, script, model="model-x")
+    run_async(monkeypatch, cfg, script, model="model-x", screen_parts=built)
 
     assert "model-x" in bars[0] and configured not in bars[0]
     assert "model-y" in bars[1] and "model-x" not in bars[1]
@@ -344,8 +329,8 @@ def test_a_no_save_repl_writes_no_session_and_lists_none(monkeypatch, tmp_path, 
     assert models  # the turn ran
     assert _all_sessions() == []
     capsys.readouterr()
-    assert cli.main(["--list", "--json"]) == 0
-    assert capsys.readouterr().out == ""
+    assert cli.main(["--list-sessions", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
 
 
 def test_a_no_save_repl_on_a_named_session_reads_it_and_writes_nothing(monkeypatch, tmp_path):
@@ -360,9 +345,9 @@ def test_a_no_save_repl_on_a_named_session_reads_it_and_writes_nothing(monkeypat
         seen.append([m["content"] for m in messages])
         messages.append({"role": "assistant", "content": "again"})
 
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["more", "/model model-y"]))
-    monkeypatch.setattr(cli.runtime, "run_turn", turn)
-    assert cli.main(["--blocking", "-n", "--session", "kept"]) == 0
+    stub_screen(monkeypatch, ["more", "/model model-y"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    assert cli.main(["-n", "--session", "kept"]) == 0
 
     assert seen == [[*history, "more"]]
     assert session.read_bytes() == before
@@ -389,14 +374,14 @@ def test_the_stamped_provider_rides_only_where_routing_takes_it():
 
     on_deepseek = SimpleNamespace(model="deepseek-v4-flash", provider_id="deepseek")
 
-    assert cli._resume_model_spec({"model": "deepseek-v4-flash", "provider": "deepseek"}, on_deepseek) is None
-    assert cli._resume_model_spec({"model": "deepseek-v4-pro", "provider": "deepseek"}, on_deepseek) == \
+    assert run_assembly.stamp_model({"model": "deepseek-v4-flash", "provider": "deepseek"}, on_deepseek) is None
+    assert run_assembly.stamp_model({"model": "deepseek-v4-pro", "provider": "deepseek"}, on_deepseek) == \
         "deepseek/deepseek-v4-pro"
     # A stamped provider that is not the configured one and has no login
     # falls back to the configured model.
-    assert cli._resume_model_spec({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) is None
-    assert cli._resume_model_spec({"model": "gpt-x", "provider": "openai"}, on_deepseek) is None
-    assert cli._resume_model_spec({"model": "m"}, SimpleNamespace(model="m", provider_id=None)) is None
+    assert run_assembly.stamp_model({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) is None
+    assert run_assembly.stamp_model({"model": "gpt-x", "provider": "openai"}, on_deepseek) is None
+    assert run_assembly.stamp_model({"model": "m"}, SimpleNamespace(model="m", provider_id=None)) is None
 
 
 # --- start metadata ----------------------------------------------------------------
@@ -420,6 +405,24 @@ def test_each_start_records_its_mode_and_command_line(monkeypatch, tmp_path):
 
 def _lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_linking_legacy_records_preserves_unicode_line_separators(tmp_path):
+    path = tmp_path / "legacy.jsonl"
+    messages = [{"role": "user", "content": "one\u2028two\u2029three\x85four"},
+                {"role": "assistant", "content": "reply"}]
+    records = [{"kind": "message", "version": 1, "ts": 1, "message": message}
+               for message in messages]
+    path.write_text("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                    encoding="utf-8")
+
+    session_store.link_file(path)
+
+    assert load_messages(path) == messages
+    with path.open(encoding="utf-8") as stream:
+        linked = [json.loads(line) for line in stream]
+    assert all(isinstance(record["id"], str) for record in linked)
+    assert linked[1]["parent"] == linked[0]["id"]
 
 
 def test_a_branch_records_its_parent_and_the_id_of_the_message_it_split_at(tmp_path):
@@ -526,7 +529,7 @@ def test_replay_ignores_ids_and_parents(tmp_path):
     M.persist_messages(session, live)
     M.persist_messages(session, [*live[:2], {"role": "tool", "tool_call_id": "c1", "content": "ok"},
                                  {"role": "assistant", "content": "done"}])
-    M.append_compaction_mark(session, summary="so far", keep_from=2)
+    append_compaction_mark(session, summary="so far", keep_from=2)
     M.append_message(session, {"role": "user", "content": "after"})
     bare = session.with_name("bare.jsonl")
     bare.write_text("".join(json.dumps({k: v for k, v in record.items() if k not in ("id", "parent")}) + "\n"
@@ -544,8 +547,8 @@ def test_name_pins_a_title_on_the_session(monkeypatch, tmp_path, capsys):
 
     session = session_store.folder_for(Path.cwd()) / "titled.jsonl"
     assert session_title(session) == "fbcon lag"
-    assert cli.main(["--list", "--json"]) == 0
-    [record] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert cli.main(["--list-sessions", "--json"]) == 0
+    [record] = json.loads(capsys.readouterr().out)
     assert record["title"] == "fbcon lag"
 
 
@@ -617,6 +620,35 @@ def test_last_finds_the_latest_session_from_another_directory(monkeypatch, tmp_p
 
     [session] = _all_sessions()
     assert [m["content"] for m in load_messages(session)] == ["one", "OK", "two", "OK"]
+
+
+def test_lp_resumes_the_last_session_on_its_model_route_and_effort(monkeypatch, tmp_path):
+    seen: list[dict] = []
+
+    def stream(**kwargs):
+        seen.append(kwargs)
+        return _text("OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    monkeypatch.chdir(_dir(tmp_path, "a"))
+    assert cli.main(["-m", "first-model", "-r", "high", "-p", "one"]) == 0
+
+    assert cli.main(["-lp", "two"]) == 0
+
+    [session] = _all_sessions()
+    assert [m["content"] for m in load_messages(session)] == ["one", "OK", "two", "OK"]
+    keys = ("model_id", "provider_id", "provider_base_url", "reasoning_effort")
+    assert [seen[1][k] for k in keys] == [seen[0][k] for k in keys]
+    assert seen[1]["model_id"] == "first-model" and seen[1]["reasoning_effort"] == "high"
+
+
+def test_lp_with_p_is_refused(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "a"))
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-lp", "two", "-p", "three"])
+
+    assert exc.value.code == 2
 
 
 def test_a_branch_starts_its_usage_totals_at_zero(tmp_path):

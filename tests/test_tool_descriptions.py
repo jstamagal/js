@@ -5,16 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from js.toolkit import descriptions, fs
+from js import paths
+from js.toolkit import descriptions
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry, build_default_registry
-
 
 CORE_TOOL_NAMES = {
     "read",
     "write",
     "fs_search",
-    "ast_search",
     "remove",
     "patch",
     "undo",
@@ -27,31 +26,34 @@ CORE_TOOL_NAMES = {
 
 
 def _prompt_agent_names() -> set[str]:
-    prompts_root = Path(__file__).resolve().parents[1] / "prompts"
+    prompts_root = paths.defaults_dir() / "agents"
     return {path.name for path in prompts_root.iterdir() if path.is_dir() and any(path.glob("*.md"))}
 
 
-def test_description_loader_rejects_missing_and_empty_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(descriptions, "_DESCRIPTIONS_ROOT", tmp_path)
-    descriptions._load_description.cache_clear()
+def test_description_loader_rejects_missing_and_accepts_empty_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "defaults_dir", lambda root=tmp_path: root)
+    tmp_path = tmp_path / "tool_descriptions"
+    tmp_path.mkdir()
+    descriptions.reset_cache()
 
     with pytest.raises(FileNotFoundError):
         descriptions.load_description("missing")
 
     (tmp_path / "empty.md").write_text("\n", encoding="utf-8")
-    with pytest.raises(ValueError):
-        descriptions.load_description("empty")
+    assert descriptions.load_description("empty") == ""
 
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
 
 
 def test_registered_tools_and_description_files_match():
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
     registry = build_default_registry()
     registered = {tool.name for tool in registry.tools}
     files = {path.stem for path in descriptions.description_dir().glob("*.md")}
     generated_agent_tools = _prompt_agent_names() - files
-    turn_scoped_tools = {"tool_discovery"}
+    from js.mcp.host import MCPHost
+    turn_scoped_tools = {"tool_discovery", "named_agent",
+                         *(name for name, _ in MCPHost.control_tools())}
 
     assert CORE_TOOL_NAMES.issubset(registered)
     assert files - turn_scoped_tools == registered - generated_agent_tools
@@ -78,21 +80,6 @@ def test_browse_description_discloses_settle_window_and_original_decoding():
     assert "`fetch(save=...)` when exact bytes matter" in description
 
 
-def test_ast_search_description_says_the_walk_crosses_mount_points():
-    description = " ".join(descriptions.load_description("ast_search").split())
-
-    assert "mount" in description
-    assert "--one-file-system" in description
-
-
-def test_ast_search_description_discloses_the_c_bare_call_pattern_limit():
-    description = " ".join(descriptions.load_description("ast_search").split())
-
-    assert "call($A);" in description
-    assert "Cpp" in description
-
-
-
 def test_file_tool_rename_and_alias_resolution():
     registry = build_default_registry()
 
@@ -104,7 +91,6 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("task").name == "task"
     assert registry.resolve("Task").name == "task"
     assert registry.resolve("fs_search").name == "fs_search"
-    assert registry.resolve("ast_search").name == "ast_search"
     assert registry.resolve("remove").name == "remove"
     assert registry.resolve("patch").name == "patch"
     assert registry.resolve("undo").name == "undo"
@@ -119,14 +105,13 @@ def test_core_tool_schemas_match_canonical_surface_names():
     read = registry.resolve("read")
     write = registry.resolve("write")
     search = registry.resolve("fs_search")
-    ast_search = registry.resolve("ast_search")
     plan = registry.resolve("plan")
     task = registry.resolve("task")
 
     assert read.required == ("file_path",)
-    assert set(read.params) == {"file_path", "range", "show_line_numbers"}
-    assert write.required == ("file_path", "content")
-    assert set(write.params) == {"file_path", "content", "overwrite"}
+    assert set(read.params) == {"file_path", "start_line", "end_line", "start_byte", "end_byte", "show_line_numbers"}
+    assert write.required == ("file_path",)
+    assert set(write.params) == {"file_path", "content", "overwrite", "expected_hash", "from_held", "append"}
     assert {
         "before_context", "after_context", "context_lines",
         "case_insensitive", "show_line_numbers", "file_type",
@@ -134,9 +119,6 @@ def test_core_tool_schemas_match_canonical_surface_names():
     # rg-style spellings still reach the handler through **rg_flags but are not
     # declared: the schema is what the model reads, and declaring both doubled it.
     assert not {"-A", "-B", "-C", "-i", "-n", "type"} & set(search.params)
-    assert ast_search.required == ("pattern",)
-    assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
-    assert set(ast_search.params["lang"]["enum"]) == set(fs._AST_GREP_LANGUAGES)
     assert plan.required == ("plan_name", "version", "content")
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     # poll, wait and kill of a background handle take neither tasks nor agent_id.
@@ -162,7 +144,7 @@ def test_tools_reference_fs_search_section_matches_the_published_schema():
 def test_named_agent_tools_are_generated_from_prompt_dirs():
     registry = build_default_registry()
     # discover real agent dirs so adding/removing a prompt agent never snaps this test.
-    prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
+    prompt_agents = sorted(p.name for p in (paths.defaults_dir() / "agents").iterdir() if p.is_dir())
 
     assert prompt_agents, "prompts/ should expose at least one agent dir"
     for name in prompt_agents:
@@ -170,7 +152,7 @@ def test_named_agent_tools_are_generated_from_prompt_dirs():
         assert tool is not None, name
         assert tool.name == name
         assert tool.required == ("tasks",), name
-        assert set(tool.params) == {"tasks"}, name
+        assert set(tool.params) == {"tasks", "model", "reasoning"}, name
 
     assert [tool.name for tool in registry.select([f"{name}:eager" for name in prompt_agents]).tools] == prompt_agents
 
@@ -216,7 +198,7 @@ def test_multiple_names_if_emits_when_any_present():
 
 
 def test_nested_block_is_rejected_and_left_literal(capsys):
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     text = "{{#unless a}}outer {{#if b}}inner{{/if}}{{/unless}}"
     # Degrade to literal, never resolve a nested block.
     assert R(text, set()) == text
@@ -224,14 +206,14 @@ def test_nested_block_is_rejected_and_left_literal(capsys):
 
 
 def test_malformed_unbalanced_block_degrades_to_literal(capsys):
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     text = "{{#unless a}}no close tag here"
     assert R(text, set()) == text
     assert capsys.readouterr().err
 
 
 def test_block_with_no_tool_name_degrades_to_literal(capsys):
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     text = "{{#if   }}body{{/if}}"  # opener present but names its zero tools
     assert R(text, set()) == text
     assert capsys.readouterr().err
@@ -259,7 +241,7 @@ def test_kept_body_is_not_rescanned_for_directives():
     # is spliced in verbatim, not evaluated as another block.
     text = "{{#unless fs_search}}see {{#if evil}}x{{/if}} literally{{/unless}}"
     # The inner opener trips the nested guard -> whole outer block left literal.
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     assert R(text, {"shell"}) == text
 
 

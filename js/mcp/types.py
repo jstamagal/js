@@ -16,34 +16,7 @@ SUPPORTED_PROTOCOL_VERSIONS = frozenset({
     LATEST_PROTOCOL_VERSION,
 })
 
-JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 JSONRPCId = int | str
-
-
-class JSONRPCErrorObject(TypedDict):
-    code: int
-    message: str
-    data: NotRequired[JSONValue]
-
-
-class JSONRPCRequest(TypedDict):
-    jsonrpc: str
-    id: JSONRPCId
-    method: str
-    params: NotRequired[dict[str, Any]]
-
-
-class JSONRPCNotification(TypedDict):
-    jsonrpc: str
-    method: str
-    params: NotRequired[dict[str, Any]]
-
-
-class JSONRPCResponse(TypedDict):
-    jsonrpc: str
-    id: JSONRPCId
-    result: NotRequired[JSONValue]
-    error: NotRequired[JSONRPCErrorObject]
 
 
 class ImplementationDict(TypedDict):
@@ -59,60 +32,6 @@ class ClientCapabilitiesDict(TypedDict):
     elicitation: NotRequired[dict[str, Any]]
 
 
-class ServerCapabilitiesDict(TypedDict):
-    experimental: NotRequired[dict[str, Any]]
-    logging: NotRequired[dict[str, Any]]
-    prompts: NotRequired[dict[str, bool]]
-    resources: NotRequired[dict[str, bool]]
-    tools: NotRequired[dict[str, bool]]
-    completions: NotRequired[dict[str, Any]]
-
-
-class TextContentDict(TypedDict):
-    type: str
-    text: str
-    annotations: NotRequired[dict[str, Any]]
-    _meta: NotRequired[dict[str, Any]]
-
-
-class ImageContentDict(TypedDict):
-    type: str
-    data: str
-    mimeType: str
-    annotations: NotRequired[dict[str, Any]]
-    _meta: NotRequired[dict[str, Any]]
-
-
-class AudioContentDict(TypedDict):
-    type: str
-    data: str
-    mimeType: str
-    annotations: NotRequired[dict[str, Any]]
-    _meta: NotRequired[dict[str, Any]]
-
-
-class ResourceLinkDict(TypedDict):
-    type: str
-    uri: str
-    name: str
-    title: NotRequired[str]
-    description: NotRequired[str]
-    mimeType: NotRequired[str]
-    size: NotRequired[int]
-    annotations: NotRequired[dict[str, Any]]
-    _meta: NotRequired[dict[str, Any]]
-
-
-class EmbeddedResourceDict(TypedDict):
-    type: str
-    resource: dict[str, Any]
-    annotations: NotRequired[dict[str, Any]]
-    _meta: NotRequired[dict[str, Any]]
-
-
-ContentBlock = (
-    TextContentDict | ImageContentDict | AudioContentDict | ResourceLinkDict | EmbeddedResourceDict
-)
 ProgressToken = str | int
 
 

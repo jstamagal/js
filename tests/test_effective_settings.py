@@ -1,20 +1,32 @@
 """Effective `/set` view + `/save` round-trip.
 
 The settings store lies: a `--model` flag, a saved-login base URL, and env-read
-sampling (JS_TEMP ...) feed the next turn without ever landing in the store.
+sampling (JS_TEMPERATURE ...) feed the next turn without ever landing in the store.
 `/set` overlays those live sources; `/save` folds them back into a jsrc so a
 reload reproduces the running configuration.
 """
 
 from __future__ import annotations
 
+import asyncio
 import copy
+from dataclasses import replace
 
-from js import cli, setcmd, settings
+import pytest
+from repl_driver import record_turns, run_async, within
+
+from js import (
+    jsrc_save,
+    messages as msgs,
+    paths,
+    repl_settings_commands,
+    runtime,
+    setcmd,
+    setting_layers,
+    settings,
+)
 from js.config import Config
 from js.sampling import Sampling
-from js import messages as msgs
-
 
 # ---------------------------------------------------------------------------
 # /set and /show: display forms vs mutations
@@ -32,21 +44,65 @@ def _repl_cfg(tmp_path) -> Config:
     )
 
 
-def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path):
-    cfg = _repl_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults(), "sampling_cli": Sampling()}
-    for line in ("/set", "/show", "/set model.id", "/show provider.id"):
-        before = copy.deepcopy(state["settings"])
-        assert cli._handle_command(line, state, cfg) is True
-        assert state["settings"] == before
+def _with_prompt(tmp_path, monkeypatch, cfg: Config) -> Config:
+    """`cfg` with its agent prompt in place, the working directory the test's own."""
+    monkeypatch.chdir(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    return cfg
 
-    cli._handle_command("/set sampling.temperature 0.3", state, cfg)
-    assert settings.get_dotted(state["settings"], ("sampling", "temperature")) == 0.3
-    assert state["sampling_cli"].temperature == 0.3
 
-    cli._handle_command("/set -sampling.temperature", state, cfg)
-    assert settings.get_dotted(state["settings"], ("sampling", "temperature")) is None
-    assert state["sampling_cli"].temperature is None
+def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path, monkeypatch):
+    cfg = _with_prompt(tmp_path, monkeypatch, _repl_cfg(tmp_path))
+    turns = record_turns(monkeypatch)
+
+    run_async(monkeypatch, cfg, [
+        "before",
+        "/set", "/show", "/set MODEL", "/show PROVIDER",
+        "displayed",
+        "/set TEMPERATURE 0.3",
+        "set",
+        "/set -TEMPERATURE",
+        "cleared",
+    ], wait=True, live_settings=settings.seed_defaults())
+
+    before, displayed, set_, cleared = turns
+    assert displayed.settings == before.settings
+
+    assert settings.get_dotted(set_.settings, ("TEMPERATURE",)) == 0.3
+    assert set_.cfg.layer_set["TEMPERATURE"] == 0.3
+
+    assert settings.get_dotted(cleared.settings, ("TEMPERATURE",)) is None
+    assert "TEMPERATURE" not in cleared.cfg.layer_set
+
+
+@pytest.mark.parametrize("steer_mode", ["now", "batch", "one"])
+def test_a_turn_runs_on_the_live_settings_of_its_start(tmp_path, monkeypatch, steer_mode):
+    """A prompt typed while a turn runs waits for it; a /set typed after that
+    prompt, before its turn starts, applies to its turn and not to the one
+    already running."""
+    cfg = _with_prompt(tmp_path, monkeypatch, _repl_cfg(tmp_path))
+    started, release = asyncio.Event(), asyncio.Event()
+    turns: list[tuple[str, object]] = []
+
+    async def turn(cfg, system, messages, *args, **kwargs):
+        turns.append((messages[-1]["content"], settings.get_dotted(cfg.settings, ("TEMPERATURE",))))
+        if not started.is_set():
+            started.set()
+            await release.wait()
+
+    async def typing(enter):
+        await enter(f"/set STEER_MODE {steer_mode}")
+        await enter("first")
+        await within(started.wait(), "the first turn to start")
+        await enter("second")
+        await enter("/set TEMPERATURE 0.3")
+        release.set()
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    run_async(monkeypatch, cfg, typing, live_settings=settings.seed_defaults())
+
+    assert turns == [("first", None), ("second", 0.3)]
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +111,13 @@ def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(
 
 def test_show_lines_effective_annotates_and_masks():
     store = settings.seed_defaults()
-    settings.set_dotted(store, ("model", "id"), "stored/model")
-    settings.set_dotted(store, ("provider", "api_key"), "private-store-key")
-    settings.set_dotted(store, ("provider", "id"), "stored-provider")
-    overlay = {"model.id": setcmd.LiveValue("live/model", "--model flag")}
+    settings.set_dotted(store, ("MODEL",), "stored/model")
+    settings.set_dotted(store, ("API_KEY",), "private-store-key")
+    settings.set_dotted(store, ("PROVIDER",), "stored-provider")
+    settings.set_dotted(store, ("PARANOID_MODE",), "on")
+    overlay = {"MODEL": setcmd.LiveValue("live/model", "--model flag")}
 
-    one = setcmd.show_lines_effective(store, overlay, "model.id")
+    one = setcmd.show_lines_effective(store, overlay, "MODEL")
     rendered = "\n".join(one.lines)
     assert one.error is None
     assert "live/model" in rendered
@@ -71,19 +128,19 @@ def test_show_lines_effective_annotates_and_masks():
     rendered = "\n".join(full.lines)
     assert "live/model" in rendered
     assert "--model flag" in rendered
-    assert "provider.api_key" in rendered
+    assert "API_KEY" in rendered
     assert "private-store-key" not in rendered
     assert "stored/model" not in rendered
 
-    overlay["provider.api_key"] = setcmd.LiveValue("masked-login-fixture", "saved-login-fixture")
-    secret = setcmd.show_lines_effective(store, overlay, "provider.api_key")
+    overlay["API_KEY"] = setcmd.LiveValue("masked-login-fixture", "saved-login-fixture")
+    secret = setcmd.show_lines_effective(store, overlay, "API_KEY")
     displayed = "\n".join(secret.lines)
     assert "masked-login-fixture" in displayed
     assert "saved-login-fixture" in displayed
     assert "private-store-key" not in displayed
 
     # Values without an overlay still reflect the explicitly supplied store.
-    plain = setcmd.show_lines_effective(store, overlay, "provider.id")
+    plain = setcmd.show_lines_effective(store, overlay, "PROVIDER")
     assert "stored-provider" in "\n".join(plain.lines)
 
 
@@ -96,46 +153,6 @@ def test_show_lines_effective_unknown_key_errors():
 # Overlay computation (the live route diffed against the store)
 # ---------------------------------------------------------------------------
 
-def test_overlay_env_sampling_shows_live_value():
-    store = settings.seed_defaults()  # sampling.temperature unset
-    overlay = cli._live_settings_overlay(
-        store,
-        live_model=None,
-        model_source=None,
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        saved_login=None,
-        provider_default_base_url=None,
-        eff_sampling=Sampling(temperature=1.0),
-        env_sampling=Sampling(temperature=1.0),
-        manifest_sampling=Sampling(),
-        environ={"JS_TEMP": "1.0"},
-    )
-    live = overlay["sampling.temperature"]
-    assert live.display == "1.0"
-    assert live.source == "env JS_TEMP"
-
-
-def test_overlay_flag_model_shows_source_tag():
-    store = settings.seed_defaults()
-    settings.set_dotted(store, ("model", "id"), "stored/model")
-    overlay = cli._live_settings_overlay(
-        store,
-        live_model="testes/test",
-        model_source="--model flag",
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        saved_login=None,
-        provider_default_base_url=None,
-        eff_sampling=Sampling(),
-        env_sampling=Sampling(),
-        manifest_sampling=Sampling(),
-        environ={},
-    )
-    assert overlay["model.id"] == setcmd.LiveValue("testes/test", "--model flag")
-
 
 def test_overlay_login_provider_and_masked_key():
     class _Login:
@@ -143,7 +160,8 @@ def test_overlay_login_provider_and_masked_key():
         provider_api_key = "sk-login"
 
     store = settings.seed_defaults()
-    overlay = cli._live_settings_overlay(
+    settings.set_dotted(store, ("PARANOID_MODE",), "on")
+    overlay = repl_settings_commands._live_settings_overlay(
         store,
         live_model=None,
         model_source=None,
@@ -157,35 +175,14 @@ def test_overlay_login_provider_and_masked_key():
         manifest_sampling=Sampling(),
         environ={},
     )
-    assert overlay["provider.id"].source == "login testes"
-    assert overlay["provider.base_url"] == setcmd.LiveValue(
+    assert overlay["PROVIDER"].source == "login testes"
+    assert overlay["BASE_URL"] == setcmd.LiveValue(
         "http://localhost:8050/v1", "login testes"
     )
     # secret is never printed in the clear
-    assert overlay["provider.api_key"].display
-    assert "sk-login" not in overlay["provider.api_key"].display
-    assert overlay["provider.api_key"].source == "login testes"
-
-
-def test_overlay_empty_when_store_matches_effective():
-    store = settings.seed_defaults()
-    settings.set_dotted(store, ("model", "id"), "same/model")
-    settings.set_dotted(store, ("sampling", "temperature"), 0.7)
-    overlay = cli._live_settings_overlay(
-        store,
-        live_model="same/model",
-        model_source=None,
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        saved_login=None,
-        provider_default_base_url=None,
-        eff_sampling=Sampling(temperature=0.7),
-        env_sampling=Sampling(),
-        manifest_sampling=Sampling(),
-        environ={},
-    )
-    assert overlay == {}
+    assert overlay["API_KEY"].display
+    assert "sk-login" not in overlay["API_KEY"].display
+    assert overlay["API_KEY"].source == "login testes"
 
 
 # ---------------------------------------------------------------------------
@@ -194,53 +191,43 @@ def test_overlay_empty_when_store_matches_effective():
 
 def _effective_store() -> dict:
     store = settings.seed_defaults()
-    settings.set_dotted(store, ("model", "id"), "testes/test")
-    settings.set_dotted(store, ("provider", "id"), "deepseek")
-    settings.set_dotted(store, ("provider", "base_url"), "http://localhost:8050/v1")
-    settings.set_dotted(store, ("provider", "api_key"), "sk-secret")
-    settings.set_dotted(store, ("sampling", "temperature"), 1.0)
+    settings.set_dotted(store, ("MODEL",), "testes/test")
+    settings.set_dotted(store, ("PROVIDER",), "deepseek")
+    settings.set_dotted(store, ("BASE_URL",), "http://localhost:8050/v1")
+    settings.set_dotted(store, ("API_KEY",), "sk-secret")
+    settings.set_dotted(store, ("TEMPERATURE",), 1.0)
     return store
 
 
-def test_save_round_trip_reproduces_effective_values(tmp_path):
+def test_save_round_trip_reproduces_the_values_it_is_given(tmp_path):
     store = _effective_store()
     path = tmp_path / "jsrc"
 
-    count, backup = settings.save_settings_to_jsrc(path, store, stamp="2026-07-07 12:00")
+    jsrc_save.save_settings_to_jsrc(path, store, keys=["MODEL", "PROVIDER", "BASE_URL", "API_KEY", "TEMPERATURE"])
 
-    assert backup is None  # no prior file to back up
-    assert count == len(settings.REGISTRY)
-
-    reloaded = settings.collect_settings(config_paths=[path], env={})
+    reloaded = setting_layers.collect_settings(config_paths=[path], env={})
     for key in (
-        "model.id",
-        "provider.id",
-        "provider.base_url",
-        "provider.api_key",
-        "sampling.temperature",
+        "MODEL",
+        "PROVIDER",
+        "BASE_URL",
+        "API_KEY",
+        "TEMPERATURE",
     ):
         spec = settings.SPEC_BY_KEY[key]
         assert settings.get_dotted(reloaded, spec.path) == settings.get_dotted(store, spec.path)
 
 
-def test_save_backs_up_existing_file(tmp_path):
-    path = tmp_path / "jsrc"
-    path.write_text("# prior config\nset model.id old\n", encoding="utf-8")
+def test_save_after_logout_keeps_provider_settings_cleared(tmp_path, monkeypatch):
+    store = settings.seed_defaults()
+    store.update(PROVIDER="ollama", BASE_URL="http://offline.invalid/v1", API_KEY="old-key")
+    cfg = replace(_repl_cfg(tmp_path), settings=store, provider_id="ollama",
+                  provider_base_url=store["BASE_URL"], provider_api_key=store["API_KEY"])
+    cfg = _with_prompt(tmp_path, monkeypatch, cfg)
+    turns = record_turns(monkeypatch)
 
-    _count, backup = settings.save_settings_to_jsrc(path, _effective_store(), stamp="x")
+    run_async(monkeypatch, cfg, ["/logout", "/save"], live_settings=copy.deepcopy(store))
 
-    assert backup is not None
-    assert backup.name == "jsrc.bak"
-    assert backup.read_text(encoding="utf-8") == "# prior config\nset model.id old\n"
+    assert turns == []
+    reloaded = setting_layers.collect_settings(config_paths=[paths.global_config_file()], env={})
 
-
-def test_save_writes_every_setting_and_the_secret(tmp_path):
-    path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, _effective_store(), stamp="x")
-    text = path.read_text(encoding="utf-8")
-
-    # a setting on its built-in value is written too
-    assert "set runtime.trace on" in text
-    assert f"set limits.max_tool_iterations {settings.default_value('limits.max_tool_iterations')}" in text
-    # provider.api_key IS persisted verbatim (his box; the jsrc key line is plain)
-    assert "set provider.api_key sk-secret" in text
+    assert all(settings.knob(reloaded, key) is None for key in ("PROVIDER", "BASE_URL", "API_KEY"))

@@ -21,7 +21,7 @@ Root `README.md` is only a launch pad.
    name handling, reasoning, output caps, and vision.
 9. [Testing And Development](testing-and-development.md): test suite layout and
    verification commands.
-10. [Headless JSON Events](headless-json.md): the `js -p --json` event schema.
+10. [Headless JSON Events](headless-json.md): final JSON output and the `js -p --json-stream` event schema.
 
 ## What This Project Is
 
@@ -31,7 +31,7 @@ compatibility. The harness optimizes for:
 
 - Low-friction terminal workflows.
 - Explicit settings instead of hidden policy.
-- Shell execution through a settable program (`shell.program`, default bash).
+- Shell execution through a settable program (`SHELL_PROGRAM`, default bash).
 - Rich model-facing tool descriptions.
 - Prompt-directory agents.
 - Parallel subagent delegation.
@@ -41,8 +41,5 @@ compatibility. The harness optimizes for:
 ## What This Project Is Not
 
 - It is not a web app.
-- It is not a generic MCP host.
 - It is not a long-term compatibility layer for old tool names.
 - It has append-only summarizing compaction (`/compact`, `js --compact`) with cache-usage accounting.
-- It does not currently have subagent progress handles, cancellation handles, or
-  per-task model/endpoint override tools.

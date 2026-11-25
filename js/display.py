@@ -1,115 +1,114 @@
-"""Terminal presentation: model text and tool exchanges on their way to a screen.
-
-Every byte of model or tool output passes `clean()` before a terminal sees it,
-so a model that cats a binary cannot leave the terminal needing `reset`.
+"""Model text on its way to a screen: the marks the conversation's two voices
+hang off, Markdown rendered for a terminal, and the stream an answer is drawn
+through.
 
 `Display` owns one stream of answer text. On a terminal it renders Markdown:
 finished top-level blocks commit once and are never redrawn; only the last,
 still-open block is live. Anywhere else it writes the cleaned text as it
 arrives.
 
-The tool renderers build the exchange a turn prints at `ui.tools` 0-3: a call
-header that carries the transcript marker, the command as a highlighted block,
-and the result with its metrics line.
+`Theme` holds the colours an answer and a tool exchange (`js.tool_display`)
+are drawn in, each one of /fset's `COLOR_*` entries (`js.fset`).
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import io
-import json
-import re
+import os
 import shutil
-import sys
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
-from rich.markdown import Markdown
-from rich.syntax import Syntax
+from rich.markdown import Markdown, TableElement
+from rich.text import Text
+from rich.theme import Theme as _RichTheme
 
-from . import colors as C
-from . import messages as msgs
-from . import settings as _settings
-
-# String sequences (OSC, DCS, SOS, PM, APC) run to BEL or ST, 7- or 8-bit.
-_STRING_SEQ = re.compile(r"(?:\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f]).*?(?:\x07|\x1b\\|\x9c)", re.DOTALL)
-_CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
-# Any other escape: ESC, intermediates, one final byte (ESC c, ESC ( 0, ESC 7).
-_ESC = re.compile(r"\x1b[ -/]*[0-~]")
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+from . import fset, output, settings as _settings
+from .control_sequences import SGR, StreamCleaner, clean
+from .text_layout import TAB, block_width, cells, cut_points, terminal_width, wrap_words
 
 
-def clean(text: str) -> str:
-    """Model and tool output as text, never as terminal control sequences.
-
-    Removes OSC/DCS-style strings, CSI sequences and other escapes, then every
-    C0/C1 control byte except newline and tab."""
-    text = _STRING_SEQ.sub("", text)
-    text = _CSI.sub("", text)
-    text = _ESC.sub("", text)
-    return _CONTROL.sub("", text)
+# The two voices of a conversation hang off their marks: column 0 holds only
+# the speaker's mark (MARK_USER, MARK_AGENT), then MARK_GAP spaces, and every
+# row of the text starts at that one column.
+def _speaker(mark_entry: str, colour: str) -> tuple[str, int]:
+    mark = fset.lookup(mark_entry) or ""
+    spaces = fset.mark_gap()
+    return f"{fset.strong(colour, mark)}{' ' * spaces}", cells(mark) + spaces
 
 
-# Transcript marker for a tool exchange: typeable ASCII, one per exchange, so a
-# grep of a saved transcript finds every exchange the screen showed.
-TOOL_MARKER = ">"
+def user_speaker() -> tuple[str, int]:
+    """The operator's mark with its gap, painted, and the text column."""
+    return _speaker("MARK_USER", "COLOR_USER_MARK")
 
-# Chrome: harness-subroutine output, bold white on dark gray.
-CHROME = "\033[1;97;48;2;48;48;48m"
-CHROME_BODY = "\033[97;48;2;48;48;48m"
-CHROME_ERROR = "\033[1;91;48;2;48;48;48m"
-CHROME_STDERR = "\033[93;48;2;48;48;48m"
-STDERR = "\033[93m"
-CODE_THEME = "ansi_dark"
 
-# The two voices of a conversation. The user's line sits behind the input
-# prompt in bold; the answer opens with a dim mirrored glyph on its own line.
-PROMPT = f"{C.BOLD}{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"
-ASSISTANT_MARK = f"{C.GREY}❮{C.RESET}\n"
+def agent_speaker() -> tuple[str, int]:
+    """The agent's mark with its gap, painted, and the text column."""
+    return _speaker("MARK_AGENT", "COLOR_AGENT_MARK")
+
+
+def prompt() -> str:
+    """The input prompt: the operator's mark."""
+    return user_speaker()[0]
+
+
+def hang(text: str, mark: str, indent: int, *, first: bool = True) -> str:
+    """``text`` with ``mark`` before its first row that shows a character
+    (when ``first``) and ``indent`` spaces before every other row that draws
+    anything, painted spaces included; empty rows stay empty."""
+    rows = text.split("\n")
+    for index, row in enumerate(rows):
+        plain = SGR.sub("", row)
+        if not plain:
+            continue
+        if first and plain.strip():
+            rows[index], first = mark + row, False
+        else:
+            rows[index] = " " * indent + row
+    return "\n".join(rows)
 
 
 def user_line(text: str) -> str:
-    """One user message as the conversation shows it."""
-    return f"{PROMPT}{C.BOLD}{text}{C.RESET}\n"
+    """One user message as the conversation shows it, word-wrapped to the
+    text column."""
+    mark, indent = user_speaker()
+    text = wrap_words(clean(text), block_width() - indent)
+    body = "\n".join(fset.strong("COLOR_USER", line) if line else "" for line in text.split("\n"))
+    return hang(body, mark, indent) + "\n"
 
 
 def echo_user(text: str) -> None:
-    """Print `user_line(text)` where the answer will follow."""
-    sys.stdout.write(user_line(text))
-    sys.stdout.flush()
+    """Emit the user text to be echoed where the answer will follow."""
+    output.emit(output.event("user_echo", text=text))
 
 
-def _setting(settings: Any, key: str) -> Any:
+def setting(settings: Any, key: str) -> Any:
     """Knob ``key`` from live settings; its js/jsrc value when absent."""
     return _settings.knob(settings if isinstance(settings, dict) else None, key)
 
 
-def tools_level(settings: Any) -> int:
-    """`ui.tools` from live settings: 0 nothing, 1 metrics, 2 preview, 3 whole."""
-    level = _setting(settings, "ui.tools")
-    return level if isinstance(level, int) and level in range(4) else _settings.default_value("ui.tools")
-
-
-def preview_lines(settings: Any) -> int:
-    lines = _setting(settings, "ui.tools_preview_lines")
-    return lines if isinstance(lines, int) and lines > 0 else _settings.default_value("ui.tools_preview_lines")
-
-
 def markdown_enabled(settings: Any) -> bool:
-    return _setting(settings, "ui.markdown") is not False
+    return setting(settings, "MARKDOWN") is not False
 
 
-def terminal_width() -> int:
-    return max(20, shutil.get_terminal_size((80, 24)).columns)
-
-
-def _render_console(width: int) -> Console:
+def render_console(width: int, styles: dict[str, str] | None = None) -> Console:
+    """A console that renders into a string at ``width``: 24-bit colour, none
+    under NO_COLOR."""
     return Console(
+        theme=_RichTheme(styles) if styles else None,
         file=io.StringIO(),
         force_terminal=True,
         color_system="truecolor",
+        no_color=not fset.colour_on(),
         width=width,
         highlight=False,
         markup=False,
@@ -118,30 +117,184 @@ def _render_console(width: int) -> Console:
     )
 
 
-def _rendered_text(console: Console) -> str:
+def _rendered_text(console: Console, width: int | None = None) -> str:
+    """What ``console`` drew, trailing spaces off each line. With ``width``, a
+    line wider than that in `cells` (rich measures some emoji narrower than
+    the screen does) is cut again to fit, its colours kept."""
     out = console.file.getvalue()  # type: ignore[attr-defined]
-    lines = [line.rstrip(" ") for line in out.split("\n")]
+    lines: list[str] = []
+    for line in out.split("\n"):
+        if width is not None and cells(line) > width:
+            text = Text.from_ansi(line)
+            text.rstrip()
+            if text.cell_len and cells(text.plain) > width:
+                lines += [_ansi_of(piece) for piece in text.divide(cut_points(text.plain, width)[:-1])]
+                continue
+            line = _ansi_of(text)
+        lines.append(line.rstrip(" "))
     return "\n".join(lines)
+
+
+def _ansi_of(text: Text) -> str:
+    """``text`` as ANSI, one line, nothing added."""
+    console = render_console(max(cells(text.plain), 1) + 8)
+    console.print(text, end="", soft_wrap=True)
+    return console.file.getvalue()  # type: ignore[attr-defined]
+
+
+def _markdown_styles(colours: Theme) -> dict[str, str]:
+    """Rich's Markdown styles that carry a colour, in the theme's colours."""
+    return {
+        "markdown.code": f"{colours.code} on {colours.panel}",
+        "markdown.code_block": colours.panel_text,
+        "markdown.block_quote": colours.dim,
+        "markdown.list": colours.highlight,
+        "markdown.item.number": colours.highlight,
+        "markdown.h2": f"{fset.setting_value('MARKDOWN_HEADING_TWO_STYLE')} {colours.highlight}",
+        "markdown.h3": f"{fset.setting_value('MARKDOWN_HEADING_THREE_STYLE')} {colours.highlight}",
+        "markdown.h4": f"{fset.setting_value('MARKDOWN_HEADING_FOUR_STYLE')} {colours.highlight}",
+        "markdown.link": colours.highlight,
+        "markdown.link_url": f"underline {colours.dim}",
+        "markdown.table.border": colours.separator,
+        "markdown.table.header": f"not bold {colours.highlight}",
+    }
+
+
+class _FoldingTable(TableElement):
+    """A Markdown table whose cells wrap: rich's own cuts a long cell short
+    with an ellipsis, and an answer is never cut. A table too wide for the
+    width even with its cells wrapped, where rich would drop columns, is
+    drawn a row at a time instead: each cell on its own line after its
+    column's heading, a rule between rows; a table with no data row, its
+    headings a line each."""
+
+    def __rich_console__(self, console: Console, options: Any) -> Any:
+        rows = [[cell.content for cell in row.cells] for row in (self.body.rows if self.body else [])]
+        headings: list[Text] = []
+        if self.header is not None and self.header.row is not None:
+            for column in self.header.row.cells:
+                heading = column.content.copy()
+                heading.stylize("markdown.table.header")
+                headings.append(heading)
+        if _shows_every_cell(console, options, headings, rows):
+            yield _table(headings, rows, len(rows[0]) if rows else 0)
+            return
+        if not rows:
+            # Headings and no data row: the headings, a line each.
+            yield from headings
+            return
+        for index, row in enumerate(rows):
+            if index:
+                yield Text(fset.setting_value("TABLE_RULE") * min(options.max_width, 3), "markdown.table.border")
+            for column, cell in enumerate(row):
+                heading = headings[column] if column < len(headings) else Text("")
+                yield Text.assemble(heading, " ", cell, overflow="fold") if heading.plain else cell
+
+
+def _table(headings: list[Text], rows: list[list[Text]], columns: int) -> Any:
+    """A Markdown table as rich lays it out, its cells folding."""
+    from rich import box
+    from rich.table import Table
+
+    table = Table(box=box.SIMPLE, pad_edge=False, style="markdown.table.border", show_edge=True,
+                  collapse_padding=True, show_header=bool(headings))
+    for heading in headings or [Text("")] * columns:
+        table.add_column(heading, overflow="fold")
+    for row in rows:
+        table.add_row(*row)
+    return table
+
+
+# Private-use characters, one per cell of a table being checked.
+_PROBE_BASE = 0xF0000
+
+
+def _shows_every_cell(console: Console, options: Any, headings: list[Text], rows: list[list[Text]]) -> bool:
+    """Whether the table of ``headings`` and ``rows`` drawn at ``options``'
+    width shows every cell whole: rich leaves out a column it has no room for.
+    The table is drawn once more with each cell's text spelled in a character
+    of its own, every character the width it stands for and the spaces kept,
+    so the layout is the same; every cell must come back whole."""
+    cells_ = [*headings, *(cell for row in rows for cell in row)]
+    if len(cells_) > 0xFFFD:
+        return False
+
+    def probe(index: int, cell: Text) -> Text:
+        mark = chr(_PROBE_BASE + index)
+        return Text("".join(char if char.isspace() else mark * max(get_cwidth(char), 1) for char in cell.plain))
+
+    probed = iter(probe(index, cell) for index, cell in enumerate(cells_))
+    probe_headings = [next(probed) for _heading in headings]
+    probe_rows = [[next(probed) for _cell in row] for row in rows]
+    columns = len(rows[0]) if rows else len(headings)
+    table = _table(probe_headings, probe_rows, columns)
+    drawn = Counter(char for line in console.render_lines(table, options, pad=False)
+                    for segment in line for char in segment.text if not char.isspace())
+    return all(drawn[chr(_PROBE_BASE + index)]
+               == sum(max(get_cwidth(char), 1) for char in cell.plain if not char.isspace())
+               for index, cell in enumerate(cells_))
+
+
+class _Markdown(Markdown):
+    """rich's Markdown with tables that wrap their cells, drawing every
+    character of inline source: emphasis keeps its `*`, `_` and `~~` markers
+    inside the style, a backslash escape or an entity is drawn as written, and
+    HTML is text. Commands copied off the screen match what the model wrote."""
+
+    elements = {**Markdown.elements, "table_open": _FoldingTable}
+
+    def __init__(self, markup: str, **options: Any) -> None:
+        super().__init__("", **options)
+        self.markup = markup
+        self.parsed = _SOURCE_PARSER.parse(markup)
+        for token in self.parsed:
+            if token.children:
+                token.children = _with_source(token.children)
+
+
+# commonmark with HTML off, so a tag is text; text_join off, so an escape or
+# an entity stays a text_special token that still holds its source.
+_SOURCE_PARSER = (MarkdownIt("commonmark", {"html": False})
+                  .enable("strikethrough").enable("table").disable("text_join"))
+
+_MARKER_OPEN = {"em_open", "strong_open", "s_open"}
+_MARKER_CLOSE = {"em_close", "strong_close", "s_close"}
+
+
+def _with_source(children: list[Token]) -> list[Token]:
+    """Inline tokens with the source markdown-it consumed put back as text."""
+    kept: list[Token] = []
+    for child in children:
+        if child.type == "text_special":
+            child.type, child.content = "text", child.markup
+        if child.type in _MARKER_CLOSE:
+            kept.append(Token("text", "", 0, content=child.markup))
+        kept.append(child)
+        if child.type in _MARKER_OPEN:
+            kept.append(Token("text", "", 0, content=child.markup))
+    return kept
 
 
 def render_markdown(source: str, width: int) -> str:
     """ANSI rendering of Markdown source at `width` columns: no blank lines
-    before or after, ending in one newline."""
-    console = _render_console(width)
-    console.print(Markdown(source, code_theme=CODE_THEME, hyperlinks=False))
-    return _rendered_text(console).strip("\n") + "\n"
-
-
-def render_code(code: str, lexer: str, width: int) -> str:
-    console = _render_console(width)
-    console.print(Syntax(code, lexer, theme=CODE_THEME, word_wrap=True, background_color="default"))
-    text = _rendered_text(console)
-    return text if text.endswith("\n") else text + "\n"
+    before or after, ending in one newline. Inline code is a chip: its text in
+    COLOR_CODE on COLOR_PANEL, a space of padding each side."""
+    console = render_console(width, _markdown_styles(theme()))
+    document = _Markdown(source, code_theme=fset.code_style(), hyperlinks=False)
+    for token in document.parsed:
+        for child in token.children or ():
+            if child.type == "code_inline":
+                padding = setting(None, "MARKDOWN_INLINE_PADDING")
+                child.content = f"{padding}{child.content}{padding}"
+            elif child.type == "softbreak" and setting(None, "MARKDOWN_HARD_BREAKS"):
+                child.type = "hardbreak"
+    console.print(document)
+    return _rendered_text(console, width).strip("\n") + "\n"
 
 
 def _block_starts(source: str) -> list[int]:
     """Source line numbers where each top-level Markdown block begins."""
-    return [token.map[0] for token in Markdown(source).parsed if token.level == 0 and token.map]
+    return [token.map[0] for token in _SOURCE_PARSER.parse(source) if token.level == 0 and token.map]
 
 
 # --------------------------------------------------------------------------
@@ -210,7 +363,10 @@ class Display:
     `chunk(field, text)` feeds it and `finish()` ends it. With a live surface it
     renders Markdown: each finished top-level block is rendered and committed
     once; the last block stays live until the next block starts or `finish()`.
-    Without one it writes `clean(text)` as it arrives, no cursor movement.
+    Redraws are at most one per `refresh_s`; text that arrives between two is
+    drawn when the interval ends, whether or not more text follows.
+    Without one it writes the text as it arrives, no cursor movement. Either
+    way the text comes in through one `StreamCleaner`.
     """
 
     def __init__(
@@ -220,8 +376,10 @@ class Display:
         live: LiveSurface | None = None,
         flush: Callable[[], None] | None = None,
         refresh_s: float = 0.1,
+        colour: bool = True,
     ) -> None:
         self._write = write
+        self._colour = colour  # the stream takes colour escapes
         self._flush = flush or (lambda: None)
         self.live = live
         self.refresh_s = refresh_s
@@ -230,7 +388,11 @@ class Display:
         self._last_char = "\n"
         self._wrote = False
         self._refreshed = 0.0
+        self._trailing: asyncio.TimerHandle | None = None
         self._committed_any = False
+        self._speaker: tuple[str, int] | None = None
+        self._spoke = False
+        self._cleaner = StreamCleaner()
 
     @classmethod
     def for_stream(cls, stream: Any, *, markdown: bool = True) -> Display:
@@ -241,19 +403,104 @@ class Display:
         except Exception:  # noqa: BLE001 - a closed or foreign stream is not a terminal
             tty = False
         live = TtyLive(redraw, flush, commit_write=stream.write) if (markdown and tty) else None
-        return cls(stream.write, live=live, flush=flush)
+        return cls(stream.write, live=live, flush=flush, colour=tty and fset.colour_on())
 
     @property
     def pretty(self) -> bool:
         return self.live is not None
 
-    def mark(self, text: str) -> None:
-        """Write `text` ahead of the stream, outside its Markdown."""
-        if self.live is not None:
-            self.live.commit(text)
-        else:
-            self._write(text)
-        self._flush()
+    def speaker(self, mark: str, indent: int) -> None:
+        """Hang the stream off `mark`: its first row starts with it and every
+        other row starts `indent` columns in."""
+        self._speaker, self._spoke = (mark if self._colour else fset.plain(mark), indent), False
+        self._word, self._spaces, self._row_used, self._row_start = "", 0, 0, True
+        self._word_cells = 0
+
+    def _width(self) -> int:
+        assert self.live is not None
+        return self.live.width() - (self._speaker[1] if self._speaker else 0)
+
+    def _hung(self, rendered: str, *, keep: bool) -> str:
+        """``rendered`` hung off the speaker's mark; ``keep`` records that the
+        mark has been drawn for good."""
+        if self._speaker is None:
+            return rendered
+        hung = hang(rendered, *self._speaker, first=not self._spoke)
+        if keep and SGR.sub("", rendered).strip():
+            self._spoke = True
+        return hung
+
+    def _hang_plain(self, text: str) -> str:
+        """``text`` flowed under the speaker's mark, word-wrapped to the text
+        column: a word is held until the space or newline after it shows
+        whether it fits on the row, and a word as wide as a whole row goes
+        out a row at a time as it grows. A tab is spaces to the next stop."""
+        if self._speaker is None:
+            return text
+        mark, indent = self._speaker
+        room = block_width() - indent
+        out: list[str] = []
+        for char in text:
+            if char == "\n":
+                out.append(self._flush_word())
+                out.append(self._held_spaces() + "\n")
+                self._row_used, self._spaces, self._row_start = 0, 0, True
+            elif char in " \t":
+                out.append(self._flush_word())
+                self._spaces += 1 if char == " " else TAB - (self._row_used + self._spaces) % TAB
+            else:
+                cell = get_cwidth(char)
+                if self._word_cells + cell > room:
+                    # The held word fills a row by itself: it goes out now.
+                    out.append(self._flush_word())
+                    out.append("\n" + " " * indent)
+                    self._row_used, self._spaces = 0, 0
+                self._word += char
+                self._word_cells += cell
+        return "".join(out)
+
+    def _held_spaces(self) -> str:
+        """The spaces held after the row's last word, as many as the row has
+        room for, and none held any longer."""
+        if self._speaker is None:
+            return ""
+        room = block_width() - self._speaker[1]
+        spaces = " " * min(self._spaces, max(room - self._row_used, 0)) if not self._row_start else ""
+        self._spaces = 0
+        return spaces
+
+    def _flush_word(self) -> str:
+        """The held word placed on the current row, or on a new one under
+        the text column when it does not fit."""
+        if not self._word:
+            return ""
+        mark, indent = self._speaker  # type: ignore[misc]
+        room = block_width() - indent
+        out = ""
+        if self._row_start:
+            out = " " * indent if self._spoke else mark
+            self._spoke, self._row_start = True, False
+        word = self._word
+        size = cells(word)
+        if self._row_used + self._spaces + size > room and (not out or self._spaces):
+            # It does not fit after what the row holds, its leading spaces
+            # included: those stay on this row, the word starts the next.
+            out += " " * min(self._spaces, max(room - self._row_used, 0)) + "\n" + " " * indent
+            self._row_used, self._spaces = 0, 0
+        if self._row_used + self._spaces + size > room:
+            # A word wider than the row (a run of wide characters with no
+            # space) breaks at the column, one pass over it.
+            cuts = cut_points(word, room - self._row_used - self._spaces, room, words=False)
+            start = 0
+            for end in cuts[:-1]:
+                out += " " * self._spaces + word[start:end] + "\n" + " " * indent
+                start, self._row_used, self._spaces = end, 0, 0
+            word = word[start:]
+            size = cells(word)
+        out += " " * self._spaces + word
+        self._row_used += self._spaces + size
+        self._spaces, self._word, self._word_cells = 0, "", 0
+        return out
 
     def chunk(self, field: str, text: str) -> None:
         if not text:
@@ -261,23 +508,45 @@ class Display:
         if field != self.field:
             self.finish()
             self.field = field
+        cleaned = self._cleaner.feed(text)
         if self.live is None:
-            cleaned = clean(text)
             if cleaned:
-                self._write(cleaned)
+                self._write(self._hang_plain(cleaned))
                 self._last_char = cleaned[-1]
                 self._wrote = True
                 self._flush()
             return
-        self._source += text
-        now = time.monotonic()
-        if now - self._refreshed >= self.refresh_s:
+        self._source += cleaned
+        wait = self._refreshed + self.refresh_s - time.monotonic()
+        if wait <= 0:
+            self._cancel_trailing()
             self._refresh()
-            self._refreshed = now
+            self._refreshed = time.monotonic()
+        elif self._trailing is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._trailing = loop.call_later(wait, self._draw_held_back)
+
+    def _draw_held_back(self) -> None:
+        """Draw the text the last redraw did not include. The model may go on
+        to stream a tool call for minutes with no further text chunk. Commits
+        nothing: a finished block is committed from `chunk` or `finish`, which
+        the caller has wrapped."""
+        self._trailing = None
+        if self.live is not None:
+            self._draw_live(self._source)
+            self._refreshed = time.monotonic()
+
+    def _cancel_trailing(self) -> None:
+        if self._trailing is not None:
+            self._trailing.cancel()
+            self._trailing = None
 
     def _commit(self, source: str) -> None:
         assert self.live is not None
-        rendered = render_markdown(source, self.live.width())
+        rendered = self._hung(render_markdown(source, self._width()), keep=True)
         if self._committed_any:
             rendered = "\n" + rendered
         self.live.commit(rendered)
@@ -285,33 +554,60 @@ class Display:
 
     def _refresh(self) -> None:
         assert self.live is not None
-        value = clean(self._source)
+        value = self._source
         starts = _block_starts(value)
         if len(starts) > 1:
-            lines = value.splitlines(keepends=True)
+            # markdown-it numbers lines by "\n" only; splitlines() would also
+            # split on U+2028/U+2029, which clean() keeps, and cut mid-block.
+            lines = value.split("\n")
             cut = starts[-1]
-            self._commit("".join(lines[:cut]))
-            value = "".join(lines[cut:])
+            self._commit("\n".join(lines[:cut]) + "\n")
+            value = "\n".join(lines[cut:])
             self._source = value
+        self._draw_live(value)
+
+    def _draw_live(self, value: str) -> None:
+        assert self.live is not None
         if value.strip():
             separator = "\n" if self._committed_any else ""
-            self.live.update(separator + render_markdown(value, self.live.width()))
+            self.live.update(separator + self._hung(render_markdown(value, self._width()), keep=False))
 
     def finish(self) -> None:
         """Commit whatever is open and end the stream on a fresh line."""
+        self._cancel_trailing()
+        held = self._cleaner.flush()  # the text of a string sequence never ended
+        if held and self.live is not None:
+            self._source += held
+        elif held:
+            self._write(self._hang_plain(held))
+            self._last_char, self._wrote = held[-1], True
         if self.live is not None:
-            value = clean(self._source)
+            value = self._source
             if value.strip():
                 self._commit(value)
             self._source = ""
             self._committed_any = False
         elif self._wrote:
+            held = self._flush_word() + self._held_spaces() if self._speaker is not None else ""
+            if held:
+                self._write(held)
             if self._last_char != "\n":
                 self._write("\n")
             self._flush()
         self._wrote = False
         self._last_char = "\n"
         self.field = None
+
+
+def blocking_stdio() -> None:
+    """Clear O_NONBLOCK on stdin, stdout and stderr. Every program in a
+    terminal shares one open file description, and one that set it
+    non-blocking (nvim and node do, through libuv) can leave it so; a write
+    bigger than the terminal's buffer then stops part way with EAGAIN."""
+    for fd in (0, 1, 2):
+        with contextlib.suppress(OSError):
+            if not os.get_blocking(fd):
+                os.set_blocking(fd, True)
 
 
 def print_answer(text: str, stream: Any, *, markdown: bool = True) -> None:
@@ -322,326 +618,31 @@ def print_answer(text: str, stream: Any, *, markdown: bool = True) -> None:
     display.finish()
 
 
-# --------------------------------------------------------------------------
-# Tool exchanges
-# --------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Theme:
+    """The colours of a tool exchange and an answer, each an /fset colour entry."""
 
-# The argument each tool carries its program or file body in, shown as a
-# highlighted block under the call header instead of on it.
-_BODY_ARG: dict[str, str] = {
-    "shell": "command",
-    "terminal_session": "command",
-    "kernel": "code",
-    "toolbox": "source",
-    "write": "content",
-    "patch": "new_string",
-    "plan": "content",
+    accent: str      # tool name, running mark
+    highlight: str   # Markdown headings, links, list numbers
+    ok: str          # finished mark
+    error: str       # failed mark, error text
+    warn: str        # stderr
+    dim: str         # arguments, line numbers, metrics
+    panel: str       # output panel background
+    panel_text: str  # output panel text
+    added: str       # diff: added line
+    removed: str     # diff: removed line
+    code: str        # inline code in an answer
+    separator: str   # rules and table borders
+
+
+_THEME_ROLES = {
+    "accent": "COLOR_TOOL", "highlight": "COLOR_ACCENT", "ok": "COLOR_OK", "error": "COLOR_ERROR", "warn": "COLOR_WARN",
+    "dim": "COLOR_DIM", "panel": "COLOR_PANEL", "panel_text": "COLOR_TOOL_OUTPUT",
+    "added": "COLOR_ADDED", "removed": "COLOR_REMOVED", "code": "COLOR_CODE", "separator": "COLOR_SEPARATOR",
 }
-_HEADER_VALUE_CHARS = 80
-_SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
-_SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
-_PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
-# A `read` result line: `N|` before the file's own text.
-_READ_GUTTER = re.compile(r"^\d+\|")
 
 
-@dataclass
-class ToolOutput:
-    """A tool result as the screen shows it: cleaned lines with their stream."""
-
-    lines: list[tuple[str, bool]]  # (text, is_stderr)
-    exit_code: int | None = None
-    is_error: bool = False
-
-    @property
-    def text(self) -> str:
-        return "\n".join(line for line, _ in self.lines)
-
-
-def result_text(result: Any) -> tuple[str, bool]:
-    """Flatten a tool result to (text, is_error)."""
-    dehydrated = getattr(result, "dehydrated", None)
-    if callable(dehydrated):
-        return dehydrated(), bool(getattr(result, "is_error", False))
-    text = result if isinstance(result, str) else str(result)
-    return text, text.lstrip().startswith("ERROR")
-
-
-def tool_output(name: str, result: Any) -> ToolOutput:
-    """Parse a result for display. A finished shell result loses its
-    `shell=… exit=… --- stdout ---` envelope; exit is kept apart."""
-    text, is_error = result_text(result)
-    text = clean(text)
-    if name == "shell":
-        header = _SHELL_HEADER.match(text)
-        if header is not None:
-            exit_code = int(header.group(1))
-            lines: list[tuple[str, bool]] = []
-            stream: str | None = None
-            for line in text.split("\n"):
-                section = _SHELL_SECTION.match(line)
-                if section is not None:
-                    stream = section.group(1)
-                    continue
-                if stream is not None:
-                    lines.append((line, stream == "stderr"))
-            while lines and not lines[-1][0]:
-                lines.pop()
-            return ToolOutput(lines, exit_code=exit_code or None, is_error=is_error)
-    body = text.rstrip("\n")
-    return ToolOutput([(line, False) for line in body.split("\n")] if body else [], is_error=is_error)
-
-
-def _byte_len(text: str) -> int:
-    return len(text.encode("utf-8", errors="replace"))
-
-
-def metrics_line(name: str, output: ToolOutput, *, shown: ToolOutput | None = None) -> str:
-    """`{tool}: [exit N ]{shown/}{bytes}B {shown/}{lines}L`, plain text."""
-    total_bytes = _byte_len(output.text)
-    total_lines = len(output.lines)
-    exit_part = f"exit {output.exit_code} " if output.exit_code else ""
-    if shown is None:
-        return f"{name}: {exit_part}{total_bytes}B {total_lines}L"
-    return (
-        f"{name}: {exit_part}{_byte_len(shown.text)}/{total_bytes}B "
-        f"{len(shown.lines)}/{total_lines}L"
-    )
-
-
-# The argument that tells one call of a tool from another on its one-line
-# trace: the first of these that the call carries. A tool not named here is
-# told apart by its path, when it has one.
-_KEY_ARGS: dict[str, tuple[str, ...]] = {
-    "fs_search": ("pattern",),
-    "ast_search": ("pattern",),
-    "shell": ("command",),
-    "terminal_session": ("command",),
-    "kernel": ("code",),
-    "toolbox": ("source",),
-    "fetch": ("url",),
-    "browse": ("url",),
-}
-_PATH_ARGS = ("file_path", "path")
-_KEY_ARG_MIN = 16
-
-
-def key_argument(name: str, args: dict | None, room: int) -> str:
-    """The call's key argument on one line of at most `room` cells: a path
-    keeps its tail, anything else its head; "" when the call has none."""
-    if not isinstance(args, dict):
-        return ""
-    keys = _KEY_ARGS.get(name, _PATH_ARGS)
-    value = next((args[key] for key in keys if isinstance(args.get(key), str) and args[key].strip()), None)
-    if value is None:
-        return ""
-    lines = clean(value).strip().split("\n")
-    text = lines[0].strip()
-    more = "…" if len(lines) > 1 else ""
-    if len(text) + len(more) <= room:
-        return text + more
-    if keys is _PATH_ARGS:
-        return "…" + text[-(room - 1):]
-    return text[:room - 1] + "…"
-
-
-def _single_line(value: Any) -> str:
-    if isinstance(value, str):
-        text = value
-    else:
-        try:
-            text = json.dumps(value, default=str, ensure_ascii=False)
-        except (TypeError, ValueError):
-            text = str(value)
-    text = clean(text)
-    first, _, rest = text.partition("\n")
-    if rest or len(first) > _HEADER_VALUE_CHARS:
-        first = first[:_HEADER_VALUE_CHARS - 3] + "..."
-    return first
-
-
-def _lexer(name: str, args: dict, body: str) -> str:
-    if name in ("kernel", "toolbox"):
-        return "python"
-    if name in ("shell", "terminal_session"):
-        first = body.lstrip().split("\n", 1)[0]
-        return "python" if _PYTHON_FIRST_LINE.match(first) else "bash"
-    if name == "plan":
-        return "markdown"
-    path = args.get("file_path") or args.get("path")
-    if isinstance(path, str) and path:
-        try:
-            return Syntax.guess_lexer(path, body)
-        except Exception:  # noqa: BLE001 - pygments lookup on an odd path
-            return "text"
-    return "text"
-
-
-def render_tool_call(name: str, args: dict | None, level: int, *, preview: int = 12,
-                     width: int | None = None, malformed: bool = False) -> str:
-    """The call half of an exchange at `ui.tools` 2 and 3: the marker header,
-    then the tool's program or body as a highlighted block (capped at `preview`
-    lines at level 2). Empty below level 2: level 1 shows only the metrics."""
-    if level < 2:
-        return ""
-    width = width or terminal_width()
-    args = args if isinstance(args, dict) else {}
-    body_key = _BODY_ARG.get(name)
-    parts = [f"{TOOL_MARKER} {clean(name)}"]
-    if malformed:
-        parts.append(msgs.TOOL_ARGS_UNPARSED.text())
-    for key, value in args.items():
-        if key == body_key or value is None or value == "":
-            continue
-        parts.append(f"{clean(str(key))}={_single_line(value)}")
-    out = [f"{CHROME}{' '.join(parts)}{C.RESET}\n"]
-    body = args.get(body_key) if body_key else None
-    if isinstance(body, str) and body.strip():
-        code = clean(body).rstrip("\n")
-        lines = code.split("\n")
-        hidden = 0
-        if level == 2 and len(lines) > preview:
-            hidden = len(lines) - preview
-            code = "\n".join(lines[:preview])
-        out.append(render_code(code, _lexer(name, args, code), width))
-        if hidden:
-            out.append(f"{CHROME}{msgs.TOOL_MORE_LINES.text(count=hidden)}{C.RESET}\n")
-    return "".join(out)
-
-
-def _highlight_lines(lines: list[str], lexer: str, width: int) -> list[str]:
-    """Each line highlighted as `lexer` source, one output line per input line."""
-    code = "\n".join(lines)
-    text = Syntax(code, lexer, theme=CODE_THEME, background_color="default").highlight(code)
-    parts = text.split("\n", allow_blank=True)[:len(lines)]
-    console = _render_console(width)
-    out = []
-    for part in parts:
-        with console.capture() as captured:
-            console.print(part, end="", soft_wrap=True)
-        out.append(captured.get())
-    return out if len(out) == len(lines) else lines
-
-
-def _read_body_lines(lines: list[tuple[str, bool]], args: dict | None,
-                     width: int) -> list[str] | None:
-    """A `read` result's lines with the file text highlighted by the file's
-    type. `N|` gutters, and lines without one when others have one (the
-    paging note), stay plain. None when the file type has no lexer."""
-    if not isinstance(args, dict) or not lines:
-        return None
-    matches = [_READ_GUTTER.match(line) for line, _ in lines]
-    gutters = any(match is not None for match in matches)
-    code_rows = [i for i, match in enumerate(matches) if match is not None or not gutters]
-    content = [lines[i][0][matches[i].end():] if matches[i] else lines[i][0] for i in code_rows]
-    lexer = _lexer("read", args, "\n".join(content))
-    if lexer in ("text", "default"):
-        return None
-    highlighted = _highlight_lines(content, lexer, width)
-    out = [line for line, _ in lines]
-    for i, body in zip(code_rows, highlighted, strict=True):
-        out[i] = (matches[i].group(0) if matches[i] else "") + body
-    return out
-
-
-def render_tool_result(name: str, result: Any, level: int, *, preview: int = 12,
-                       width: int | None = None, args: dict | None = None) -> str:
-    """The result half of an exchange.
-
-    1  one metrics line, carrying the marker (level 1 prints no call header)
-    2  the first `preview` lines in chrome, `...`, and shown/total metrics
-    3  every line, then the metrics line; a `read` of source code is
-       highlighted by the file's type (`args` carries its path)
-    """
-    if level <= 0:
-        return ""
-    width = width or terminal_width()
-    output = tool_output(name, result)
-    head = CHROME_ERROR if output.is_error or output.exit_code else CHROME
-    if level == 1:
-        room = width - len(TOOL_MARKER) - len(metrics_line(name, output)) - 3
-        about = key_argument(name, args, max(room, _KEY_ARG_MIN))
-        label = f"{name} {about}" if about else name
-        return f"{head}{TOOL_MARKER} {metrics_line(label, output)}{C.RESET}\n"
-    out: list[str] = []
-    if level == 2:
-        clip = max(20, width - 1)
-        kept = [(line[:clip], err) for line, err in output.lines[:preview]]
-        shown = ToolOutput(kept, exit_code=output.exit_code, is_error=output.is_error)
-        for line, err in kept:
-            out.append(f"{CHROME_STDERR if err else CHROME_BODY}{line}{C.RESET}\n")
-        if shown.text != output.text:
-            out.append("...\n")
-            out.append(f"{head}{metrics_line(name, output, shown=shown)}{C.RESET}\n")
-        else:
-            out.append(f"{head}{metrics_line(name, output)}{C.RESET}\n")
-        return "".join(out)
-    highlighted = _read_body_lines(output.lines, args, width) if name == "read" else None
-    if highlighted is not None:
-        out.extend(f"{line}{C.RESET}\n" for line in highlighted)
-    else:
-        for line, err in output.lines:
-            out.append(f"{STDERR}{line}{C.RESET}\n" if err else f"{line}\n")
-    out.append(f"{head}{metrics_line(name, output)}{C.RESET}\n")
-    return "".join(out)
-
-
-# --------------------------------------------------------------------------
-# A resumed session's last exchanges
-# --------------------------------------------------------------------------
-
-
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return "" if content is None else str(content)
-    return "\n".join(
-        part["text"] for part in content
-        if isinstance(part, dict) and isinstance(part.get("text"), str)
-    )
-
-
-def _call_args(call: dict) -> tuple[str, dict]:
-    function = call.get("function") or {}
-    raw = function.get("arguments")
-    try:
-        args = json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError:
-        args = None
-    return str(function.get("name") or "?"), args if isinstance(args, dict) else {}
-
-
-def render_exchanges(messages: list[dict], count: int, *, width: int,
-                     level: int, preview: int, markdown: bool = True) -> str:
-    """The last `count` exchanges of `messages` as a turn prints them: the
-    user's line as `user_line` draws it, each tool exchange at `ui.tools`
-    `level`, the answer behind `ASSISTANT_MARK` as Markdown at `width` (plain
-    text when `markdown` is off). An exchange starts at a user message that was
-    not steered into a turn."""
-    starts = [i for i, message in enumerate(messages)
-              if message.get("role") == "user" and not message.get("steered")]
-    if count <= 0 or not starts:
-        return ""
-    tail = messages[starts[-min(count, len(starts))]:]
-    results = {message.get("tool_call_id"): message for message in tail if message.get("role") == "tool"}
-    out: list[str] = []
-    for message in tail:
-        role = message.get("role")
-        text = clean(_content_text(message.get("content"))).strip("\n")
-        if role == "user":
-            out.append(user_line(text))
-        elif role == "assistant":
-            if text.strip():
-                out.append(ASSISTANT_MARK)
-                out.append(render_markdown(text, width) if markdown else text + "\n")
-            for call in message.get("tool_calls") or []:
-                name, args = _call_args(call)
-                out.append(render_tool_call(name, args, level, preview=preview, width=width))
-                result = results.get(call.get("id"))
-                if result is not None:
-                    out.append(render_tool_result(
-                        name, _content_text(result.get("content")), level,
-                        preview=preview, width=width, args=args,
-                    ))
-    return "".join(out)
+def theme() -> Theme:
+    """The colours /fset gives now."""
+    return Theme(**{field: fset.hex_for(role) or "default" for field, role in _THEME_ROLES.items()})

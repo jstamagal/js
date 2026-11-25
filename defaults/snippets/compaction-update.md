@@ -1,0 +1,1 @@
+The conversation above is new since the previous summary. Update the previous summary with it: keep everything in it that still holds, add the new goals, decisions, files, commands, errors and fixes, move finished work out of Pending and next step, and remove only what the new messages make obsolete.

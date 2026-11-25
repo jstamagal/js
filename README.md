@@ -21,13 +21,34 @@ js --commit
 js --commit /path/to/repo -p "mostly housekeeping"
 ```
 
-Common built-in modes:
+Available built-in modes:
 
 ```bash
 wiki ingest ~/wiki --unit ~/wiki/inbox/source.md
 wiki flow ~/wiki "ingest inbox"
 wiki flow ~/wiki "ingest all inbox units"
 ```
+
+## What `just install` Sets Up
+
+`just install` puts `js` and `wiki` on PATH and installs everything js's tools
+need: the kernel, vision and browser packages, js's pinned CLI binaries in
+`tools/bin` (`rg`, `fd`, `bat`, `fzf`, `obscura`, `aria2c`) and the
+Chromium build `browser_probe` drives. `just sync` does the same for the
+development env and adds the test packages.
+
+Two systems get less. Playwright publishes no musllinux wheels, so a musl
+system goes without the `browser` extra and Chromium. A Termux install carries
+the base packages and the CLI binaries `pkg` provides; `obscura` has no
+verified Termux release, so the install names it and carries on.
+
+An agent has `kernel` and `toolbox` when its agent.yaml lists them, like any
+other tool. The `jev` tool needs `TYPESAFE_API_KEY`.
+
+Python 3.12+ is required. The base packages include native extensions: core
+tool validation needs `jsonschema`/`rpds-py`, and the provider SDKs need
+`pydantic-core` and `jiter`. On Termux/32-bit ARM, these may need a local Rust
+toolchain/build rather than an available wheel.
 
 ## Documentation
 
@@ -46,18 +67,25 @@ Start here:
 ## Project Map
 
 ```text
-js/model_client.py                 single `ai` SDK import boundary
-js/runtime.py                      streaming loop and tool dispatch
+js/model_client.py                model I/O boundary over the `ai` SDK
+js/runtime.py                     streaming tool-use loop
+js/turn_dispatch.py               a turn's tool calls run and capped
 js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
-js/toolkit/fs.py                  read/write/search/patch/remove/undo
-js/toolkit/process_net.py         shell and fetch
-js/toolkit/meta.py                plan/skill/task/subagents
+js/toolkit/fs_tools.py            the file tools' table
+js/toolkit/fs.py                  read/write/remove/undo
+js/toolkit/patch.py               patch
+js/toolkit/file_search.py         fs_search
+js/toolkit/shell.py               shell
+js/toolkit/fetch.py               fetch
+js/toolkit/plan.py                plan
+js/toolkit/skill.py               skill
+js/toolkit/subagents.py           task and subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
-js/toolkit/tool_descriptions/     model-facing tool contracts
-prompts/                          repo prompt-directory agents; layered with ~/.js/agents/ and project .js/agents/
-                                  (repo `prompts/`, global `~/.js/agents/`, and project `.js/agents/`;
-                                  project scope wins over global, which wins over repo)
+defaults/tool_descriptions/     model-facing tool contracts
+defaults/                         stock jsrc, fset, agents, themes, help, skills and snippets
+                                  each file can be shadowed in the selected home;
+                                  agents also use project .js/agents/
 tests/                            offline, harness, smoke, and live/proxy tests
 docs/                             full user and technical documentation
 ```
@@ -69,25 +97,34 @@ in [docs/tools-reference.md](docs/tools-reference.md), not compatibility
 spellings like `fs_read`, `fs_write`, `cat`, `grep`, or `semantic_search`.
 
 ## Config And Model Defaults
+
+`--home DIR` selects a complete profile; otherwise `JS_HOME` or `~/.js` is used.
+The chosen directory is resolved once and created if needed. Config, agents,
+skills, sessions, logs, state, cache and scratch data stay within that profile.
+Project `.js/` layers still apply in the working directory.
+
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
-applied at startup. Files layer lowest-to-highest as `js/jsrc` (shipped in the
-package: one line per setting, the built-in defaults), `~/.js/jsrc`,
+applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped with js: one line per setting, the built-in defaults), `~/.js/jsrc`,
 project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
-CLI `--extra key=value` overrides env. On its first run js writes `~/.js/jsrc`
-with every setting at its `js/jsrc` value; from then on that file sets every
-setting, so a default changed in `js/jsrc` does not reach it.
-`js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
+CLI `--extra key=value` overrides env. js never writes `~/.js/jsrc` on its
+own: it exists once you write it or run `/save`, and holds only what you set.
+`js/jsrc.template` lists every setting, described, at its stock value.
+`defaults/jsrc` sets `MODEL` to `cpa/claude-opus-5-5` and `EFFORT` to `medium`;
 `JS_MODEL` overrides it. Explicit
-`set provider.id/base_url/api_key` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
-and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
-`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
-`ai-python` when no explicit provider config is set. Tune any setting live with
+`set PROVIDER`, `BASE_URL` and `API_KEY` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
+and `JS_API_KEY` are env overrides. A model runs through a saved login, `PROVIDER`
+or `BASE_URL`; with none of them it is refused. A provider's own env vars
+(`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, ...) fill its key and
+base URL when nothing else sets them. Tune any setting live with
 `/set <key> <value>` (and list them with `/show`); convert a legacy
 `config.toml` once with `js --migrate-config`. Files of commands run
 with `/load <file>`; any REPL command works there without the `/`, including
 typed event hooks (`on <event> <handler>`) and aliases (`alias <name>
-<command>`). `/save` replaces `~/.js/jsrc` with every setting at its live value,
-then the handlers and aliases.
+<command>`). `/save` writes what you changed this session into `~/.js/jsrc`
+in place: the settings you `/set`, the model you picked, the formats you
+`/fset`, and new handlers and aliases. A setting you set back to stock loses
+its line. Nothing from the environment, a login or the defaults goes in, every
+other line is left alone, and no backup copy is made.
 
 Everything js keeps outside a project lives in `~/.js/`: `jsrc`, `logins/`,
 saved sessions at `sessions/<start-dir>/<session>.jsonl`, filed by the
@@ -96,6 +133,47 @@ global prompt-directory agents in `agents/`, skills in
 `skills/`, and per-agent runtime state in `state/`. On first start js moves its
 old XDG config and data directories in; `just migrate-home` previews that. Session memory is append-only JSONL
 with control marks; see the compaction section for compaction commands.
+
+## Setup Layers And Profiles
+
+Stock files live under `defaults/`. Copy a file to the same relative path in
+`~/.js/` to change it: `agents/defaultagent/01-prompt.md` changes that prompt
+while the stock manifest and environment still load. An empty file shadows the
+stock file. Names in listings are the union of the layers. Skills replace a
+whole directory by name. Project `.js/` overrides agents, skills, commands,
+toolbox and jsrc; themes, tool descriptions, help and snippets use stock and home.
+`jsrc` files layer settings, and `defaults/fset` loads before jsrc format entries.
+
+```bash
+js --home ~/profiles/review -p "review this change"
+JS_HOME=~/profiles/chat js --chat -p "hello"
+js --list-agents
+js --list-models --json
+js --list-sessions --json
+js --list-providers --json
+js --list-logins --json
+js --verify --json
+js -p "summarize this repo" --json
+js -p "summarize this repo" --json-stream
+```
+
+`--home` beats `JS_HOME`, which beats `~/.js`. The directory is created when
+missing; all configuration, credentials, sessions, logs, state, cache and tmp
+use that home. Prompts can use `{{JS_HOME}}` or `%%JS_HOME%%`; shell commands
+receive `$JS_HOME`. A missing named agent, theme or snippet is an error naming
+the search directories.
+
+`--json` writes one final object; `--json-stream` writes typed events while a run
+executes. They are mutually exclusive. Models and agents have text and JSON
+listings; sessions, providers and logins require `--json`.
+
+Sampling flags override `--extra`, agent sampling and jsrc: `--temperature`,
+`--top-p`, `--top-k`, `--min-p`, `--top-n-sigma`, `--repetition-penalty`,
+`--presence-penalty`, `--xtc-probability`, `--xtc-threshold`, `--dry-multiplier`,
+`--dry-base`, `--dry-allowed-length`, `--dry-penalty-last-n` and
+`--dry-sequence-breakers`. For example, `js -p "hello" --temperature 0.7 --top-k 40`.
+The Continue line carries the effective model, effort, samplers, profile and
+prompt/tool switches. A resumed chat session keeps chat mode.
 
 ## Provider Management
 
@@ -124,24 +202,14 @@ One-shot forms remain available: `js --login <id>`, `js --logout <id>`, and
 `js --compact <session>` append compaction marks to JSONL instead of rewriting
 history.
 
-## Provider Compatibility
-
-When the actual model string contains `claude`, only provider-facing tool schema
-names are adapted for Claude; session history stays canonical lowercase.
-
 ## Verification
 
 Offline suite:
 
 ```bash
-python -m pytest -m "not ai_provider and not vision and not e2e"
-```
-
-In this agent environment, the verified command was:
-
-```bash
-python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
+just test
 ```
 
 Live tests marked `ai_provider`, `e2e`, or `vision` need configured provider
-credentials or a local OpenAI-compatible endpoint.
+credentials or a local OpenAI-compatible endpoint: `just test-live`,
+`just test-vision`.

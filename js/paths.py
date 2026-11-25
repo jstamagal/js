@@ -1,14 +1,15 @@
 """Every location js keeps outside a project, and nothing else.
 
-One home: `~/.js/`. Project-local `.js/` files (jsrc, jsrc.local, agents,
-skills, toolbox) stay with the project and are not named here.
+One home: `--home DIR`, else `$JS_HOME`, else `~/.js/`. Startup resolves it
+once to an absolute directory. Project-local `.js/` files (jsrc, jsrc.local,
+agents, skills, commands, toolbox) stay with their project.
 
 `ensure_home()` creates every directory of the layout on each start, so the
 whole structure is always there:
 
     ~/.js/
-      jsrc           written with every setting on the first run
-      JS.md  tools.yaml  tags.yaml  keys   files; not created, only read
+      jsrc           operator overrides; /save writes session changes
+      JS.md  tools.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
       sessions/      every session, filed by the directory it started in
@@ -28,15 +29,124 @@ The locations js used before this layout are listed in `legacy_homes()`;
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
+
+_ROOT = Path(os.path.realpath(__file__)).parent.parent
+_HOME: Path | None = None
+_PROJECT_SCOPES = frozenset({"agents", "skills", "commands", "toolbox", "jsrc", "jsrc.local"})
 
 
 def user_home() -> Path:
     return Path.home()
 
 
-def home() -> Path:
+def default_home() -> Path:
+    """The operator's conventional profile location."""
     return user_home() / ".js"
+
+
+def home() -> Path:
+    """The resolved invocation profile; direct callers also honor JS_HOME."""
+    if _HOME is not None:
+        return _HOME
+    value = os.environ.get("JS_HOME") or default_home()
+    return Path(value).expanduser().resolve(strict=False)
+
+
+def configure_home(directory: str | Path | None = None) -> Path:
+    """Resolve and create the selected profile once at invocation startup."""
+    global _HOME
+    value = directory if directory is not None else os.environ.get("JS_HOME") or default_home()
+    selected = Path(value).expanduser().resolve(strict=False)
+    if selected.exists() and not selected.is_dir():
+        raise ValueError(f"home is not a directory: {selected}")
+    try:
+        selected.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ValueError(f"cannot create home {selected}: {exc}") from exc
+    _HOME = selected
+    os.environ["JS_HOME"] = str(selected)
+    return selected
+
+
+def custom_home() -> bool:
+    """Whether this profile is separate from the operator's default profile."""
+    return home() != (default_home()).resolve(strict=False)
+
+
+def project_home(cwd: Path | None = None) -> Path:
+    """Project setup, with the operator's home using the selected profile."""
+    root = (cwd or Path.cwd()) / ".js"
+    if custom_home() and root.resolve(strict=False) == (default_home()).resolve(strict=False):
+        return home()
+    return root
+
+
+def defaults_dir() -> Path:
+    """js's stock setup, laid out like ``~/.js``, beside the js package."""
+    return _ROOT / "defaults"
+
+
+def layers() -> tuple[Path, ...]:
+    """Setup roots, lowest priority first. Project files use their existing scopes."""
+    return tuple(dict.fromkeys((defaults_dir(), home(), project_home())))
+
+
+def agent_roots(cwd: Path | None = None) -> tuple[Path, ...]:
+    """Each layer's agents directory, lowest first: stock, home, project.
+    The home and project entries are one directory when js runs in the
+    directory that holds the home."""
+    return defaults_dir() / "agents", global_agents_dir(), project_home(cwd) / "agents"
+
+
+def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Path, ...]:
+    """Agent ``agent_id``'s directory in each of ``roots`` (default
+    `agent_roots()`) that has one, lowest layer first, or every candidate
+    when none has. A directory that cannot be listed is a ValueError, so a
+    lower layer never stands in for it."""
+    candidates = tuple(dict.fromkeys(root / agent_id for root in (agent_roots() if roots is None else roots)))
+    existing = []
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                tuple(candidate.iterdir())
+                existing.append(candidate)
+        except OSError as exc:
+            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc}") from exc
+    return tuple(existing) or candidates
+
+
+def agent_names(roots: tuple[Path, ...] | None = None) -> list[str]:
+    """Sorted names of the agent directories in ``roots`` (default `agent_roots()`)."""
+    return sorted({entry.name for root in (agent_roots() if roots is None else roots)
+                   if root.is_dir() for entry in root.iterdir() if entry.is_dir()})
+
+
+def _file_layers(rel: str | Path) -> tuple[Path, ...]:
+    path = Path(rel)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"setup path must be relative: {rel}")
+    roots = layers()
+    return roots if path.parts and path.parts[0] in _PROJECT_SCOPES else roots[:2]
+
+
+def searched(rel: str | Path = "", roots: Iterable[Path] | None = None) -> str:
+    """What a failed lookup read, for its error message: ``rel`` under each of
+    ``roots`` (default: every layer that may hold ``rel``), lowest first,
+    comma-separated."""
+    return ", ".join(str(root / rel) for root in (_file_layers(rel) if roots is None else roots))
+
+
+def find(rel: str | Path) -> Path | None:
+    """The highest layer's file at ``rel``, including a zero-byte file."""
+    return next((root / rel for root in reversed(_file_layers(rel)) if (root / rel).is_file()), None)
+
+
+def names(rel_dir: str | Path) -> list[str]:
+    """Sorted union of the immediate names in a setup directory."""
+    return sorted({entry.name for root in _file_layers(rel_dir)
+                   if (root / rel_dir).is_dir() for entry in (root / rel_dir).iterdir()})
 
 
 def global_config_file() -> Path:
@@ -57,7 +167,9 @@ def global_skills_dir() -> Path:
 
 
 def shared_skills_dir() -> Path:
-    """`~/.agents/skills`, the skill root other agent tools read too."""
+    """Cross-client skills: ~/.agents/skills, isolated inside a custom profile."""
+    if custom_home():
+        return home() / ".agents" / "skills"
     return user_home() / ".agents" / "skills"
 
 
@@ -72,12 +184,6 @@ def global_toolbox_dir() -> Path:
 
 def tools_config_file() -> Path:
     return home() / "tools.yaml"
-
-
-def tags_file() -> Path:
-    """The operator's session tag list, which replaces the stock one
-    (`js.session_tags`)."""
-    return home() / "tags.yaml"
 
 
 def global_env_file() -> Path:
@@ -117,6 +223,11 @@ def kernel_state_root() -> Path:
 def tool_results_dir() -> Path:
     """Tool results too large to inline, spilled whole for byte-range reads."""
     return state_root() / "tool-results"
+
+
+def media_dir() -> Path:
+    """The image and media bytes sessions send, one file per sha256 (`js.media`)."""
+    return state_root() / "media"
 
 
 def commit_backups_dir() -> Path:

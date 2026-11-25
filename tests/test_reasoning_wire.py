@@ -6,7 +6,7 @@ import json
 import httpx2
 import pytest
 
-from js import model_client
+from js import history_record, model_client
 
 
 @pytest.mark.parametrize(("provider", "base", "model", "field", "tool_free"), [
@@ -15,7 +15,6 @@ from js import model_client
     ("openai-completions", "http://custom.test/v1", "test", "reasoning_content", True),
     ("openai", "https://api.openai.com/v1", "test", "reasoning", True),
     ("xai", "https://api.x.ai/v1", "grok-test", "reasoning", True),
-    ("xai-oauth", "https://api.x.ai/v1", "grok-test", "reasoning", True),
     ("vllm", "http://127.0.0.1:8000/v1", "qwen-test", "reasoning_content", True),
     ("lmstudio", "http://127.0.0.1:1234/v1", "qwen-test", "reasoning_content", True),
     ("mimo", "https://api.xiaomimimo.com/v1", "mimo-v2.5", "reasoning", True),
@@ -24,7 +23,7 @@ from js import model_client
 ])
 def test_reasoning_reaches_http_in_the_endpoint_field(monkeypatch, provider, base, model, field, tool_free):
     thought = " first thought\n  preserve whitespace: λ\n"
-    messages = model_client.history_to_ai_messages("system", [
+    messages = history_record.history_to_ai_messages("system", [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "answer", "reasoning_content": thought},
         {"role": "user", "content": "read"},
@@ -76,3 +75,16 @@ def test_reasoning_reaches_http_in_the_endpoint_field(monkeypatch, provider, bas
         other = "reasoning" if field == "reasoning_content" else "reasoning_content"
         assert all(other not in m for m in assistants)
     assert [m.model_dump() for m in messages] == original
+
+
+@pytest.mark.parametrize("provider", ["openai", "llama.cpp", "deepseek"])
+def test_reply_cancelled_while_thinking_is_not_sent(provider):
+    # ^C during reasoning leaves an assistant record with reasoning only.
+    # llama.cpp 400s on an assistant message with no content and no tool_calls.
+    messages = history_record.history_to_ai_messages("system", [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "", "reasoning_content": "There are several",
+         "incomplete_reason": "cancelled"},
+        {"role": "user", "content": "next"},
+    ], provider_id=provider)
+    assert [m.role for m in messages] == ["system", "user", "user"]

@@ -21,15 +21,14 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from . import paths as _paths
-from . import messages as msgs
+from . import messages as msgs, paths as _paths
 
 _SEGMENT_SPLIT = re.compile(r"\s*(?:\|\||&&|\||;)\s*")
 _READ_CMDS = {"cat", "head", "tail", "less", "more", "bat"}
 _SEARCH_CMDS = {"grep", "rg", "ag", "egrep", "fgrep"}
 _FIND_CMDS = {"find", "fd", "fdfind", "locate"}
 _REMOVE_CMDS = {"rm", "rmdir", "unlink"}
-_REDIRECT = re.compile(r"(?<![<>&\d])>{1,2}\s*(?!&|/dev/)\S")  # a file redirect; not 2>&1, not >/dev/null
+_REDIRECT = re.compile(r"(?<![<>&\d])>{1,2}(?!>)\s*(?!&|/dev/)\S")  # a file redirect; not 2>&1, not >/dev/null
 _HEREDOC = re.compile(r"<<-?\s*['\"]?\w")
 _SED_INPLACE = re.compile(r"\bsed\b[^|;&]*\s-[a-zA-Z]*i")
 _PERL_INPLACE = re.compile(r"\bperl\b[^|;&]*\s-[a-zA-Z]*i")
@@ -87,6 +86,8 @@ def summarize(path: Path) -> dict:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(record, dict):
+            continue
         ts = record.get("ts")
         if isinstance(ts, (int, float)):
             first_ts = ts if first_ts is None else min(first_ts, ts)
@@ -114,7 +115,8 @@ def summarize(path: Path) -> dict:
                         parsed = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
                     except (json.JSONDecodeError, TypeError, ValueError):
                         parsed = {}
-                    habits.update(classify_shell_command(str(parsed.get("command") or "")))
+                    if isinstance(parsed, dict):
+                        habits.update(classify_shell_command(str(parsed.get("command") or "")))
         elif role == "tool":
             content = message.get("content")
             text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
@@ -156,22 +158,31 @@ def _session_agent(path: Path) -> str | None:
 def latest_session(data_dir: Path, agent: str | None) -> Path | None:
     """The most recently written session under `data_dir/sessions`, of `agent` when given."""
     root = data_dir / "sessions"
-    candidates = list(root.rglob("*.jsonl")) if root.is_dir() else []
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    for path in candidates:
-        if not agent or _session_agent(path) == agent:
-            return path
+    candidates = []
+    if root.is_dir():
+        for path in root.rglob("*.jsonl"):
+            try:
+                candidates.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    for _, path in candidates:
+        try:
+            if not agent or _session_agent(path) == agent:
+                return path
+        except OSError:
+            continue
     return None
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = msgs.ArgumentParser(prog="js.toolstats", description=msgs.TOOLSTATS_DESCRIPTION.text())
-    parser.add_argument("path", nargs="?", help=msgs.OPT_TOOLSTATS_PATH.text())
-    parser.add_argument("--latest", action="store_true", help=msgs.OPT_TOOLSTATS_LATEST.text())
-    parser.add_argument("--data-dir", type=Path, default=None, help=msgs.OPT_TOOLSTATS_DATA_DIR.text())
-    parser.add_argument("--agent", default=None, help=msgs.OPT_TOOLSTATS_AGENT.text())
-    parser.add_argument("--tag", default="", help=msgs.OPT_TOOLSTATS_TAG.text())
-    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help=msgs.OPT_TOOLSTATS_EXTRA.text())
+    parser = msgs.ArgumentParser(prog="js.toolstats", description=msgs.TOOLSTATS_DESCRIPTION.words())
+    parser.add_argument("path", nargs="?", help=msgs.OPT_TOOLSTATS_PATH.words())
+    parser.add_argument("--latest", action="store_true", help=msgs.OPT_TOOLSTATS_LATEST.words())
+    parser.add_argument("--data-dir", type=Path, default=None, help=msgs.OPT_TOOLSTATS_DATA_DIR.words())
+    parser.add_argument("--agent", default=None, help=msgs.OPT_TOOLSTATS_AGENT.words())
+    parser.add_argument("--tag", default="", help=msgs.OPT_TOOLSTATS_TAG.words())
+    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help=msgs.OPT_TOOLSTATS_EXTRA.words())
     args = parser.parse_args(argv)
 
     if args.latest:
@@ -182,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.path:
         path = Path(args.path)
     else:
-        parser.error(msgs.TOOLSTATS_NEEDS_PATH.text())
+        parser.error(msgs.TOOLSTATS_NEEDS_PATH.words())
     summary = summarize(path)
     for item in args.extra:
         key, _, value = item.partition("=")

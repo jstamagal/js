@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import ai
 import pytest
+from repl_driver import record_turns, run_async, turn_stub
 
-from js import cli, events, setcmd, settings
+from js import cli, events, logins, model_metadata, paths, picker, settings
 from js.config import Config
 from js.memory import append_message, load_messages
-from js.sampling import Sampling
-from repl_driver import run_blocking
+from js.repl_state import ReplState
 
 
 def _debug_records(path: Path) -> list[dict]:
@@ -41,20 +42,34 @@ def make_cfg(tmp_path: Path) -> Config:
     )
 
 
-def test_reset_command_is_durable_for_later_session_load(tmp_path):
-    cfg = make_cfg(tmp_path)
+def repl_cfg(tmp_path: Path, monkeypatch, **fields) -> Config:
+    """make_cfg with ``fields`` replaced and the agent's prompt in place, the
+    working directory the test's own."""
+    monkeypatch.chdir(tmp_path)
+    cfg = replace(make_cfg(tmp_path), **fields)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    return cfg
+
+
+def _route(turn) -> tuple:
+    return turn.cfg.provider_id, turn.cfg.provider_base_url, turn.cfg.provider_api_key
+
+
+def test_reset_command_is_durable_for_later_session_load(tmp_path, monkeypatch):
+    cfg = repl_cfg(tmp_path, monkeypatch)
     append_message(cfg.session_file, {"role": "user", "content": "old"})
-    state = {"messages": [{"role": "user", "content": "old"}]}
+    turns = record_turns(monkeypatch)
 
-    handled = cli._handle_command("/reset", state, cfg)
+    run_async(monkeypatch, cfg, ["/reset", "new"], wait=True)
 
-    assert handled is True
-    assert state["messages"] == []
-    assert load_messages(cfg.session_file) == []
+    [turn] = turns
+    assert [message["content"] for message in turn.messages] == ["new"]
+    assert load_messages(cfg.session_file) == turn.messages
 
 
 def test_refresh_model_catalog_command_forces_refresh(tmp_path, monkeypatch, capsys):
-    cfg = make_cfg(tmp_path)
+    cfg = repl_cfg(tmp_path, monkeypatch)
     seen: list[str] = []
 
     def refresh_stub() -> bool:
@@ -62,76 +77,63 @@ def test_refresh_model_catalog_command_forces_refresh(tmp_path, monkeypatch, cap
         print("refreshed")
         return True
 
-    monkeypatch.setattr(cli, "_force_refresh_model_catalog", refresh_stub)
+    monkeypatch.setattr(model_metadata, "force_refresh_model_catalog", refresh_stub)
+    turns = record_turns(monkeypatch)
 
-    handled = cli._handle_command("/refresh-model-catalog", {"messages": []}, cfg)
+    run_async(monkeypatch, cfg, ["/refresh-model-catalog"])
 
-    assert handled is True
+    assert turns == []
     assert seen == ["forced"]
 
 
-def test_wipe_command_rotates_file_and_clears_in_process_messages(tmp_path):
-    cfg = make_cfg(tmp_path)
+def _other_sessions(cfg) -> list:
+    return sorted(path for path in cfg.session_file.parent.glob("*.jsonl") if path != cfg.session_file)
+
+
+def test_wipe_moves_the_conversation_to_a_new_session_and_clears_it_here(tmp_path, monkeypatch):
+    cfg = repl_cfg(tmp_path, monkeypatch)
     append_message(cfg.session_file, {"role": "user", "content": "old"})
-    state = {"messages": [{"role": "user", "content": "old"}]}
+    turns = record_turns(monkeypatch)
+    session_after_wipe: list[bool] = []
 
-    handled = cli._handle_command("/wipe", state, cfg)
+    async def typing(enter):
+        await enter("/wipe")
+        session_after_wipe.append(cfg.session_file.exists())
+        await enter("new")
 
-    assert handled is True
-    assert state["messages"] == []
-    assert not cfg.session_file.exists()
-    assert cfg.session_file.with_suffix(".jsonl.bak").exists()
+    run_async(monkeypatch, cfg, typing)
+
+    assert session_after_wipe == [False]
+    [turn] = turns
+    assert [message["content"] for message in turn.messages] == ["new"]
+    moved = _other_sessions(cfg)
+    assert len(moved) == 1
+    assert load_messages(moved[0]) == [{"role": "user", "content": "old"}]
 
 
-def test_wipe_preserves_existing_backups_instead_of_overwriting(tmp_path):
-    cfg = make_cfg(tmp_path)
+def test_each_wipe_keeps_its_conversation_in_a_session_of_its_own(tmp_path, monkeypatch):
+    cfg = repl_cfg(tmp_path, monkeypatch)
     append_message(cfg.session_file, {"role": "user", "content": "first"})
-    cli._handle_command("/wipe", {"messages": [{"role": "user", "content": "first"}]}, cfg)
-    first_backup = cfg.session_file.with_suffix(".jsonl.bak")
-    append_message(cfg.session_file, {"role": "user", "content": "second"})
+    turns = record_turns(monkeypatch)
 
-    handled = cli._handle_command("/wipe", {"messages": [{"role": "user", "content": "second"}]}, cfg)
+    run_async(monkeypatch, cfg, ["/wipe", "second", "/wipe"], wait=True)
 
-    assert handled is True
-    assert first_backup.exists()
-    assert cfg.session_file.with_suffix(".jsonl.bak.1").exists()
-    assert load_messages(first_backup) == [{"role": "user", "content": "first"}]
-    assert load_messages(cfg.session_file.with_suffix(".jsonl.bak.1")) == [{"role": "user", "content": "second"}]
+    assert [turn.messages[-1]["content"] for turn in turns] == ["second"]
+    kept = sorted(load_messages(path)[0]["content"] for path in _other_sessions(cfg))
+    assert kept == ["first", "second"]
+    assert not list(cfg.session_file.parent.glob("*.bak*"))
 
 
-def test_set_commands_parse_power_user_knobs():
-    live_settings = settings.seed_defaults()
+def test_unknown_commands_that_share_prefixes_are_refused_not_swallowed(tmp_path, monkeypatch):
+    cfg = repl_cfg(tmp_path, monkeypatch)
+    turns = record_turns(monkeypatch)
 
-    trace = setcmd.set_command(live_settings, "runtime.trace on")
-    assert trace.error is None
-    assert trace.lines == ["runtime.trace = on"]
-    assert settings.get_dotted(live_settings, ("runtime", "trace")) is True
+    run_async(monkeypatch, cfg, ["/setty MODEL nope", "/showtime", "/compact-autoload", "hello"],
+              wait=True, live_settings=settings.seed_defaults())
 
-    reasoning = setcmd.set_command(live_settings, "model.reasoning_effort max")
-    assert reasoning.error is None
-    assert reasoning.lines == ["model.reasoning_effort = max"]
-    assert settings.get_dotted(live_settings, ("model", "reasoning_effort")) == "max"
-
-    maxout = setcmd.set_command(live_settings, "model.max_output_tokens 64000")
-    assert maxout.error is None
-    assert maxout.lines == ["model.max_output_tokens = 64000"]
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 64000
-
-    # RULING A: magic strings die -- "off" is no longer a clear-token for a
-    # nullable int knob; `set -key` is the only way to clear one.
-    cleared = setcmd.set_command(live_settings, "-model.max_output_tokens")
-    assert cleared.error is None
-    assert cleared.lines == ["model.max_output_tokens = <none>"]
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
-
-
-def test_unknown_commands_that_share_prefixes_are_not_swallowed(tmp_path):
-    cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
-
-    assert cli._handle_command("/setty model.id nope", state, cfg) is False
-    assert cli._handle_command("/showtime", state, cfg) is False
-    assert cli._handle_command("/compact-autoload", state, cfg) is False
+    [turn] = turns
+    assert turn.messages[-1]["content"] == "hello"
+    assert turn.cfg.model == cfg.model
 
 
 def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, tmp_path, capsys):
@@ -143,16 +145,16 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
     def run_turn_stub(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["cause failure", "exit"])
+    run_async(monkeypatch, cfg, ["cause failure", "exit"], wait=True)
 
     captured = capsys.readouterr()
     assert "RuntimeError: boom" in captured.out
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
 
 
-def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsys):
+def test_repl_cancelled_turn_emits_cancel_event(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
@@ -165,15 +167,15 @@ def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsy
             return super().emit(event, **payload)
 
     def run_turn_stub(*args, **kwargs):
-        raise KeyboardInterrupt
+        raise asyncio.CancelledError
 
-    monkeypatch.setattr(cli.events, "EventHooks", RecordingHooks)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(events, "EventHooks", RecordingHooks)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["interrupt me", "exit"])
+    run_async(monkeypatch, cfg, ["interrupt me", "exit"], wait=True)
 
     assert ("input", {"text": "interrupt me", "attachments": []}) in seen
-    assert ("cancel", {"reason": "keyboard_interrupt"}) in seen
+    assert ("cancel", {"reason": "cancelled"}) in seen
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
 
 
@@ -186,9 +188,9 @@ def test_repl_input_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     def run_turn_stub(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input echo nope", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input echo nope", "hello", "exit"], wait=True)
 
     records = _debug_records(debug_log)
     assert {
@@ -209,10 +211,10 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
     def run_turn_stub(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(cli._paths, "state_root", lambda: state_root)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(paths, "state_root", lambda: state_root)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set runtime.debug on", "/on input echo nope", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set DEBUG_LOG on", "/on input echo nope", "hello", "exit"], wait=True)
 
     records = _debug_records(debug_log)
     assert {
@@ -230,11 +232,11 @@ def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
     def run_turn_stub(*args, **kwargs):
-        raise KeyboardInterrupt
+        raise asyncio.CancelledError
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on cancel echo nope", "interrupt me", "exit"])
+    run_async(monkeypatch, cfg, ["/on cancel echo nope", "interrupt me", "exit"], wait=True)
 
     records = _debug_records(debug_log)
     assert {
@@ -249,7 +251,7 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    (tmp_path / "cancel.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    (tmp_path / "cancel.irc").write_text("set TEMPERATURE 0.2\nbogus nope\n", encoding="utf-8")
     calls = 0
     temperatures: list[float | None] = []
 
@@ -257,12 +259,12 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise KeyboardInterrupt
+            raise asyncio.CancelledError
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on cancel load cancel.irc", "interrupt me", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on cancel load cancel.irc", "interrupt me", "hello", "exit"], wait=True)
 
     assert temperatures == [0.2]
 
@@ -276,15 +278,15 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
     def run_turn_stub(*args, **kwargs):
         trace_overrides.append(kwargs["trace_override"])
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input set runtime.trace on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input set TRACE on", "hello", "exit"], wait=True)
 
     assert trace_overrides == [True]
 
 
 def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
+    cfg = replace(make_cfg(tmp_path), layer_flag={"TEMPERATURE": 0.9})
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
@@ -292,15 +294,15 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
     def run_turn_stub(*args, **kwargs):
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input set compact.auto off", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input set COMPACTION_AUTO off", "hello", "exit"], wait=True)
 
     assert temperatures == [0.9]
 
 
 def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
+    cfg = replace(make_cfg(tmp_path), layer_flag={"TEMPERATURE": 0.9})
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
@@ -308,9 +310,9 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
     def run_turn_stub(*args, **kwargs):
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input set sampling.temperature 0.2", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input set TEMPERATURE 0.2", "hello", "exit"], wait=True)
 
     assert temperatures == [0.2]
 
@@ -319,15 +321,15 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    (tmp_path / "model.irc").write_text("set model.id hook-model\nbogus nope\n", encoding="utf-8")
+    (tmp_path / "model.irc").write_text("set MODEL hook-model\nbogus nope\n", encoding="utf-8")
     models: list[str] = []
 
     def run_turn_stub(cfg_arg, *args, **kwargs):
         models.append(cfg_arg.model)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input load model.irc", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input load model.irc", "hello", "exit"], wait=True)
 
     assert models == ["hook-model"]
 
@@ -337,9 +339,9 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "provider.irc").write_text(
-        "set provider.id openai\n"
-        "set provider.base_url http://provider.test/v1\n"
-        "set provider.api_key sk-hook\n"
+        "set PROVIDER openai\n"
+        "set BASE_URL http://provider.test/v1\n"
+        "set API_KEY sk-hook\n"
         "bogus nope\n",
         encoding="utf-8",
     )
@@ -348,9 +350,9 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.provider_id, cfg_arg.provider_base_url, cfg_arg.provider_api_key))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input load provider.irc", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input load provider.irc", "hello", "exit"], wait=True)
 
     assert seen == [("openai", "http://provider.test/v1", "sk-hook")]
 
@@ -360,18 +362,18 @@ def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatc
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "tools.irc").write_text(
-        'set tools.alias_profiles [{"match":["offline-test-model"],"aliases":{"read":"r"}}]\n'
+        'set TOOL_ALIASES [{"match":["offline-test-model"],"aliases":{"read":"r"}}]\n'
         "bogus nope\n",
         encoding="utf-8",
     )
     seen: list[list[dict]] = []
 
     def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append(cfg_arg.settings.get("tools", {}).get("alias_profiles", []))
+        seen.append(cfg_arg.settings.get("TOOL_ALIASES", []))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input load tools.irc", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input load tools.irc", "hello", "exit"], wait=True)
 
     assert seen == [[{"match": ["offline-test-model"], "aliases": {"read": "r"}}]]
 
@@ -385,9 +387,9 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         max_tool_result_bytes.append(cfg_arg.max_tool_result_bytes)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set limits.max_tool_result_bytes 123", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set TOOL_RESULT_MAX 123", "hello", "exit"], wait=True)
 
     assert max_tool_result_bytes == [123]
 
@@ -401,9 +403,9 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
     def run_turn_stub(cfg_arg, *args, **kwargs):
         prefer_inherit.append(cfg_arg.prefer_inherit)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set subagents.prefer_inherit on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set SUBAGENT_INHERIT_MODEL on", "hello", "exit"], wait=True)
 
     assert prefer_inherit == [True]
 
@@ -421,17 +423,16 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
         params = task_tool.openai_spec()["function"]["parameters"]["properties"]
         seen.append((cfg_arg.lock_subagent_model, "model" in params))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set subagents.lock_model on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set SUBAGENT_MODEL_LOCK on", "hello", "exit"], wait=True)
 
     assert seen == [(True, False)]
 
 
 def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
-    # RULING A: magic strings die -- there is no longer a magic value that
-    # forces a nullable int knob to None regardless of its baseline. `set -key`
-    # clears a *live session override* back to whatever the knob's baseline
+    # There is no magic value that forces a nullable int knob to None
+    # regardless of its baseline. `set -key` clears a *live session override* back to whatever the knob's baseline
     # already was (here: cfg's own None default, since nothing else set it).
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
@@ -441,15 +442,15 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         max_output_tokens.append(cfg_arg.max_output_tokens)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, [
-                "/set model.max_output_tokens 5000",
+    run_async(monkeypatch, cfg, [
+                "/set OUTPUT_TOKENS_MAX 5000",
                 "hello",
-                "/set -model.max_output_tokens",
+                "/set -OUTPUT_TOKENS_MAX",
                 "hello",
                 "exit",
-            ])
+            ], wait=True)
 
     assert max_output_tokens == [5000, None]
 
@@ -463,17 +464,19 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         reasoning_efforts.append(cfg_arg.reasoning_effort)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set model.reasoning_effort max", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set EFFORT max", "hello", "exit"], wait=True)
 
-    # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
-    # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
+    # `max` is a real ladder stop (reasoning.py); reasoning.snap_effort floors
+    # it per model.
     assert reasoning_efforts == ["max"]
 
 
 def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
+    live = settings.seed_defaults()
+    settings.set_dotted(live, ("EFFORT",), None)
+    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=live)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
@@ -481,9 +484,9 @@ def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path)
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["hello", "exit"])
+    run_async(monkeypatch, cfg, ["hello", "exit"], wait=True)
 
     assert seen == [("xhigh", "xhigh")]
 
@@ -497,17 +500,14 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set model.reasoning_effort off", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set EFFORT off", "hello", "exit"], wait=True)
 
-    assert seen == [("none", "none")]
+    assert seen == [("off", "off")]
 
 
-def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeypatch, tmp_path):
-    # RULING B: "default"/"auto" are INVALID values now, not magic re-enable
-    # tokens — the knob stays disabled from the earlier `off`, and clearing
-    # back to the provider default is only `set -model.reasoning_effort`.
+def test_repl_set_reasoning_effort_clear_via_dash_key_restores_the_default(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
@@ -516,38 +516,17 @@ def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeyp
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, [
-                "/set model.reasoning_effort off",
-                "/set model.reasoning_effort default",
+    run_async(monkeypatch, cfg, [
+                "/set EFFORT off",
+                "/set -EFFORT",
                 "hello",
                 "exit",
-            ])
+            ], wait=True)
 
-    # the rejected `default` never mutated the setting -- still disabled from `off`
-    assert seen == [("none", "none")]
-
-
-def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
-    cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    seen: list[tuple[str | None, str | None]] = []
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
-
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-
-    run_blocking(cfg, [
-                "/set model.reasoning_effort off",
-                "/set -model.reasoning_effort",
-                "hello",
-                "exit",
-            ])
-
-    assert seen == [("xhigh", "xhigh")]
+    default = settings.default_value("EFFORT")
+    assert seen == [(default, default)]
 
 
 def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
@@ -559,9 +538,9 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         traces.append(cfg_arg.trace)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set runtime.trace on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set TRACE on", "hello", "exit"], wait=True)
 
     assert traces == [True]
 
@@ -594,11 +573,11 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
 
-    run_blocking(cfg, [
-                '/set provider.extra {"extra_body":{"live_flag":true}}',
+    run_async(monkeypatch, cfg, [
+                '/set EXTRA_PARAMS {"extra_body":{"live_flag":true}}',
                 "hello",
                 "exit",
-            ])
+            ], wait=True)
 
     assert len(params_seen) == 1
     assert params_seen[0] is not None
@@ -609,7 +588,7 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    (tmp_path / "turn-end.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    (tmp_path / "turn-end.irc").write_text("set TEMPERATURE 0.2\nbogus nope\n", encoding="utf-8")
     calls = 0
     temperatures: list[float | None] = []
 
@@ -622,29 +601,23 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
         temperatures.append(kwargs["sampling"].temperature)
         return None
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on turn_end load turn-end.irc", "first", "second", "exit"])
+    run_async(monkeypatch, cfg, ["/on turn_end load turn-end.irc", "first", "second", "exit"], wait=True)
 
     assert temperatures == [0.2]
 
 
-def test_provider_commands_mutate_runtime_state(tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+def test_provider_commands_mutate_runtime_state(tmp_path, monkeypatch, capsys):
+    cfg = repl_cfg(tmp_path, monkeypatch)
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/provider openai", state, cfg) is True
-    assert cli._handle_command("/baseurl http://localhost:11434/v1", state, cfg) is True
-    assert cli._handle_command("/apikey ollama", state, cfg) is True
+    run_async(monkeypatch, cfg, [
+        "/provider openai", "/baseurl http://localhost:11434/v1", "/apikey ollama", "hello",
+    ], wait=True)
 
-    assert state["provider_id"] == "openai"
-    assert state["provider_base_url"] == "http://localhost:11434/v1"
-    assert state["provider_api_key"] == "ollama"
+    [turn] = turns
+    assert _route(turn) == ("openai", "http://localhost:11434/v1", "ollama")
 
 
 def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypatch):
@@ -657,39 +630,29 @@ def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypat
         "XIAOMI_TP_BASE_URL", "MIMO_TP_BASE_URL", "XIAOMI_TP_KEY", "MIMO_TP_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(cli.logins, "load_logins", lambda *a, **k: {})
+    monkeypatch.setattr(logins, "load_logins", lambda *a, **k: {})
 
-    cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    cfg = repl_cfg(tmp_path, monkeypatch)
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/provider ollama", state, cfg) is True
-    assert state["provider_id"] == "ollama"
-    assert state["provider_base_url"] == "http://127.0.0.1:11434/v1"
-    assert state["provider_api_key"] == "ollama"
+    run_async(monkeypatch, cfg, [
+        "/provider ollama", "one", "/provider llama.cpp", "two", "/provider mimo-token-plan", "three",
+    ], wait=True)
 
-    assert cli._handle_command("/provider llama.cpp", state, cfg) is True
-    assert state["provider_id"] == "llama.cpp"
-    assert state["provider_base_url"] == "http://127.0.0.1:8080/v1"
-    assert state["provider_api_key"] == "x"
-
-    assert cli._handle_command("/provider mimo-token-plan", state, cfg) is True
-    assert state["provider_id"] == "mimo-token-plan"
-    assert state["provider_base_url"] == "https://token-plan-sgp.xiaomimimo.com/v1"
+    ollama, llama_cpp, mimo = turns
+    assert _route(ollama) == ("ollama", "http://127.0.0.1:11434/v1", "ollama")
+    assert _route(llama_cpp) == ("llama.cpp", "http://127.0.0.1:8080/v1", "x")
+    assert _route(mimo)[:2] == ("mimo-token-plan", "https://token-plan-sgp.xiaomimimo.com/v1")
     out = capsys.readouterr().out
     assert "ollama" in out
     assert "llama.cpp" in out
     assert "mimo-token-plan" in out
 
 
-def test_login_loads_saved_provider_bundle(tmp_path):
+def test_login_loads_saved_provider_bundle(tmp_path, monkeypatch):
     from js import logins
 
-    cfg = make_cfg(tmp_path)
+    cfg = repl_cfg(tmp_path, monkeypatch)
     logins.set_config_dir(tmp_path / "login-store")
     logins.save_login(
         logins.Login(
@@ -699,46 +662,32 @@ def test_login_loads_saved_provider_bundle(tmp_path):
             provider_api_key="ollama",
         )
     )
-    state = {
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    turns = record_turns(monkeypatch)
 
     try:
-        assert cli._handle_command("/login openai", state, cfg) is True
-        assert state["provider_id"] == "openai"
-        assert state["provider_base_url"] == "http://localhost:11434/v1"
-        assert state["provider_api_key"] == "ollama"
+        run_async(monkeypatch, cfg, ["/login openai", "hello"], wait=True)
     finally:
         logins.set_config_dir(None)
 
+    [turn] = turns
+    assert _route(turn) == ("openai", "http://localhost:11434/v1", "ollama")
 
-def test_logout_clears_provider_state(tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": "openai",
-        "provider_base_url": "http://localhost:11434/v1",
-        "provider_api_key": "ollama",
-    }
 
-    assert cli._handle_command("/logout", state, cfg) is True
+def test_logout_clears_provider_state(tmp_path, monkeypatch, capsys):
+    cfg = repl_cfg(tmp_path, monkeypatch, provider_id="openai",
+                   provider_base_url="http://localhost:11434/v1", provider_api_key="ollama")
+    turns = record_turns(monkeypatch)
 
-    assert state["provider_id"] is None
-    assert state["provider_base_url"] is None
-    assert state["provider_api_key"] is None
+    run_async(monkeypatch, cfg, ["/logout", "hello"], wait=True)
+
+    [turn] = turns
+    assert _route(turn) == (None, None, None)
 
 
 def test_models_command_lists_provider_models(monkeypatch, tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": "openai",
-        "provider_base_url": "http://localhost:11434/v1",
-        "provider_api_key": "ollama",
-    }
+    cfg = repl_cfg(tmp_path, monkeypatch, provider_id="openai",
+                   provider_base_url="http://localhost:11434/v1", provider_api_key="ollama")
+    turns = record_turns(monkeypatch)
 
     async def fake_list_models():
         return ["model-a", "model-b", "model-c"]
@@ -749,8 +698,9 @@ def test_models_command_lists_provider_models(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(ai, "get_provider", lambda *args, **kwargs: FakeProvider())
 
-    assert cli._handle_command("/models 2", state, cfg) is True
+    run_async(monkeypatch, cfg, ["/models 2"])
 
+    assert turns == []
     out = capsys.readouterr().out
     assert "model-a" in out
     assert "model-b" in out
@@ -758,49 +708,34 @@ def test_models_command_lists_provider_models(monkeypatch, tmp_path, capsys):
 
 
 def test_models_command_refuses_without_provider(tmp_path, monkeypatch, capsys):
-    cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
-    monkeypatch.setattr(cli, "_models_for_provider", lambda *a: pytest.fail("listed models without a provider"))
+    cfg = repl_cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(logins, "models_for_provider", lambda *a: pytest.fail("listed models without a provider"))
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/models", state, cfg) is True
+    run_async(monkeypatch, cfg, ["/models"])
 
+    assert turns == []
     assert capsys.readouterr().out
 
 
-def test_provider_command_shows_current_value_when_bare(tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": "openai",
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+def test_provider_command_shows_current_value_when_bare(tmp_path, monkeypatch, capsys):
+    cfg = repl_cfg(tmp_path, monkeypatch, provider_id="openai")
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/provider", state, cfg) is True
+    run_async(monkeypatch, cfg, ["/provider"])
+
+    assert turns == []
     assert "openai" in capsys.readouterr().out
 
 
-
 def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
-    cfg = make_cfg(tmp_path)
+    cfg = repl_cfg(tmp_path, monkeypatch)
     config_path = tmp_path / "config" / "jsrc"
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    monkeypatch.setattr(paths, "global_config_file", lambda: config_path)
+    turns = record_turns(monkeypatch)
 
     monkeypatch.setattr(
-        cli.picker,
+        picker,
         "pick_model",
         lambda **kwargs: {
             "provider_id": "deepseek",
@@ -811,15 +746,16 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
         },
     )
 
-    assert cli._handle_command("/model", state, cfg) is True
-    assert state["provider_id"] == "deepseek"
-    assert state["provider_api_key"] == "sk-test"
-    assert state["model"] == "deepseek-v4-flash"
-    assert "set model.id deepseek/deepseek-v4-flash" in config_path.read_text(encoding="utf-8")
+    run_async(monkeypatch, cfg, ["/model", "hello"], wait=True)
+
+    [turn] = turns
+    assert turn.cfg.provider_id == "deepseek"
+    assert turn.cfg.provider_api_key == "sk-test"
+    assert turn.cfg.model == "deepseek-v4-flash"
+    assert not config_path.exists()
 
 
-
-def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, capsys):
+def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path, capsys):
     from js import logins
 
     # The real picker offers logged-in providers. Its stub must establish the
@@ -827,62 +763,57 @@ def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, 
     # on the invoking user's credentials.
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "login-store")
     logins.save_login(logins.Login(
-        provider_id="openai-codex",
-        provider_base_url="https://chatgpt.com/backend-api",
-        provider_api_key=None,
+        provider_id="openai",
+        provider_base_url="https://api.openai.com/v1",
+        provider_api_key="sk-test",
     ))
-    cfg = make_cfg(tmp_path)
+    cfg = repl_cfg(tmp_path, monkeypatch)
     config_path = tmp_path / "config" / "jsrc"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text("set model.id deepseek/deepseek-v4-flash\n", encoding="utf-8")
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "settings": settings.seed_defaults(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    config_path.write_text("set MODEL deepseek/deepseek-v4-flash\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "global_config_file", lambda: config_path)
+    turns = record_turns(monkeypatch)
+    jsrc_after_pick: list[str] = []
+
+    async def typing(enter):
+        await enter("/model")
+        jsrc_after_pick.append(config_path.read_text(encoding="utf-8"))
+        await enter("/save")
+        await enter("hello")
 
     monkeypatch.setattr(
-        cli.picker,
+        picker,
         "pick_model",
         lambda **kwargs: {
-            "provider_id": "openai-codex",
-            "provider_base_url": "https://chatgpt.com/backend-api",
-            "provider_api_key": None,
+            "provider_id": "openai",
+            "provider_base_url": "https://api.openai.com/v1",
+            "provider_api_key": "sk-test",
             "provider_headers": {},
             "model": "gpt-5.5",
         },
     )
 
-    assert cli._handle_command("/model", state, cfg) is True
+    run_async(monkeypatch, cfg, typing, live_settings=settings.seed_defaults())
 
-    assert state["provider_id"] == "openai-codex"
-    assert state["provider_base_url"] == "https://chatgpt.com/backend-api"
-    assert state["model"] == "gpt-5.5"
-    assert settings.get_dotted(state["settings"], ("model", "id")) == "openai-codex/gpt-5.5"
-    assert config_path.read_text(encoding="utf-8").splitlines()[0] == "set model.id openai-codex/gpt-5.5"
+    [turn] = turns
+    assert turn.cfg.provider_id == "openai"
+    assert turn.cfg.provider_base_url == "https://api.openai.com/v1"
+    assert turn.cfg.model == "gpt-5.5"
+    assert jsrc_after_pick == ["set MODEL deepseek/deepseek-v4-flash\n"]
+    assert config_path.read_text(encoding="utf-8") == "set MODEL openai/gpt-5.5\n"
 
-    from js.config import from_env
+    from js.config import InvocationSources, from_env
 
-    boot_cfg = from_env(save_session=False, cwd=tmp_path, ignore_local_config=True)
-    assert boot_cfg.provider_id == "openai-codex"
+    boot_cfg = from_env(save_session=False, cwd=tmp_path, sources=InvocationSources(ignore_local_config=True))
+    assert boot_cfg.provider_id == "openai"
     assert boot_cfg.model == "gpt-5.5"
 
 
-
-def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
+def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path, monkeypatch):
     from js import logins
 
-    cfg = replace(
-        make_cfg(tmp_path),
-        provider_id="deepseek",
-        provider_base_url="https://api.deepseek.com",
-        provider_api_key="sk-deepseek",
-    )
+    cfg = repl_cfg(tmp_path, monkeypatch, provider_id="deepseek", provider_base_url="https://api.deepseek.com",
+                   provider_api_key="sk-deepseek", provider_headers={"x-deepseek": "1"})
     logins.set_config_dir(tmp_path / "login-store")
     logins.save_login(
         logins.Login(
@@ -891,111 +822,64 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
             provider_api_key="ollama",
         )
     )
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": {"x-deepseek": "1"},
-    }
+    turns = record_turns(monkeypatch)
     try:
-        assert cli._handle_command("/model ollama/gemma4:e2b", state, cfg) is True
-        assert state["provider_id"] == "ollama"
-        assert state["provider_base_url"] == "http://ollama.test/v1"
-        assert state["provider_api_key"] == "ollama"
-        assert state["provider_headers"] == {}
-        assert state["model"] == "gemma4:e2b"
+        run_async(monkeypatch, cfg, ["/model ollama/gemma4:e2b", "hello"], wait=True)
     finally:
         logins.set_config_dir(None)
 
-
-def test_model_command_prints_the_model_as_provider_slash_model(monkeypatch, tmp_path, capsys):
-    from js import logins
-    from js import messages as msgs
-    from repl_driver import run_async
-
-    cfg = make_cfg(tmp_path)
-    cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    logins.set_config_dir(tmp_path / "login-store")
-    logins.save_login(logins.Login(provider_id="ollama", provider_base_url="http://ollama.test/v1",
-                                   provider_api_key="ollama"))
-    try:
-        run_async(monkeypatch, cfg, ["/model ollama/gemma4:e2b"])
-    finally:
-        logins.set_config_dir(None)
-
-    assert msgs.MODEL_SET.line(colour=False, model="ollama/gemma4:e2b") in capsys.readouterr().out
+    [turn] = turns
+    assert _route(turn) == ("ollama", "http://ollama.test/v1", "ollama")
+    assert turn.cfg.provider_headers == {}
+    assert turn.cfg.model == "gemma4:e2b"
 
 
-def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):
-    """Ruling C: `/model vendor/model` may switch direct ONLY when that vendor is
+def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path, monkeypatch):
+    """`/model vendor/model` switches directly only when that vendor is
     a saved login. With no login and a pinned gateway, the REPL agrees with the
     router — the endpoint holds and the whole id rides it (no hijack)."""
     from js import logins
 
-    cfg = replace(
-        make_cfg(tmp_path),
-        provider_id="omp",
-        provider_base_url="https://gateway.test/v1",
-        provider_api_key="sk-omp",
-    )
+    cfg = repl_cfg(tmp_path, monkeypatch, provider_id="omp", provider_base_url="https://gateway.test/v1",
+                   provider_api_key="sk-omp", provider_headers={"x-omp": "1"})
     logins.set_config_dir(tmp_path / "login-store")  # empty store: no anthropic login
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": {"x-omp": "1"},
-    }
+    turns = record_turns(monkeypatch)
     try:
-        assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
-        # Endpoint unchanged; the full prefixed id is passed through verbatim.
-        assert state["provider_id"] == "omp"
-        assert state["provider_base_url"] == "https://gateway.test/v1"
-        assert state["provider_api_key"] == "sk-omp"
-        assert state["provider_headers"] == {"x-omp": "1"}
-        assert state["model"] == "anthropic/claude-sonnet-4"
+        run_async(monkeypatch, cfg, ["/model anthropic/claude-sonnet-4", "hello"], wait=True)
     finally:
         logins.set_config_dir(None)
 
+    [turn] = turns
+    # Endpoint unchanged; the full prefixed id is passed through verbatim.
+    assert _route(turn) == ("omp", "https://gateway.test/v1", "sk-omp")
+    assert turn.cfg.provider_headers == {"x-omp": "1"}
+    assert turn.cfg.model == "anthropic/claude-sonnet-4"
 
-def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint(tmp_path):
-    """Ruling C: even with no pinned provider, a vendor prefix is only an
+
+def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint(tmp_path, monkeypatch):
+    """Even with no pinned provider, a vendor prefix is only an
     endpoint switch when that vendor is a saved login; otherwise it is a plain
     model id."""
     from js import logins
 
-    cfg = make_cfg(tmp_path)
+    cfg = repl_cfg(tmp_path, monkeypatch)
     logins.set_config_dir(tmp_path / "login-store")
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-        "provider_headers": {},
-    }
+    turns = record_turns(monkeypatch)
     try:
-        assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
-        assert state["provider_id"] is None
-        assert state["provider_base_url"] is None
-        assert state["provider_api_key"] is None
-        assert state["provider_headers"] == {}
-        assert state["model"] == "anthropic/claude-sonnet-4"
+        run_async(monkeypatch, cfg, ["/model anthropic/claude-sonnet-4", "hello"], wait=True)
     finally:
         logins.set_config_dir(None)
 
+    [turn] = turns
+    assert _route(turn) == (None, None, None)
+    assert turn.cfg.provider_headers == {}
+    assert turn.cfg.model == "anthropic/claude-sonnet-4"
 
-def test_provider_command_uses_saved_login(tmp_path):
+
+def test_provider_command_uses_saved_login(tmp_path, monkeypatch):
     from js import logins
 
-    cfg = make_cfg(tmp_path)
+    cfg = repl_cfg(tmp_path, monkeypatch)
     logins.set_config_dir(tmp_path / "login-store")
     logins.save_login(
         logins.Login(
@@ -1005,80 +889,63 @@ def test_provider_command_uses_saved_login(tmp_path):
             provider_api_key="sk-proxy",
         )
     )
-    state = {
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    turns = record_turns(monkeypatch)
     try:
-        assert cli._handle_command("/provider my-proxy", state, cfg) is True
-        assert state["provider_id"] == "my-proxy"
-        assert state["provider_base_url"] == "http://proxy.test/v1"
-        assert state["provider_api_key"] == "sk-proxy"
+        run_async(monkeypatch, cfg, ["/provider my-proxy", "hello"], wait=True)
     finally:
         logins.set_config_dir(None)
 
+    [turn] = turns
+    assert _route(turn) == ("my-proxy", "http://proxy.test/v1", "sk-proxy")
 
 
 def test_picker_open_preserves_explicit_logout_over_config(monkeypatch, tmp_path):
-    cfg = replace(
-        make_cfg(tmp_path),
-        provider_id="openai",
-        provider_base_url="http://cfg.test/v1",
-        provider_api_key="cfg-key",
-    )
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    cfg = repl_cfg(tmp_path, monkeypatch, provider_id="openai", provider_base_url="http://cfg.test/v1",
+                   provider_api_key="cfg-key")
     captured = {}
 
     def fake_pick_model(**kwargs):
         captured.update(kwargs)
         return None
 
-    monkeypatch.setattr(cli.picker, "pick_model", fake_pick_model)
+    monkeypatch.setattr(picker, "pick_model", fake_pick_model)
 
-    assert cli._handle_command("/model", state, cfg) is True
+    run_async(monkeypatch, cfg, ["/logout", "/model"])
+
     assert captured["provider_id"] is None
     assert captured["provider_base_url"] is None
     assert captured["provider_api_key"] is None
 
-def test_cfg_for_active_model_carries_provider_overrides(tmp_path):
+def test_config_for_turn_carries_provider_overrides(tmp_path):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "other-model",
-        "provider_id": None,
-        "provider_base_url": "http://proxy.test/v1",
-        "provider_api_key": "sk-proxy",
-    }
+    state = ReplState(
+        model="other-model",
+        provider_id=None,
+        provider_base_url="http://proxy.test/v1",
+        provider_api_key="sk-proxy",
+    )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.model == "other-model"
     assert active.provider_id is None
     assert active.provider_base_url == "http://proxy.test/v1"
     assert active.provider_api_key == "sk-proxy"
 
 
-def test_cfg_for_active_model_keeps_pinned_provider_for_prefixed_model(tmp_path):
+def test_config_for_turn_keeps_pinned_provider_for_prefixed_model(tmp_path):
     # A gateway/openrouter model id like "anthropic/claude-..." selected under an
     # explicitly pinned provider must NOT let the prefix hijack the provider or
     # inherit the gateway's base/api/headers onto a native provider transport.
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "anthropic/claude-sonnet-4",
-        "provider_id": "omp",
-        "provider_base_url": "https://gateway.test/v1",
-        "provider_api_key": "sk-omp",
-        "provider_headers": {"x-omp": "1"},
-    }
+    state = ReplState(
+        model="anthropic/claude-sonnet-4",
+        provider_id="omp",
+        provider_base_url="https://gateway.test/v1",
+        provider_api_key="sk-omp",
+        provider_headers={"x-omp": "1"},
+    )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.provider_id == "omp"
     assert active.model == "anthropic/claude-sonnet-4"
     assert active.provider_base_url == "https://gateway.test/v1"
@@ -1086,25 +953,25 @@ def test_cfg_for_active_model_keeps_pinned_provider_for_prefixed_model(tmp_path)
     assert active.provider_headers == {"x-omp": "1"}
 
 
-def test_cfg_for_active_model_strips_same_provider_prefix(tmp_path):
+def test_config_for_turn_strips_same_provider_prefix(tmp_path):
     # When the prefix names the pinned provider, the prefix is stripped without
     # disturbing the pinned credentials.
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "deepseek/deepseek-v4-flash",
-        "provider_id": "deepseek",
-        "provider_base_url": "https://api.deepseek.com",
-        "provider_api_key": "sk-deepseek",
-    }
+    state = ReplState(
+        model="deepseek/deepseek-v4-flash",
+        provider_id="deepseek",
+        provider_base_url="https://api.deepseek.com",
+        provider_api_key="sk-deepseek",
+    )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.provider_id == "deepseek"
     assert active.model == "deepseek-v4-flash"
     assert active.provider_base_url == "https://api.deepseek.com"
     assert active.provider_api_key == "sk-deepseek"
 
 
-def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp_path):
+def test_config_for_turn_routes_prefix_when_provider_unset(monkeypatch, tmp_path):
     # With no explicit provider, a `provider/model` prefix routes ONLY when the
     # operator logged into that provider (an env key never creates a route).
     from js import logins
@@ -1112,14 +979,14 @@ def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="x"))
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "deepseek/deepseek-v4-flash",
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        model="deepseek/deepseek-v4-flash",
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+    )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.provider_id == "deepseek"
     assert active.model == "deepseek-v4-flash"
 
@@ -1138,9 +1005,9 @@ def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatc
     def run_turn_stub(cfg, system, messages, *args, **kwargs):
         turns.append(messages[-1]["content"])
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/skill nosuch", "/skill secret check the plan", "exit"])
+    run_async(monkeypatch, cfg, ["/skill nosuch", "/skill secret check the plan", "exit"], wait=True)
 
     assert len(turns) == 1
     assert "user-only body" in str(turns[0])
@@ -1148,12 +1015,12 @@ def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatc
 
 
 def test_bare_skill_command_lists_builtin_skills_without_a_turn(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    state = {"messages": []}
+    cfg = repl_cfg(tmp_path, monkeypatch)
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/skill", state, make_cfg(tmp_path)) is True
+    run_async(monkeypatch, cfg, ["/skill"])
 
     out = capsys.readouterr().out
-    assert state["messages"] == []
+    assert turns == []
     for name in ("grilling", "grill-me", "wayfinder"):
         assert name in out

@@ -6,6 +6,111 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Dependencies bumped; ruff is no longer held back.**
+  - The lock moves to current releases, including:
+    - ai 0.5.2 → 0.9.0
+    - openai 3.13 → 3.52
+    - anthropic 1.5 → 1.17
+    - httpx2 2.12 → 2.16
+    - pydantic 2.13 → 2.14
+    - Pillow 12 → 13
+    - playwright 1.62 → 1.65
+  - The declared floors follow the locked versions.
+  - The `ruff<0.16` cap is gone. The lint rule set is now named in
+    `[tool.ruff.lint] select` (E4, E7, E9, F, UP), so a ruff upgrade does not
+    change what the gate checks.
+  - `test_dependency_contract` compared versions as strings
+    (`"1.17.0" >= "1.5.0"` is false); it now compares release numbers.
+
+- **Codex and xAI OAuth logins are removed.** js no longer has an OAuth login
+  of any kind. Gone:
+  - the `openai-codex` provider (with its `openai-codex-device` and `codex`
+    aliases), its Responses client and its browser and device-code logins
+  - the `xai-oauth` provider (`grok-oauth`, `xai-login`) and its browser login
+  - the shared loopback callback server
+  - token refresh, the async store lock, the per-loop refresh locks and the
+    in-memory overlay that kept a rotated token a save could not write
+  - the OAuth token fields on a saved login
+  - the six `CODEX_*` settings
+  - the Codex and OAuth messages
+
+  The `xai` provider (`XAI_API_KEY`) is unchanged. Delete any
+  `[openai-codex]` or `[xai-oauth]` table left in `logins.toml` by hand.
+
+- **The `--blocking` REPL is removed.** js kept two REPL loops, and a fix to
+  how a turn is saved, kept or discarded had to land in both; the blocking one
+  had fallen behind (it never saved between tool calls) and was not in use.
+  Gone with it: the `--blocking` flag, the blocking prompt's key bindings
+  (`keys.prompt_bindings`), the "Press ^C again to exit" prompt, and
+  `loop_runner` on `runtime.run_turn` and `compaction.compact_now_sync`. The
+  REPL now prints the `Resume:` command when it exits, which only the
+  blocking loop did. REPL tests that ran on the blocking loop run on the REPL.
+- **Large images are fitted, not refused, as Claude Code does.** An image read,
+  attached, pasted or returned by a tool was refused over `FILE_BYTES_MAX`
+  (2 MB) or dropped over `TOOL_MEDIA_MAX`. Now one over 2000 px on a side is
+  sent scaled to fit 2000 x 2000, aspect kept, and one over 3.75 MiB is
+  re-encoded smaller (palette PNG, then JPEG at quality 80 down to 20, last at
+  1000 px wide). The text says what changed and how to map coordinates back
+  to the original; the file on disk is never touched. New `js/imagefit.py`.
+- **A failed `write` keeps its content; `from_held` finishes it.** Since
+  Sep 15, 223 writes failed, and in 111 the model regenerated 80% or more of
+  the same content, sometimes 45-80 KB that a local GPU took 20 minutes to
+  produce. Now any failed write of at least `HELD_WRITE_MIN` bytes (jail
+  refusal, unread file, I/O or encode error, invalid or unparseable
+  arguments, write not on the surface) holds the content in
+  `~/.js/tmp/held`, and the ERROR names the held id, the finishing call (a
+  corrected path under the cwd for a jail refusal) and where the model is.
+  Arguments cut off inside `content` hold the part that arrived, finished with
+  `from_held` and `append=true`. `HELD_TTL` bounds how long held content stays.
+- **`write` replaces a file the model has read without `overwrite=true`.**
+  `WRITE_REQUIRE_OVERWRITE` now defaults to off. With it on, a model that had
+  read a file and sent its whole replacement was refused for the missing flag,
+  and sent the same content again with the flag: in the saved sessions that
+  retry went through unchanged 16 times, about 140,000 characters of output
+  generated twice. The read is the gate; `set WRITE_REQUIRE_OVERWRITE on`
+  brings the flag back.
+- **`just install` and `just sync` set up everything js's tools need again.**
+  Since 0.2.3 `just install` made the launcher and stopped: no CLI binaries in
+  `tools/bin`, no kernel packages, no Pillow, no Playwright and no Chromium, so
+  on a fresh checkout `fs_search`, `ast_search`, `browse`, `kernel`, `toolbox`,
+  `terminal_snapshot` and `browser_probe` each failed at their first call.
+  Both recipes now install the kernel, vision and browser extras, download the
+  pinned binaries and fetch Chromium, and the launcher keeps those extras in
+  the venv on every start. A musl system goes without the browser extra and
+  Chromium. A Termux install carries the base packages and the binaries `pkg`
+  provides, names the ones with no Termux release, and finishes. The
+  `browser-extra` justfile variable is gone; a missing binary's error says
+  `just install` again. Rerun `just install` on a box set up since 0.2.3.
+
+- **A directive that fails expands to nothing; the model never sees it raw.**
+  An `!{...}` or ` ```! ` directive that failed to resolve (nonzero exit with
+  no stdout, as `rm` of a missing file with `2>/dev/null`; a failed compile; a
+  missing interpreter; a timeout; an unknown subsystem; code while inline code
+  is off) stayed in the text as written, so a message file handed the model a
+  bare command it then ran itself. It now expands to nothing, with the same
+  warning on stderr. An unterminated ` ```! ` fence that runs into the next
+  fence drops only the directive; the fence after it stays. The env-expanded
+  `--printonly=e` preview still shows code directives literally.
+
+- **A Claude model behind an OpenAI-shaped proxy shows its thinking.** Claude
+  sends no thinking text unless the request asks for it. On the Anthropic wire
+  js asks with `display: summarized`; on the OpenAI wire it asked for nothing,
+  so a Claude turn through CLIProxyAPI showed no reasoning and the session kept
+  none. A Claude model on a non-Anthropic wire now sends
+  `include_reasoning: true`, unless `provider.extra` sets it or effort is off.
+
+- **`~/.js/jsrc` is a commented file again, and `/save` edits it in place.**
+  First run writes `js/jsrc.template`: every setting in sections, each with a
+  written description, examples and what every level does, all commented out
+  at its stock value. `/save` used to replace the whole file with one line per
+  setting and copy the old one to `jsrc.bak`; that wiped every comment the
+  user had and left a backup nobody asked for. It now uncomments the line of
+  each setting not at its stock value (rewriting it when it is already live),
+  comments out a live line set back to stock, appends new `on` and `alias`
+  lines, and leaves every other line alone. No backup is written. Picking a
+  default model in the model picker uncomments `model.id` the same way
+  instead of appending a second line.
+
 - **Provider resolution is read once, not once per model call.** The
   models.dev provider table and `logins.toml` were re-read and re-parsed on
   every routing lookup, several times per request; a third of a tool-using

@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import signal
 import subprocess
 import time
 from dataclasses import dataclass
 
-from . import events
+from . import events, settings as _settings
 
 # The exit status that refuses a refusable event (Claude Code's blocking status).
 REFUSE_STATUS = 2
+# A tool_call handler that exits 3 rewrites the call: its stdout is the
+# JSON object of arguments the call runs with instead.
+REWRITE_STATUS = 3
 
 
 @dataclass(frozen=True)
@@ -36,18 +40,35 @@ _POLL_S = 0.05
 
 
 def _clip(data: bytes, cap: int) -> str:
-    return (bytes(data[:cap]) if cap > 0 else bytes(data)).decode("utf-8", errors="replace")
+    """The first ``cap`` bytes (all when ``cap`` is 0), cut back to a whole
+    UTF-8 character so a clip never ends in U+FFFD."""
+    if cap > 0 and len(data) > cap:
+        data = bytes(data[:cap])
+        # Drop a lead byte and the continuation bytes after it when the
+        # sequence it starts runs past the cap.
+        for back in range(1, min(4, len(data)) + 1):
+            byte = data[-back]
+            if byte < 0x80:
+                break
+            if byte >= 0xC0:
+                need = 4 if byte >= 0xF0 else 3 if byte >= 0xE0 else 2
+                if back < need:
+                    data = data[:-back]
+                break
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 def run(command: str, *, cwd: str, timeout: float, cap: int,
         stdin_text: str = "", env: dict[str, str] | None = None) -> ExecOutcome:
-    """Run ``command`` under ``$SHELL -c`` (``/bin/sh`` without one) in its own
+    """Run ``command`` under HOOK_SHELL_PROGRAM, falling back to ``$SHELL``
+    or ``/bin/sh``, in its own
     process group, ``stdin_text`` on stdin, and return by ``timeout`` seconds
     (0 is no limit). At the timeout the whole group is killed. Once the shell
     exits, what it left in the background keeps running and its output stops
     being read after DRAIN_S. Each stream keeps its first ``cap`` bytes; 0
     keeps all."""
-    shell = os.environ.get("SHELL") or "/bin/sh"
+    shell = _settings.live_value("HOOK_SHELL_PROGRAM") or os.environ.get("SHELL") or "/bin/sh"
+    stdin_bytes = stdin_text.encode("utf-8", errors="replace")
     proc = subprocess.Popen(
         [shell, "-c", command],
         stdin=subprocess.PIPE,
@@ -57,20 +78,46 @@ def run(command: str, *, cwd: str, timeout: float, cap: int,
         env=env,
         start_new_session=True,
     )
+    try:
+        return _drive(proc, stdin_bytes, timeout=timeout, cap=cap)
+    except BaseException:
+        # Ctrl-C never reaches the child (its own session), so an exception or
+        # cancellation here must not leave the group running.
+        _kill_group(proc)
+        raise
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            stream.close()
+        except OSError:
+            pass
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _drive(proc: subprocess.Popen, stdin_bytes: bytes, *, timeout: float, cap: int) -> ExecOutcome:
     deadline = time.monotonic() + timeout if timeout > 0 else None
     captured = {proc.stdout: bytearray(), proc.stderr: bytearray()}
-    pending = memoryview(stdin_text.encode("utf-8"))
+    pending = memoryview(stdin_bytes)
     selector = selectors.DefaultSelector()
-    for stream in captured:
-        selector.register(stream, selectors.EVENT_READ)
-    if pending:
-        os.set_blocking(proc.stdin.fileno(), False)
-        selector.register(proc.stdin, selectors.EVENT_WRITE)
-    else:
-        proc.stdin.close()
-    timed_out = False
-    exited_at: float | None = None
     try:
+        for stream in captured:
+            selector.register(stream, selectors.EVENT_READ)
+        if pending:
+            os.set_blocking(proc.stdin.fileno(), False)
+            selector.register(proc.stdin, selectors.EVENT_WRITE)
+        else:
+            proc.stdin.close()
+        timed_out = False
+        exited_at: float | None = None
         while selector.get_map():
             now = time.monotonic()
             if exited_at is None and proc.poll() is not None:
@@ -121,14 +168,20 @@ def run(command: str, *, cwd: str, timeout: float, cap: int,
 
 
 def event_json(call: events.HandlerCall) -> str:
-    """The event a handler answers, as the JSON object its command reads."""
-    return json.dumps({"event": call.emission.event, **call.emission.payload},
+    """The event a handler answers, as the JSON object its command reads. The
+    real event name wins over a payload key of the same name."""
+    return json.dumps({**call.emission.payload, "event": call.emission.event},
                       ensure_ascii=False, default=str)
 
 
+_CLOSING_TAG = re.compile(r"</\s*js-reminder\s*>", re.IGNORECASE)
+
+
 def reminder(stdout: str) -> str | None:
-    """The js-reminder carrying ``stdout``; None for blank output."""
-    text = stdout.strip()
+    """The js-reminder carrying ``stdout``; None for blank output. A closing
+    tag inside the output is defused, so third-party text cannot end the frame
+    early and read as a plain user message."""
+    text = _CLOSING_TAG.sub("<\\/js-reminder>", stdout.strip())
     return f"<js-reminder>{text}</js-reminder>" if text else None
 
 
@@ -140,4 +193,42 @@ def refusal(outcome: ExecOutcome, tool: str) -> str:
             line = line.strip()
             if line:
                 return line if line.startswith("ERROR") else f"ERROR: {line}"
-    return f"ERROR: an on tool_call handler refused {tool}."
+    return f'ERROR: an on tool_call handler refused {tool}.'
+
+
+def refuse_unfinished(call: events.HandlerCall | None, reason: str) -> bool:
+    """Refuse a gated event when its handler could not complete."""
+    if call is None or call.emission.event not in events.REFUSABLE_EVENTS:
+        return False
+    text = str(reason).strip()
+    call.refusal = text if text.startswith("ERROR") else f"ERROR: {text}"
+    return True
+
+
+def apply_refusal(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool:
+    """Record a blocking handler outcome on a refusable event."""
+    if (call is None or outcome.returncode != REFUSE_STATUS
+            or call.emission.event not in events.REFUSABLE_EVENTS):
+        return False
+    call.refusal = refusal(outcome, str(call.emission.payload.get("name") or "the call"))
+    return True
+
+
+def apply_rewrite(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool:
+    """Record a tool_call handler's argument rewrite: exit 3 with a JSON
+    object on stdout. A rewrite that is not a JSON object refuses the call,
+    so a broken handler never lets the original arguments through."""
+    if (call is None or outcome.returncode != REWRITE_STATUS
+            or call.emission.event not in events.REFUSABLE_EVENTS):
+        return False
+    tool = str(call.emission.payload.get("name") or "the call")
+    try:
+        arguments = json.loads(outcome.stdout)
+    except ValueError as exc:
+        call.refusal = f"ERROR: an on tool_call handler rewrote {tool} to invalid JSON: {exc}"
+        return True
+    if not isinstance(arguments, dict):
+        call.refusal = f"ERROR: an on tool_call handler rewrote {tool} to a non-object: {type(arguments).__name__}"
+        return True
+    call.arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+    return True

@@ -6,10 +6,11 @@ from __future__ import annotations
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_bindings import _parse_key
 
-from js import keys, screen
+from js import keys, messages as msgs, screen, screen_scrollback
 
-# The keys the async screen answered to before the keys file existed, with
-# Ctrl-R moved to history_search and reasoning_toggle on Ctrl-O.
+# The keys the screen answered to before the keys file existed, with
+# Ctrl-R moved to history_search, reasoning_toggle on Ctrl-O, and Ctrl-W then
+# a digit showing that window.
 DEFAULTS = {
     "submit": (("enter",),),
     "history_search": (("c-r",),),
@@ -17,6 +18,7 @@ DEFAULTS = {
     "ex_run": (("enter",),),
     "ex_cancel": (("escape",),),
     "interrupt": (("c-c",),),
+    "cancel_turn": (("escape",),),
     "eof": (("c-d",),),
     "suspend": (("c-z",),),
     "reasoning_toggle": (("c-o",),),
@@ -24,6 +26,7 @@ DEFAULTS = {
     "scroll_up": (("pageup",),),
     "scroll_down": (("pagedown",),),
     "complete": (("tab",),),
+    **{f"window_{n}": (("c-w", str(n)),) for n in range(1, 10)},
 }
 
 
@@ -144,7 +147,7 @@ def test_keys_file_setting_names_the_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert keys.keys_file({}) == tmp_path / ".js" / "keys"
-    assert keys.keys_file({"keys": {"file": "~/elsewhere/keys"}}) == tmp_path / "elsewhere" / "keys"
+    assert keys.keys_file({"KEYBINDS_FILE": "~/elsewhere/keys"}) == tmp_path / "elsewhere" / "keys"
 
 
 def _bound(kb: KeyBindings) -> dict[str, set[tuple]]:
@@ -188,19 +191,49 @@ def test_bind_actions_carries_each_actions_filter_and_eager_flag():
     assert not binding.filter()
 
 
-def test_the_blocking_prompt_binds_the_history_search_keys():
+def test_the_screen_binds_the_history_search_keys():
+    from types import SimpleNamespace
+
     keymap, _ = _parse("bind c-f history_search\n")
 
-    kb = keys.prompt_bindings(keymap)
+    app, _ = screen.build_app(prompt="", history=None, completer=None,
+                              on_line=lambda line: None, on_interrupt=lambda: False, on_eof=lambda: None,
+                              keymap=keymap, application_factory=lambda **kwargs: SimpleNamespace(**kwargs))
 
-    assert _bound(kb) == {"history_search": _expected(keymap)["history_search"]}
+    for key in ("c-r", "c-f"):
+        bound = app.key_bindings.get_bindings_for_keys((_parse_key(key),))
+        assert [binding.handler for binding in bound] == [keys.history_search], key
 
 
 def test_a_collapsed_reasoning_block_names_the_toggle_key():
-    scroll = screen.Scrollback()
-    scroll.toggle_key = keys.describe(("c-t",))
+    scroll = screen_scrollback.Scrollback()
+    scroll.toggle_key = msgs.describe_keys(("c-t",))
     block = scroll.reasoning(1)
     block.append("thinking")
     block.finish()
 
     assert "Ctrl-T" in block.render()
+
+
+def test_pseudo_keys_are_not_bindable():
+    for pseudo in ("<any>", "<sigint>", "<bracketed-paste>", "<ignore>", "<cursor-position-response>"):
+        assert keys.key_error(pseudo) is not None, pseudo
+    assert keys.key_error("c-f") is None
+    keymap, error = keys.apply_line(keys.default_keymap(), "bind <any> redraw")
+    assert error is not None
+    assert keymap == keys.default_keymap()
+
+
+def test_trailing_comment_is_dropped_even_after_a_lone_quote_key():
+    for quote in ("'", '"'):
+        keymap, error = keys.apply_line(keys.default_keymap(), f"bind {quote} redraw  # c")
+        assert error is None, (quote, error)
+        assert (quote,) in keymap["redraw"]
+
+
+def test_a_first_word_hash_is_still_the_hash_key():
+    keymap, error = keys.apply_line(keys.default_keymap(), "bind # redraw")
+    assert error is None and ("#",) in keymap["redraw"]
+    bound = keymap
+    keymap, error = keys.apply_line(bound, "unbind #")
+    assert error is None and ("#",) not in keymap["redraw"]

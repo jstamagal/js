@@ -1,0 +1,6 @@
+{"kind":"message","message":{"role":"user","content":"u1"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"tc1","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"mark","marker":"turn_interrupted","ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"user","content":"aborted-prompt"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"mark","marker":"rollback_to:3","ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"user","content":"u2"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}

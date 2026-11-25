@@ -5,7 +5,9 @@ and test_prompt_cache_key_per_session."""
 
 from __future__ import annotations
 
-from js import cli, memory
+from repl_driver import stub_screen, turn_stub
+
+from js import cli, memory, snippets
 from js.memory import append_system_prompt, load_messages, load_system_prompt
 
 
@@ -35,33 +37,20 @@ def test_a_multiline_prompt_survives_the_round_trip(tmp_path):
 
 def _repl(monkeypatch, tmp_path, argv, lines=()):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            try:
-                return next(self.lines)
-            except StopIteration:
-                raise EOFError from None
 
     seen: list[str] = []
 
     def record_turn(cfg, system, *a, **k):
         seen.append(system)
 
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", record_turn)
-    try:
-        cli.main(["--blocking", *argv])
-    except (RuntimeError, StopIteration):
-        pass
+    stub_screen(monkeypatch, lines, wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(record_turn))
+    assert cli.main([*argv]) == 0
     return seen
 
 
@@ -153,4 +142,4 @@ def test_prompt_change_is_reported_once_across_resumes(tmp_path):
 
 
 def test_the_prompt_change_notice_does_not_ask_for_a_restart():
-    assert "restart" not in cli._PROMPT_CHANGED_NOTICE.lower()
+    assert "restart" not in snippets.render('prompt-changed').lower()

@@ -1,0 +1,124 @@
+"""One render step and its targets: a format becomes colour runs, and each
+output target (ANSI, prompt_toolkit, rich, plain) is drawn from them, with
+NO_COLOR applied by the targets."""
+
+from __future__ import annotations
+
+import io
+import sys
+
+from js import fset, jsrc_save, messages as msgs, repl_commands, setting_layers, settings
+
+
+def test_the_startup_run_of_the_jsrc_leaves_a_model_flag_in_charge(monkeypatch, tmp_path):
+    from repl_driver import repl_state
+
+    from js.config import from_env, jsrc_paths
+
+    (tmp_path / ".js").mkdir()
+    (tmp_path / ".js" / "jsrc").write_text("set MODEL from-jsrc\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cfg = from_env()
+    state, _spec = repl_state(cfg, model="from-flag")
+    repl_commands.run_rc_commands(state, cfg, jsrc_paths(tmp_path))
+    assert state.model == "from-flag"
+
+
+def test_the_startup_run_of_the_jsrc_leaves_a_resumed_session_s_effort_in_charge(monkeypatch, tmp_path):
+    from repl_driver import repl_state
+
+    from js.config import from_env, jsrc_paths
+
+    (tmp_path / ".js").mkdir()
+    (tmp_path / ".js" / "jsrc").write_text("set EFFORT high\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cfg = from_env()
+    state, _spec = repl_state(cfg)
+    state.live_resume = {"EFFORT": "low"}
+    repl_commands.run_rc_commands(state, cfg, jsrc_paths(tmp_path))
+    assert state.config_for_turn(cfg).reasoning_effort == "low"
+
+
+def test_collecting_the_config_twice_does_not_compound_fset_entries(tmp_path):
+    path = tmp_path / "jsrc"
+    path.write_text("fset MARK_AGENT $MARK_AGENT>\n", encoding="utf-8")
+    setting_layers.collect_settings(config_paths=[path], env={})
+    setting_layers.collect_settings(config_paths=[path], env={})
+    assert fset.lookup("MARK_AGENT") == "●>"
+
+
+def _closed(text: str) -> bool:
+    """Every style the text opens is closed by a reset after it."""
+    import re
+
+    codes = list(re.finditer(r"\x1b\[([0-9;]*)m", text))
+    last_open = max((m.end() for m in codes if m.group(1) not in ("0", "", "39")), default=-1)
+    return last_open < 0 or any(m.start() >= last_open and m.group(1) in ("0", "") for m in codes)
+
+
+def test_every_style_js_opens_on_a_speaker_line_is_closed(monkeypatch):
+    from js import display
+
+    for no_color in ("", "1"):
+        monkeypatch.setenv("NO_COLOR", no_color)
+        for mark_colour in ("#ff0000", ""):
+            fset.reset()
+            if mark_colour:
+                fset.set_entry("COLOR_USER_MARK", mark_colour)
+            else:
+                fset.set_entry("COLOR_USER_MARK", "$NOT_A_COLOUR")
+                fset.set_entry("COLOR_AGENT_MARK", "$NOT_A_COLOUR")
+            for text in (display.user_line("hello"), display.prompt(), display.agent_speaker()[0],
+                         msgs.SAVE_FAILED.line(error="x"), fset.render("%C04a%C b $0", ["c"])):
+                assert _closed(text), (no_color, mark_colour, repr(text))
+
+
+def test_save_puts_a_changed_line_after_a_load_that_would_override_it(tmp_path):
+    child = tmp_path / "child.jsrc"
+    child.write_text("fset THEME github\nset BANNER >>\n", encoding="utf-8")
+    path = tmp_path / "jsrc"
+    path.write_text(f"fset THEME crush\nset BANNER ***\nload {child}\n", encoding="utf-8")
+    live = settings.seed_defaults()
+    settings.set_dotted(live, ("BANNER",), "-!-")
+    fset.set_entry("THEME", "paper")
+    jsrc_save.save_settings_to_jsrc(path, live, keys=["BANNER"], fset_names=["THEME"])
+    fset.reset()
+    loaded = settings.seed_defaults()
+    setting_layers.load_jsrc_files([path], loaded)
+    assert fset.theme_name() == "paper" and settings.knob(loaded, "BANNER") == "-!-"
+
+
+def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_terminal(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from js import console, display, output, runtime, stream_transport
+    from js.console import ConsoleSink
+    from js.reasoning_display import StderrReasoning
+    from js.toolkit import ToolContext
+
+    out, err = io.StringIO(), io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    fset.set_entry("RUN_LINE", "%C04run $0-")
+    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
+    telemetry = runtime.Telemetry(None)
+    ConsoleSink(telemetry).emit(output.event("run_line", fields=["model=m", "ctx=1"]))
+    context = ToolContext()
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
+    console.trace_result(telemetry, context, "shell", "ok", args={"command": "x"})
+    console.settle_tool_trace(telemetry)
+    traced = out.getvalue()
+    msgs.say(msgs.SAVE_FAILED, error="disk full")
+    msgs.warn(msgs.SAVE_FAILED, error="disk full")
+    answer = display.Display.for_stream(out)
+    answer.speaker(*display.agent_speaker())
+    answer.chunk("text", "an answer\n")
+    answer.finish()
+    display.echo_user("a question")
+    display.print_answer("**bold** answer", out)
+    reasoning = StderrReasoning(2, err)
+    reasoning.append("thinking\n")
+    reasoning.finish(12)
+    assert "shell" in traced
+    assert out.getvalue() and err.getvalue()
+    assert "\x1b" not in out.getvalue() + err.getvalue(), (out.getvalue(), err.getvalue())

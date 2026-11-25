@@ -1,0 +1,9 @@
+{"kind":"message","message":{"role":"user","content":"p"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_X","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"call_X","content":"file text"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"assistant","content":"answer"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S\",\"keep_from\":1,\"forced\":false}","ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_X","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"message","message":{"role":"tool","tool_call_id":"call_X","content":"file text"},"ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"message","message":{"role":"assistant","content":"answer"},"ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"message","message":{"role":"user","content":"next"},"ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}

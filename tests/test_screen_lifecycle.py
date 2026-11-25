@@ -1,4 +1,4 @@
-"""The async REPL's screen from open to close: what is in the scrollback before
+"""The REPL's screen from open to close: what is in the scrollback before
 the first prompt, and what happens to a turn still streaming at exit or EOF."""
 
 from __future__ import annotations
@@ -9,11 +9,10 @@ import json
 import re
 
 import pytest
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, runtime
-from js.config import from_env
+from js import cli, runtime, screen, screen_scrollback
 from js.memory import load_messages, load_replay_messages
-from repl_driver import LineSession, _telemetry, repl_state
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -70,11 +69,11 @@ def _install_screen(monkeypatch, script, terminal: _Recorder) -> list[_Screen]:
     screens: list[_Screen] = []
 
     def build_app(*, on_line, on_eof, **_kwargs):
-        scrollback = cli.screen.Scrollback()
+        scrollback = screen_scrollback.Scrollback()
         screens.append(_Screen(script, on_line, on_eof, scrollback, terminal))
         return screens[-1], scrollback
 
-    monkeypatch.setattr(cli.screen, "build_app", build_app)
+    monkeypatch.setattr(screen, "build_app", build_app)
     monkeypatch.setattr(cli.sys, "stdout", terminal)
     monkeypatch.setattr(cli.sys, "stderr", terminal)
     return screens
@@ -106,9 +105,9 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
     def answer(cfg, system, messages, telemetry, **kwargs):
         messages.append({"role": "assistant", "content": f"answer to {messages[-1]['content']}"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", answer)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["one", "two", "three", "four"]))
-    assert cli.main(["--blocking", "--model", "cliapiproxy/claude-opus-5"]) == 0
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(answer))
+    stub_screen(monkeypatch, ["one", "two", "three", "four"], wait=True)
+    assert cli.main(["--model", "cliapiproxy/claude-opus-5"]) == 0
     session_file = _session_file(tmp_path)
 
     seen: list[str] = []
@@ -119,8 +118,7 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
 
     terminal = _Recorder()
     _install_screen(monkeypatch, script, terminal)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession([]))
-    assert cli.main(["--session", session_file.stem, "--extra", "ui.resume_exchanges=2"]) == 0
+    assert cli.main(["--session", session_file.stem, "--extra", "RESUME_EXCHANGES=2"]) == 0
 
     shown = seen[0]
     assert "Model: cliapiproxy/claude-opus-5" in shown
@@ -135,7 +133,6 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
 def test_an_empty_session_says_so_in_the_scrollback(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession([]))
     seen: list[str] = []
 
     async def script(screen):
@@ -178,19 +175,18 @@ def test_quitting_mid_turn_interrupts_it_and_writes_nothing_after_the_screen_clo
 
     terminal = _Recorder()
     screens = _install_screen(monkeypatch, script, terminal)
-    cfg = from_env()
-    state, prompt_spec = repl_state(cfg)
-    assert runtime.model_client.run_owning_loop(
-        cli._repl_main(cfg, state, _telemetry(cfg, state), LineSession([]), prompt_spec)
-    ) == 0
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    assert cli.main([]) == 0
 
+    session_file = _session_file(tmp_path)
     assert screens[0].exits == 1
-    assert terminal.after_close == ""
+    # After the screen closes the terminal gets js's resume hint and nothing else.
+    [hint] = SGR.sub("", terminal.after_close).splitlines()
+    assert session_file.stem in hint
     shown = SGR.sub("", screens[0].scrollback.buffer.text)
     assert "The answer so far" in shown
     assert "interrupted" in shown.lower()
 
-    session_file = _session_file(tmp_path)
     assert "turn_interrupted" in _marks(session_file)
     saved = load_messages(session_file)
     assert [m["role"] for m in saved] == ["user", "assistant"]

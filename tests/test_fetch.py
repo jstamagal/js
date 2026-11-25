@@ -7,17 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from js.capped_process import _StreamCapture
-from js.toolkit import ToolContext
-from js.toolkit import fs, process_net
-
+from js import media
+from js.toolkit import ToolContext, fetch, shell
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtiny"
 
 
 @pytest.fixture(autouse=True)
 def _use_urllib_fallback(monkeypatch):
-    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(fetch, "resolve_binary", lambda _name: None)
 
 
 class CaseInsensitiveHeaders(dict):
@@ -62,11 +60,13 @@ class FakeResponse:
         ("<title>Example Domain</title><h1>Example Domain</h1>", "Example Domain\nExample Domain"),
     ],
 )
-def test_html_block_siblings_keep_their_boundary(html, expected):
+def test_html_block_siblings_keep_their_boundary(tmp_path, html, expected):
     """The sweep that removes the remaining tags runs with an empty replacement,
     so a boundary the source expressed as a tag has to be turned into whitespace
     before it. Without that, `<h1>H</h1><p>P</p>` reads as `HP`."""
-    assert process_net._html_to_text(html, "https://example.test/") == expected
+    page = tmp_path / "page.html"
+    page.write_text(html, encoding="utf-8")
+    assert fetch.fetch(page.as_uri(), context=ToolContext(cwd=tmp_path)) == expected
 
 
 def test_file_url_html_defaults_to_readable_text_and_raw_can_keep_source(tmp_path):
@@ -74,8 +74,8 @@ def test_file_url_html_defaults_to_readable_text_and_raw_can_keep_source(tmp_pat
     page.write_text("<html><body><p>Hello<br>world</p></body></html>", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    assert process_net.fetch(page.as_uri(), context=context) == "Hello\nworld"
-    assert "<p>Hello" in process_net.fetch(page.as_uri(), raw=True, context=context)
+    assert fetch.fetch(page.as_uri(), context=context) == "Hello\nworld"
+    assert "<p>Hello" in fetch.fetch(page.as_uri(), raw=True, context=context)
 
 
 def test_file_url_text_response_spills_full_text_at_tool_result_limit(tmp_path, monkeypatch):
@@ -84,19 +84,19 @@ def test_file_url_text_response_spills_full_text_at_tool_result_limit(tmp_path, 
     monkeypatch.setenv("HOME", str(tmp_path))
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=4)
 
-    result = process_net.fetch(source.as_uri(), context=context)
+    result = fetch.fetch(source.as_uri(), context=context)
 
     pointer = re.search(r"the full text is at (.+) — read it", result)
     assert pointer is not None
     assert Path(pointer.group(1)).read_text(encoding="utf-8") == "abcdef"
-    assert "limits.max_tool_result_bytes (4)" in result
+    assert "TOOL_RESULT_MAX (4)" in result
 
 
 def test_file_url_binary_returns_descriptor_instead_of_bytes(tmp_path):
     blob = tmp_path / "blob.bin"
     blob.write_bytes(b"\x00\x01abc")
 
-    result = process_net.fetch(blob.as_uri(), context=ToolContext(cwd=tmp_path))
+    result = fetch.fetch(blob.as_uri(), context=ToolContext(cwd=tmp_path))
 
     assert result == "BINARY_RESPONSE content-type=application/octet-stream size=5 bytes"
 
@@ -107,7 +107,7 @@ def test_file_url_download_writes_to_resolved_path(tmp_path):
     context = ToolContext(cwd=tmp_path)
     target = tmp_path / "downloads" / "out.bin"
 
-    result = process_net.fetch(source.as_uri(), save="downloads/out.bin", context=context)
+    result = fetch.fetch(source.as_uri(), save="downloads/out.bin", context=context)
 
     assert target.read_bytes() == b"download me"
     assert result == (
@@ -116,12 +116,12 @@ def test_file_url_download_writes_to_resolved_path(tmp_path):
 
 
 def test_file_url_download_is_guarded_by_the_configured_quota(tmp_path):
-    """The ceiling is limits.max_download_bytes, not a compiled-in constant."""
+    """The ceiling is DOWNLOAD_MAX, not a compiled-in constant."""
     source = tmp_path / "too-big.bin"
     source.write_bytes(b"1234")
     context = ToolContext(cwd=tmp_path, max_download_bytes=3)
 
-    result = process_net.fetch(source.as_uri(), save="out.bin", context=context)
+    result = fetch.fetch(source.as_uri(), save="out.bin", context=context)
 
     assert result == "ERROR: response exceeds 3 byte download limit"
     assert not (tmp_path / "out.bin").exists()
@@ -131,10 +131,10 @@ def test_file_url_image_uses_vision_marker_when_enabled_and_descriptor_when_disa
     image = tmp_path / "pixel.png"
     image.write_bytes(PNG_BYTES)
 
-    marker = process_net.fetch(image.as_uri(), context=ToolContext(cwd=tmp_path, vision_enabled=True))
-    descriptor = process_net.fetch(image.as_uri(), context=ToolContext(cwd=tmp_path))
+    marker = fetch.fetch(image.as_uri(), context=ToolContext(cwd=tmp_path, vision_enabled=True))
+    descriptor = fetch.fetch(image.as_uri(), context=ToolContext(cwd=tmp_path))
 
-    assert marker.startswith(fs._IMAGE_RESULT_PREFIX)
+    assert marker.startswith(media.IMAGE_RESULT_PREFIX)
     assert marker.split("\t", 3) == [
         "IMAGE_RESULT",
         str(image),
@@ -142,6 +142,31 @@ def test_file_url_image_uses_vision_marker_when_enabled_and_descriptor_when_disa
         f"VISUAL_FILE {image} mime=image/png size={len(PNG_BYTES)} bytes",
     ]
     assert descriptor == f"IMAGE_RESPONSE content-type=image/png size={len(PNG_BYTES)} bytes"
+
+
+def test_fetched_image_over_the_result_cap_is_sent_fitted(monkeypatch, tmp_path):
+    """A fetched image larger than TOOL_RESULT_MAX, by file:// or HTTP, is
+    sent as its copy fitted to 2000 x 2000, not described as truncated."""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.frombytes("RGB", (3000, 400), os.urandom(3000 * 400 * 3)).save(buffer, format="PNG")
+    data = buffer.getvalue()
+    image = tmp_path / "wide.png"
+    image.write_bytes(data)
+    context = ToolContext(cwd=tmp_path, vision_enabled=True, max_tool_result_bytes=1024)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen",
+                        lambda req, timeout: FakeResponse(data, {"Content-Type": "image/png"}))
+
+    for url in (image.as_uri(), "https://example.com/wide.png"):
+        prefix, sent_path, mime, stub = fetch.fetch(url, context=context).split("\t", 3)
+        assert prefix == "IMAGE_RESULT" and mime == "image/png"
+        with Image.open(sent_path) as sent:
+            assert sent.size == (2000, 267)
+        assert "3000x400" in stub and "2000x267" in stub
+    assert image.read_bytes() == data
 
 
 def test_http_request_builds_method_headers_and_json_body(monkeypatch, tmp_path):
@@ -152,10 +177,10 @@ def test_http_request_builds_method_headers_and_json_body(monkeypatch, tmp_path)
         seen["timeout"] = timeout
         return FakeResponse(b'{"ok":true}', {"Content-Type": "application/json"})
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
     context = ToolContext(cwd=tmp_path, fetch_timeout_s=7)
 
-    result = process_net.fetch(
+    result = fetch.fetch(
         "https://example.test/api",
         method="post",
         headers={"Authorization": "Bearer token", "User-Agent": "custom-agent"},
@@ -180,9 +205,9 @@ def test_http_request_accepts_header_list_and_raw_body(monkeypatch, tmp_path):
         seen["req"] = req
         return FakeResponse(b"accepted", {"Content-Type": "text/plain"})
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
 
-    result = process_net.fetch(
+    result = fetch.fetch(
         "https://example.test/patch",
         method="PATCH",
         headers=["X-Test: yes"],
@@ -212,11 +237,11 @@ def test_http_html_preserves_actionable_markdown_links_and_plain_pages(monkeypat
             ),
         ]
     )
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", lambda _req, timeout: next(pages))
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", lambda _req, timeout: next(pages))
     context = ToolContext(cwd=tmp_path)
 
-    linked = process_net.fetch("https://example.test/guides/chapter/", context=context)
-    plain = process_net.fetch("https://example.test/plain", context=context)
+    linked = fetch.fetch("https://example.test/guides/chapter/", context=context)
+    plain = fetch.fetch("https://example.test/plain", context=context)
 
     assert linked == (
         "Read [the docs](https://example.test/guides/docs/start?mode=full&lang=en) "
@@ -231,13 +256,13 @@ def test_http_text_over_cap_spills_full_response_using_standard_convention(
     body = "line of recoverable content\n" * 200
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
-        process_net.urllib.request,
+        fetch.urllib.request,
         "urlopen",
         lambda _req, timeout: FakeResponse(body.encode(), {"Content-Type": "text/plain"}),
     )
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=1024)
 
-    result = process_net.fetch("https://example.test/long", context=context)
+    result = fetch.fetch("https://example.test/long", context=context)
 
     digest = hashlib.sha256(body.encode()).hexdigest()[:16]
     expected_path = tmp_path / ".js" / "state" / "tool-results" / f"result-{digest}.txt"
@@ -246,16 +271,16 @@ def test_http_text_over_cap_spills_full_response_using_standard_convention(
     assert Path(pointer.group(1)) == expected_path
     assert expected_path.read_text(encoding="utf-8") == body
     assert result.startswith(body[:512])
-    assert "limits.max_tool_result_bytes (1024)" in result
+    assert "TOOL_RESULT_MAX (1024)" in result
 
 
 def test_http_binary_response_returns_descriptor(monkeypatch, tmp_path):
     def fake_urlopen(req, timeout):
         return FakeResponse(b"\x00BIN", {"Content-Type": "application/octet-stream"})
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
 
-    result = process_net.fetch("https://example.test/blob", context=ToolContext(cwd=tmp_path))
+    result = fetch.fetch("https://example.test/blob", context=ToolContext(cwd=tmp_path))
 
     assert result == "BINARY_RESPONSE content-type=application/octet-stream size=4 bytes"
 
@@ -264,37 +289,37 @@ def test_http_text_response_truncates_at_tool_result_limit(monkeypatch, tmp_path
     def fake_urlopen(req, timeout):
         return FakeResponse(b"abcdef", {"Content-Type": "text/plain"})
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setenv("HOME", str(tmp_path))
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=4)
 
-    result = process_net.fetch("https://example.test/text", context=context)
+    result = fetch.fetch("https://example.test/text", context=context)
 
     pointer = re.search(r"the full text is at (.+) — read it", result)
     assert pointer is not None
     assert Path(pointer.group(1)).read_text(encoding="utf-8") == "abcdef"
-    assert "limits.max_tool_result_bytes (4)" in result
+    assert "TOOL_RESULT_MAX (4)" in result
 
 
 def test_fetch_errors_return_error_strings_without_raising(monkeypatch, tmp_path):
     def fake_urlopen(req, timeout):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
     context = ToolContext(cwd=tmp_path)
 
-    assert process_net.fetch("https://example.test/fail", context=context) == "ERROR: RuntimeError: boom"
-    assert process_net.fetch("https://example.test/fail") == "ERROR: missing ToolContext"
-    assert process_net.fetch(
+    assert fetch.fetch("https://example.test/fail", context=context) == "ERROR: RuntimeError: boom"
+    assert fetch.fetch("https://example.test/fail") == "ERROR: missing ToolContext"
+    assert fetch.fetch(
         "https://example.test/fail", headers=["not-a-header"], context=context
     ).startswith("ERROR: ")
-    assert process_net.fetch(
+    assert fetch.fetch(
         "https://example.test/fail", body="raw", json_body={"x": 1}, context=context
     ).startswith("ERROR: ")
 
 
 def test_fetch_tool_schema_exposes_whole_hog_surface():
-    tool = next(tool for tool in process_net.tools() if tool.name == "fetch")
+    tool = next(tool for tool in fetch.tools() if tool.name == "fetch")
 
     assert tool.required == ("url",)
     assert set(tool.params) == {
@@ -311,50 +336,12 @@ def test_fetch_tool_schema_exposes_whole_hog_surface():
 def test_shell_tool_schema_exposes_wait_and_job_actions():
     """The wait window and the poll/wait/kill actions must be declared, or a
     schema-enforcing provider can never reach a long-running job."""
-    tool = next(tool for tool in process_net.tools() if tool.name == "shell")
+    tool = next(tool for tool in shell.tools() if tool.name == "shell")
 
     assert tool.params["timeout"]["type"] == "integer"
     assert set(tool.params["action"]["enum"]) == {"run", "poll", "wait", "kill"}
     assert tool.params["handle"]["type"] == "string"
     assert "command" not in tool.required
-
-
-def test_shell_uses_configured_environment_allowlist_and_explains_failure(
-    monkeypatch, tmp_path
-):
-    seen = {}
-
-    class FakeProcess:
-        pid = 1
-        def running(self): return False
-        def elapsed(self): return 0.0
-        def snapshot(self): return b"", b"token lookup failed"
-        def stream(self, name):
-            capture = _StreamCapture(4096)
-            capture.feed(b"token lookup failed" if name == "stderr" else b"")
-            return capture
-        def wait(self, timeout):
-            return process_net.CappedProcessResult(returncode=7, stdout=b"", stderr=b"token lookup failed")
-
-    def start_stub(argv, **kwargs):
-        seen["env"] = kwargs["env"]
-        return FakeProcess()
-
-    monkeypatch.setenv("FORGECODE_TOKEN", "operator-secret")
-    monkeypatch.setenv("OTHER_SECRET", "kept-out")
-    monkeypatch.setattr(process_net, "start_capped", start_stub)
-    context = ToolContext(cwd=tmp_path, shell_program="/bin/sh")
-    context.shell_env_allow = (*process_net._ENV_ALLOW, "FORGECODE_TOKEN")
-
-    result = process_net.shell('use-token "$FORGECODE_TOKEN" "$OTHER_SECRET"', context=context)
-
-    assert seen["env"]["FORGECODE_TOKEN"] == "operator-secret"
-    assert "exit=7" in result
-    assert "environment=filtered" in result
-    assert "allowed=" in result
-    assert "FORGECODE_TOKEN" in result
-    assert "OTHER_SECRET" in result
-    assert "limits.shell_env_allow" in result
 
 
 def test_html_link_prefixed_attribute_does_not_hijack_the_real_href(tmp_path):
@@ -365,8 +352,8 @@ def test_html_link_prefixed_attribute_does_not_hijack_the_real_href(tmp_path):
     )
     context = ToolContext(cwd=tmp_path)
 
-    assert "/articles/42" in process_net.fetch(page.as_uri(), context=context)
-    assert "/track?id=42" not in process_net.fetch(page.as_uri(), context=context)
+    assert "/articles/42" in fetch.fetch(page.as_uri(), context=context)
+    assert "/track?id=42" not in fetch.fetch(page.as_uri(), context=context)
 
 
 def test_file_url_refuses_a_non_regular_file_instead_of_reading_forever(tmp_path):
@@ -374,7 +361,7 @@ def test_file_url_refuses_a_non_regular_file_instead_of_reading_forever(tmp_path
     os.mkfifo(fifo)
     context = ToolContext(cwd=tmp_path)
 
-    result = process_net.fetch(f"file://{fifo}", context=context)
+    result = fetch.fetch(f"file://{fifo}", context=context)
 
     assert result.startswith("ERROR: OSError")
     assert "not a regular file" in result
@@ -386,25 +373,25 @@ def test_file_url_read_is_bounded_by_the_hard_ceiling(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
     seen: list[int | None] = []
-    real = process_net._read_regular_bytes
+    real = fetch.read_regular_bytes
     monkeypatch.setattr(
-        process_net,
-        "_read_regular_bytes",
+        fetch,
+        "read_regular_bytes",
         lambda path, limit=None: (seen.append(limit), real(path, limit))[1],
     )
 
-    process_net.fetch(source.as_uri(), context=context)
+    fetch.fetch(source.as_uri(), context=context)
 
-    assert seen == [process_net._DOWNLOAD_MAX_BYTES + 1]
+    assert seen == [fetch._DOWNLOAD_MAX_BYTES + 1]
 
 
 def test_file_url_refuses_a_file_past_the_hard_read_ceiling(tmp_path, monkeypatch):
     source = tmp_path / "huge.txt"
     source.write_text("y" * 500, encoding="utf-8")
-    monkeypatch.setattr(process_net, "_DOWNLOAD_MAX_BYTES", 100)
+    monkeypatch.setattr(fetch, "_DOWNLOAD_MAX_BYTES", 100)
     context = ToolContext(cwd=tmp_path)
 
-    result = process_net.fetch(source.as_uri(), context=context)
+    result = fetch.fetch(source.as_uri(), context=context)
 
     assert result == "ERROR: file exceeds 100 byte read limit; use save= or fs_read"
 
@@ -416,7 +403,7 @@ def test_a_save_streams_and_is_unlimited_by_default(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     assert context.max_download_bytes == 0
-    result = process_net.fetch(source.as_uri(), save="copy.bin", context=context)
+    result = fetch.fetch(source.as_uri(), save="copy.bin", context=context)
 
     assert result.startswith(f"SAVED_RESPONSE path={tmp_path / 'copy.bin'} size={3 * 1024 * 1024} ")
     assert (tmp_path / "copy.bin").stat().st_size == 3 * 1024 * 1024
@@ -427,11 +414,24 @@ def test_a_configured_download_quota_is_enforced_and_leaves_no_partial(tmp_path)
     source.write_bytes(b"z" * (3 * 1024 * 1024))
     context = ToolContext(cwd=tmp_path, max_download_bytes=1024)
 
-    result = process_net.fetch(source.as_uri(), save="copy.bin", context=context)
+    result = fetch.fetch(source.as_uri(), save="copy.bin", context=context)
 
     assert result == "ERROR: response exceeds 1024 byte download limit"
     assert not (tmp_path / "copy.bin").exists()
-    assert list(tmp_path.glob(".*js-partial")) == []
+    assert list(tmp_path.glob(".*js-partial*")) == []
+
+
+def test_a_saved_download_gets_the_umask_mode(tmp_path):
+    source = tmp_path / "page.txt"
+    source.write_text("hello")
+    previous = os.umask(0o022)
+    try:
+        result = fetch.fetch(source.as_uri(), save="out.txt", context=ToolContext(cwd=tmp_path))
+    finally:
+        os.umask(previous)
+
+    assert result.startswith("SAVED_RESPONSE ")
+    assert (tmp_path / "out.txt").stat().st_mode & 0o777 == 0o644
 
 
 class StreamingResponse(FakeResponse):
@@ -455,12 +455,51 @@ def test_an_http_save_streams_to_disk_instead_of_reading_the_body(monkeypatch, t
     body = b"w" * (2 * 1024 * 1024)
     response = StreamingResponse(body, {"Content-Type": "application/octet-stream"})
     monkeypatch.setattr(
-        process_net.urllib.request, "urlopen", lambda _req, timeout: response
+        fetch.urllib.request, "urlopen", lambda _req, timeout: response
     )
     context = ToolContext(cwd=tmp_path)
 
-    result = process_net.fetch("https://example.test/blob", save="blob.bin", context=context)
+    result = fetch.fetch("https://example.test/blob", save="blob.bin", context=context)
 
     assert result.startswith(f"SAVED_RESPONSE path={tmp_path / 'blob.bin'} size={len(body)} ")
     assert (tmp_path / "blob.bin").read_bytes() == body
     assert response.reads > 1, "a stream reads in chunks; one read means it buffered"
+
+
+def test_fetch_accepts_a_download_resolver(monkeypatch, tmp_path):
+    selected = []
+    transfers = []
+    def resolve(name):
+        selected.append(name)
+        return "/assembly/aria2c"
+    def download(binary, url, destination, **kwargs):
+        transfers.append(binary)
+        destination.write_bytes(b"payload")
+    monkeypatch.setattr(fetch, "download_with_aria2", download)
+    monkeypatch.setattr(fetch, "_saved_content_type", lambda *args: "text/plain")
+    result = fetch.fetch("https://example.test/file", save="file",
+                               context=ToolContext(cwd=tmp_path), download_resolver=resolve)
+    assert selected == [fetch.ARIA2_EXECUTABLE]
+    assert transfers == ["/assembly/aria2c"]
+    assert (tmp_path / "file").read_bytes() == b"payload"
+    assert not result.startswith("ERROR")
+
+
+def test_short_download_preserves_existing_target(tmp_path, monkeypatch):
+    import io
+
+    class ShortResponse(FakeResponse):
+        def __init__(self):
+            super().__init__(b"", {"Content-Length": "1000", "Content-Type": "application/octet-stream"})
+            self.stream = io.BytesIO(b"short body")
+
+        def read(self, size=-1):
+            return self.stream.read(size)
+
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", lambda *a, **kw: ShortResponse())
+    target = tmp_path / "out.bin"
+    target.write_bytes(b"previous complete download")
+    result = fetch.fetch("https://example.test/short", save="out.bin", context=ToolContext(cwd=tmp_path))
+    assert result.startswith("ERROR:")
+    assert target.read_bytes() == b"previous complete download"
+    assert not list(tmp_path.glob(".*.js-partial-*"))

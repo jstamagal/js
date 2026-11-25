@@ -5,60 +5,169 @@ lives only in this file. Tool results, prompts and tool descriptions, which the
 model reads, are not here. The commit helper's entries are: the operator runs
 it, and the commit agent reads the same output through a shell.
 
+An entry's name is also its /fset format's (`js.fset`): the screen shows a
+message through that format. The entry's fields are its distinct holes, in
+the order the text first uses them; the format gets them as words `$0`,
+`$1`, ... (`js.fset.words`). By default the format is the entry's text with
+`$N` for each field and `$N-` for the last, led by `%G ` for a banner entry.
+
 A `Message` is in one register:
 
-  banner   the client reporting its own state: the `BANNER` slot, a space,
-           then the text. No template carries the slot literally.
+  banner   the client reporting its own state: the banner glyph, the BANNER
+           setting, a space, then the text.
   plain    content: tables, lists, headings, prompts the operator answers.
 
-Severity is colour, never a word. `WARN` paints in light yellow and `GRAVE`
-in light red, and only the holes: the values that tell the operator what
-happened. A message without holes is painted whole. `say` paints only a stream
-that is a terminal.
+Colour is the format's: `js/fset` gives some entries a coloured glyph.
+`say` draws colour only on a stream that is a terminal.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from string import Formatter
 from typing import Any
 
-from . import colors as C
+from . import fset
 
-# The banner slot: what starts every line the client says about its own state.
+# The banner slot: what starts every line the client says about its own
+# state, and what $BANNER in a /fset format reads. The BANNER setting sets it
+# (`set_banner`).
 BANNER = "***"
 
-INFO = "info"
-WARN = "warn"
-GRAVE = "grave"
+@dataclass
+class Banner:
+    value: str = "***"
 
-SEVERITY_COLOR = {INFO: "", WARN: C.BR_YELLOW, GRAVE: C.BR_RED}
+
+_BANNER: ContextVar[Banner | None] = ContextVar("js_message_banner", default=None)
+
+
+@contextmanager
+def using_banner(state: Banner):
+    """Render and update this assembly's banner for the duration of the body."""
+    token = _BANNER.set(state)
+    try:
+        yield state
+    finally:
+        _BANNER.reset(token)
+
+
+def current_banner() -> str:
+    state = _BANNER.get()
+    return BANNER if state is None else state.value
+
 
 _FORMATTER = Formatter()
+
+
+def _replace_key_labels(text: str, replacements: dict[str, str]) -> str:
+    pattern = r"(?<![A-Za-z0-9/])(?:" + "|".join(re.escape(label) for label in sorted(replacements, key=len, reverse=True)) + r")(?![A-Za-z0-9/])"
+    return re.sub(pattern, lambda match: replacements[match[0]], text)
 
 
 @dataclass(frozen=True)
 class Message:
     template: str
-    severity: str = INFO
     banner: bool = True
+    # The entry's name in this module, and the name of its /fset format.
+    name: str = field(default="", compare=False)
+    key_labels: tuple[tuple[str, str], ...] = field(default=(), compare=False, repr=False)
+
+    def with_keymap(self, keymap: dict, defaults: dict) -> Message:
+        """This hint with changed bindings named from its caller's keymap.
+
+        The shipped labels stay as written while bindings match the defaults.
+        Operator /fset formats retain their own wording.
+        """
+        replacements = {}
+        for label, actions in _HINT_ACTIONS.get(self.name, {}).items():
+            if any(keymap.get(action, ()) != defaults.get(action, ()) for action in actions):
+                sequences = dict.fromkeys(seq for action in actions for seq in keymap.get(action, ()))
+                replacements[label] = "/".join(describe_keys(seq) for seq in sequences) or KEY_UNBOUND
+        if not replacements:
+            return self
+        escaped = {label: text.replace("{", "{{").replace("}", "}}") for label, text in replacements.items()}
+        return replace(self, template=_replace_key_labels(self.template, escaped), key_labels=tuple(replacements.items()))
 
     def text(self, **fields: Any) -> str:
         """The message with its holes filled: no slot, no colour. For a
         channel that is not the screen, or that adds the slot itself."""
         return self.template.format(**fields)
 
+    def fields(self) -> list[tuple[str, str, str | None]]:
+        """The entry's fields: each distinct hole of its text, as (name,
+        spec, conversion), in the order the text first uses it."""
+        found: list[tuple[str, str, str | None]] = []
+        for _literal, name, spec, conversion in _FORMATTER.parse(self.template):
+            if name is not None and (name, spec or "", conversion) not in found:
+                found.append((name, spec or "", conversion))
+        return found
+
+    def default_format(self) -> str:
+        """The /fset format this entry has when nothing sets one: `%G ` for a
+        banner entry, then the text with `$N` for field N and `$N-` for the
+        last."""
+        fields = self.fields()
+        parts = ["%G "] if self.banner else []
+        for literal, name, spec, conversion in _FORMATTER.parse(self.template):
+            if literal.startswith("-") and parts and parts[-1].startswith("$") and not parts[-1].endswith("-"):
+                parts.append("%C")  # a - right after $N would read as $N-
+            parts.append(fset.escape(literal))
+            if name is not None:
+                index = fields.index((name, spec or "", conversion))
+                parts.append(f"${index}-" if index == len(fields) - 1 else f"${index}")
+        return "".join(parts)
+
+    def format(self) -> str:
+        """The entry's /fset format: the one set, else `default_format`."""
+        if self.key_labels:
+            labels = {label: fset.escape(text) for label, text in self.key_labels}
+            found = fset.lookup(self.name, transform_default=lambda text: _replace_key_labels(text, labels)) if self.name else None
+        else:
+            found = fset.lookup(self.name) if self.name else None
+        return self.default_format() if found is None else found
+
+    def runs(self, **fields: Any) -> list[fset.Run]:
+        """The message through its /fset format as colour runs (`js.fset.runs`).
+        Every output target draws from these."""
+        return fset.runs(self.format(), fset.words(_holes(self, fields)))
+
     def line(self, *, colour: bool = True, **fields: Any) -> str:
-        """The message as the screen shows it. `colour=False` leaves the
-        severity paint off."""
-        body = _paint(self.template, fields, SEVERITY_COLOR[self.severity] if colour else "")
-        return banner(body) if self.banner else body
+        """The message as the screen shows it, through its /fset format.
+        `colour=False` is the plain text, for a channel that is not a screen."""
+        parts = self.runs(**fields)
+        return fset.to_ansi(parts) if colour else fset.to_plain(parts)
+
+    def plain(self, **fields: Any) -> str:
+        """The message through its /fset format as plain text, for a file or
+        a dump that is not a screen."""
+        return fset.to_plain(self.runs(**fields))
+
+    def body_runs(self, **fields: Any) -> list[fset.Run]:
+        """The entry's runs without the banner glyph its format leads with
+        (`%G `, alone or in one colour): a piece of a row, or a line for a
+        channel that adds the glyph itself."""
+        fmt = _LEADING_GLYPH.sub("", self.format(), count=1)
+        return fset.runs(fmt, fset.words(_holes(self, fields)))
+
+    def words(self, **fields: Any) -> str:
+        """The entry's wording through its /fset format, plain and without a
+        leading banner glyph: for a channel that takes text and no colour, such
+        as an argument parser's help or an input prompt."""
+        return fset.to_plain(self.body_runs(**fields))
+
+    def body(self, **fields: Any) -> str:
+        """`body_runs` as text with 24-bit colour escapes (`js.fset.to_ansi`)."""
+        return fset.to_ansi(self.body_runs(**fields))
 
     def said(self, **fields: Any) -> Said:
         """`text()` that keeps its entry, so a printer shows it with this
-        entry's slot and severity."""
+        entry's format."""
         return Said(self, fields)
 
 
@@ -78,48 +187,115 @@ class Said(str):
     def __getnewargs__(self) -> tuple[Message, dict[str, Any]]:
         return self.message, self.fields
 
+    def words(self) -> str:
+        """Its wording through its entry's format, plain (`Message.words`)."""
+        return self.message.words(**self.fields)
+
 
 def banner(text: str) -> str:
-    """`text` behind the banner slot."""
-    return f"{BANNER} {text}"
+    """`text` behind the banner slot, the BANNER setting."""
+    return f"{fset.banner_text()} {text}"
 
 
-def _paint(template: str, fields: dict[str, Any], color: str) -> str:
-    if not color:
-        return template.format(**fields)
-    parts: list[str] = []
-    holes = 0
-    for literal, name, spec, conversion in _FORMATTER.parse(template):
-        parts.append(literal)
-        if name is None:
-            continue
-        holes += 1
+def set_banner(value: str) -> None:
+    """Make ``value``, the BANNER setting, the banner slot."""
+    global BANNER
+    state = _BANNER.get()
+    if state is None:
+        BANNER = value
+    else:
+        state.value = value
+
+
+# A format's leading banner glyph: `%G ` alone, or in one colour.
+_LEADING_GLYPH = re.compile(r"^(?:%C\d\d)?%G(?:%C)? ")
+
+
+def _holes(message: Message, fields: dict[str, Any]) -> list[fset.Word]:
+    """The entry's fields filled from ``fields``, in order, as text. A
+    `said()` entry in a field, or an error raised with one, is drawn through
+    its own format: its colour runs, which keep their colours whatever the
+    target (`fset.runs`)."""
+    values: list[fset.Word] = []
+    for name, spec, conversion in message.fields():
         value = _FORMATTER.get_field(name, (), fields)[0]
+        if isinstance(value, BaseException) and len(value.args) == 1 and isinstance(value.args[0], Said):
+            value = value.args[0]
+        spec = _FORMATTER.vformat(spec, (), fields)
+        if isinstance(value, Said) and conversion is None:
+            values.append(_said_runs(value, spec))
+            continue
         value = _FORMATTER.convert_field(value, conversion)
-        spec = _FORMATTER.vformat(spec or "", (), fields)
-        parts.append(f"{color}{format(value, spec)}{C.RESET}")
-    if holes == 0:
-        return f"{color}{template.format(**fields)}{C.RESET}"
-    return "".join(parts)
+        values.append(format(value, spec))
+    return values
 
 
-def _is_terminal(stream: Any) -> bool:
+def _said_runs(said: Said, spec: str) -> list[fset.Run] | str:
+    """A `said()` entry's runs through its own format, padded as ``spec``
+    pads it; its words alone when ``spec`` does more than pad."""
+    parts = said.message.body_runs(**said.fields)
+    words = fset.to_plain(parts)
+    shaped = format(words, spec)
+    at = shaped.find(words)
+    if at < 0:
+        return shaped
+    return [("", shaped[:at]), *parts, ("", shaped[at + len(words):])]
+
+
+def is_terminal(stream: Any) -> bool:
     try:
         return bool(stream.isatty())
     except (AttributeError, ValueError, OSError):
         return False
 
 
+def color_system(stream: Any) -> str | None:
+    """The colour a renderer writing straight to ``stream`` draws in, as rich
+    names it: 24-bit on a terminal with colour on, none anywhere else."""
+    return "truecolor" if is_terminal(stream) and fset.colour_on() else None
+
+
+def for_stream(text: str, stream: Any = None) -> str:
+    """``text``, which may carry colour escapes, as ``stream`` (stdout by
+    default) takes it: as it is on a terminal with colour on, plain anywhere
+    else. Every printer that writes drawn text goes through here or
+    `line_for`."""
+    stream = stream if stream is not None else sys.stdout
+    return text if is_terminal(stream) and fset.colour_on() else fset.plain(text)
+
+
 def line_for(message: Message, /, *, file: Any = None, **fields: Any) -> str:
     """The line `say` prints to `file`, stdout by default."""
     stream = file if file is not None else sys.stdout
-    return message.line(colour=_is_terminal(stream), **fields)
+    return message.line(colour=is_terminal(stream), **fields)
 
 
 def say(message: Message, /, *, file: Any = None, flush: bool = False, **fields: Any) -> None:
     """Print `message` to stdout, or to `file`."""
     stream = file if file is not None else sys.stdout
     print(line_for(message, file=stream, **fields), file=stream, flush=flush)
+
+
+def words_of(text: str) -> str:
+    """``text`` as plain text for a dump or a file: a `said()` entry worded
+    through its format (`Said.words`), any other text as it is."""
+    return text.words() if isinstance(text, Said) else text
+
+
+def of_error(error: BaseException) -> str:
+    """What ``error`` says: the `said()` entry it was raised with, which keeps
+    its format for wherever it is shown, else its text."""
+    if len(error.args) == 1 and isinstance(error.args[0], Said):
+        return error.args[0]
+    return str(error)
+
+
+def failure_line(error: str) -> str:
+    """A failure as the screen shows it: a `said()` entry through its own
+    format, any other text through FAILED's."""
+    if isinstance(error, Said):
+        return line_for(error.message, **error.fields)
+    return line_for(FAILED, error=error)
 
 
 def say_said(said: Said, /, *, file: Any = None, flush: bool = False) -> None:
@@ -136,15 +312,19 @@ class ArgumentParser(argparse.ArgumentParser):
     """argparse with its headings and its refusal in entries. A bad command
     line prints the usage, then ARGUMENTS_REFUSED on stderr, and exits 2."""
 
-    def __init__(self, *args: Any, add_help: bool = True, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, add_help: bool = True, on_error=None, **kwargs: Any) -> None:
+        self.on_error = on_error
         kwargs.setdefault("formatter_class", _HelpFormatter)
+        kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, add_help=False, **kwargs)
-        self._positionals.title = ARGS_POSITIONALS.text()
-        self._optionals.title = ARGS_OPTIONS.text()
+        self._positionals.title = ARGS_POSITIONALS.words()
+        self._optionals.title = ARGS_OPTIONS.words()
         if add_help:
-            self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.text())
+            self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.words())
 
     def error(self, message: str) -> Any:
+        if self.on_error is not None:
+            return self.on_error(self, message)
         self.print_usage(sys.stderr)
         warn(ARGUMENTS_REFUSED, error=message)
         self.exit(2)
@@ -152,12 +332,24 @@ class ArgumentParser(argparse.ArgumentParser):
 
 class _HelpFormatter(argparse.HelpFormatter):
     def add_usage(self, usage: Any, actions: Any, groups: Any, prefix: str | None = None) -> None:
-        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.text() if prefix is None else prefix)
+        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.words() + " " if prefix is None else prefix)
 
 
 def plural(n: int, word: str) -> str:
     """`n word`, with an s when n is not one."""
-    return f"{n} {word}{'' if n == 1 else 's'}"
+    return (COUNT_ONE if n == 1 else COUNT_MANY).words(number=n, noun=word)
+
+
+def duration(seconds: float) -> str:
+    """Whole seconds as a running clock reads them: `12s`, `4m12s`, `1h04m12s`."""
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return DURATION_HOURS.words(h=hours, m=minutes, s=secs)
+    if minutes:
+        return DURATION_MINUTES.words(m=minutes, s=secs)
+    return DURATION_SECONDS.words(s=secs)
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +357,12 @@ def plural(n: int, word: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Any failure whose text is already a whole sentence (an exception, a returned error).
-FAILED = Message("{error}", GRAVE)
-FAILED_WARN = Message("{error}", WARN)
+FAILED = Message("{error}")
+# An error that is not js's own, named by its kind.
+ERROR_OF_KIND = Message("{kind}: {error}", banner=False)
+# A provider's failure: the HTTP status it stands for and the provider's message.
+ERROR_OF_STATUS = Message("{status} {error}", banner=False)
+FAILED_WARN = Message("{error}")
 # A command's refusal that is not an entry of its own: a settings verb's
 # complaint, or a script line's.
 COMMAND_REFUSED = Message("{error}")
@@ -177,7 +373,7 @@ RESUME_HINT = Message("Resume: {command}")
 
 # --- Tool surface ------------------------------------------------------------
 
-TOOL_SURFACE_KEPT = Message("{error}. Tool surface unchanged.", WARN)
+TOOL_SURFACE_KEPT = Message("{error}. Tool surface unchanged.")
 
 # --- Compaction --------------------------------------------------------------
 
@@ -187,22 +383,20 @@ COMPACTED = Message("Compacted. Kept the tail from message {keep_from}/{total}. 
 COMPACT_SKIPPED_NO_PREFIX = Message("Compaction skipped: no new prefix to summarize.")
 COMPACT_SKIPPED_SAVINGS = Message("Compaction skipped: saves {savings} tokens, needs {required}.")
 COMPACTION_DONE = Message("{result}")
-AUTO_COMPACT_ARMED = Message("Context {fullness:.0%} full. Auto-compaction armed.", WARN)
+AUTO_COMPACT_ARMED = Message("Context {fullness:.0%} full. Auto-compaction armed.")
 AUTO_COMPACT_PAUSED = Message(
-    "Auto-compaction paused after two compactions in a row. It resumes when context drops below the trigger.", WARN)
+    "Auto-compaction paused after two compactions in a row. It resumes when context drops below the trigger.")
 AUTO_COMPACT_BREAKER = Message(
-    "Auto-compaction paused after {failures} failed summaries in a row. /compact retries it.", WARN)
-SUMMARY_SPLIT = Message("Summary too large. Summarizing both halves, depth {depth}.", WARN)
-CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {error}", GRAVE)
+    "Auto-compaction paused after {failures} failed summaries in a row. /compact retries it.")
+SUMMARY_SPLIT = Message("Summary too large. Summarizing both halves, depth {depth}.")
+CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {error}")
 
 # --- Model and provider ------------------------------------------------------
 
 MODEL_SET = Message("Model: {model}")
-MODEL_SAVED_AS_DEFAULT = Message("Default model: {model}")
-MODEL_NOT_SAVED_AS_DEFAULT = Message("Model: {model}. Not saved as default: {error}", GRAVE)
 MODELS_LIMIT_NOT_A_NUMBER = Message("/models: {value!r} is not a number.")
 NO_PROVIDER = Message("No provider set. Use /provider <id> first.")
-MODELS_NOT_LISTED = Message("Models not listed: {error}", GRAVE)
+MODELS_NOT_LISTED = Message("Models not listed: {error}")
 MODEL_ROW = Message("  {model}", banner=False)
 MORE_ROWS = Message("{count} more.", banner=False)
 PROVIDER_IS = Message("Provider: {provider}")
@@ -216,7 +410,7 @@ API_KEY_CLEARED = Message("API key: cleared")
 LOGIN_UNKNOWN_PROVIDER = Message(
     "/login: {name!r} is not a known provider. Name the provider type: /login {name} <apikey> <baseurl> <provider>")
 LOGIN_SAVED = Message("Login saved and active: {provider}")
-CATALOG_REFRESH_FAILED = Message("Model catalog not refreshed: {error}", GRAVE)
+CATALOG_REFRESH_FAILED = Message("Model catalog not refreshed: {error}")
 CATALOG_REFRESHED = Message("models.dev catalog refreshed at {stamp}: {providers} providers, {models} models. {path}")
 
 # --- Commands ----------------------------------------------------------------
@@ -225,43 +419,64 @@ USAGE = Message("Usage: {usage}")
 
 # --- Config migration --------------------------------------------------------
 
-MIGRATE_NO_LEGACY = Message("No legacy config at {path}", GRAVE)
-MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.", GRAVE)
+MIGRATE_NO_LEGACY = Message("No legacy config at {path}")
+MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.")
+MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by hand.")
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
-SAVE_FAILED = Message("Not saved: {error}", GRAVE)
+SAVE_FAILED = Message("Not saved: {error}")
 SAVED = Message("Saved {lines} to {path}")
-SAVED_WITH_BACKUP = Message("Saved {lines} to {path}. Prior file backed up to {backup}")
-CONTEXT_WINDOW_SET = Message("Context window: {window} for {model} from the next request.")
-NO_ALIASES = Message("No aliases.", banner=False)
+SAVE_NOTHING = Message("Nothing changed this session. Nothing saved.")
+SAVED_SERVER = Message("Saved {settings} as the {model} defaults of login {provider}")
+SAVE_NO_SERVER = Message("Not saved: no saved login for {provider}. js --login adds one.")
+NO_ALIASES = Message("No aliases.")
 ALIAS_ROW = Message("alias {name} {body}", banner=False)
 NO_ALIAS = Message("No alias {name}.")
 ALIAS_IS_COMMAND = Message("alias {name}: {name} is a command.")
 LOAD_TOO_DEEP = Message("load: nesting too deep.")
 LOAD_CYCLE = Message("load: cycle at {path}")
 LOAD_NOT_FOUND = Message("load: no script at {path}")
-LOAD_UNREADABLE = Message("load: {path} not read: {error}", GRAVE)
+LOAD_UNREADABLE = Message("load: {path} not read: {error}")
 LOAD_NEEDS_ONE_PATH = Message("load needs exactly one path.")
 SCRIPT_LINE_FAILED = Message("{path}:{lineno}: {error}")
 LOADED = Message("Loaded {path}")
 RESET_DONE = Message("Cleared in-process. Session log preserved.")
-WIPE_ROTATED = Message("Memory rotated to {path}")
+WIPE_ROTATED = Message("The conversation moved to session {path}")
 WIPE_NOTHING = Message("No memory file to rotate.")
 PERSONA_TRUNCATED = Message("Truncated. {size} bytes in all.")
-BLOCKING_NO_JOBS = Message("{command} is unavailable under --blocking.")
-NO_JOBS = Message("No running jobs.", banner=False)
+REPL_ONLY = Message("{command} is unavailable outside the REPL.")
+NO_JOBS = Message("No running jobs.")
 JOB_ROW = Message("[{id}] {kind}{label}", banner=False)
+
+# Windows on the REPL screen (`js.subagent_windows`). `state` is a
+# WINDOW_STATE_* entry's words, `mark` "" or WINDOW_MARK_* words.
+WINDOW_ROW = Message("{number}{mark}  {name}  {state}", banner=False)
+WINDOW_MAIN = Message("main", banner=False)
+WINDOW_STATE_RUNNING = Message("running", banner=False)
+WINDOW_STATE_FINISHED = Message("finished", banner=False)
+WINDOW_MARK_CURRENT = Message("*", banner=False)
+WINDOW_MARK_ACTIVE = Message("+", banner=False)
+WINDOW_QUEUED = Message("Queued for {agent}'s next model call.")
+NO_SUCH_WINDOW = Message("No window {number}.")
+WINDOW_MAIN_STAYS = Message("Window 1 is the main conversation; it stays.")
+WINDOW_STILL_RUNNING = Message("Window {number} still runs {agent}. Ctrl-C there cancels it.")
 NO_JOB_TO_CANCEL = Message("No matching job to cancel.")
-CANCELLING = Message("Cancelling {jobs}", WARN)
+CANCELLING = Message("Cancelling {jobs}")
 NO_SUCH_SKILL = Message("No skill named {name!r}.")
 SKILL_IS_A_TURN = Message("skill <name> [request] is a turn. Type it at the input line.")
 HELP_HEADING = Message("Commands:", banner=False)
 HELP_ROW = Message("  {usage} {doc}", banner=False)
+HELP_SETTING = Message("{key}", banner=False)
+HELP_SETTING_LINE = Message("    {text}", banner=False)
 HELP_ALIAS = Message("Alias: {body}")
 HELP_PROMPT_COMMAND = Message("Command file {path}: {description}")
 HELP_ATTACH = Message("Attach a file or image to that turn. Quote a path with spaces.")
 HELP_EXIT = Message("Quit.")
 TURNS_COUNT = Message("{messages} in context.")
 COST_NONE = Message("No model calls in this session yet.")
+COPY_DONE = Message("Copied answer {n} ({chars} characters) to the clipboard.")
+COPY_NOTHING = Message("No answer {n} back to copy.")
+COPY_USAGE = Message("Usage: /copy [N] — N answers back, 1 the last.")
+COPY_NO_CLIPBOARD = Message("No clipboard: set COPY_COMMAND, or run under Wayland (wl-copy) or X11 (xclip).")
 COST_TOTAL = Message("Session: {calls}, {cost}.")
 COST_TOKENS = Message(
     "  input {input}: cache read {cache_read}, cache write {cache_write}. "
@@ -270,10 +485,10 @@ COST_MODEL = Message("  {model}: {calls}, {tokens} tokens, {cost}", banner=False
 COST_UNPRICED = Message("no price")
 COST_PARTLY_PRICED = Message("{cost} + {calls} with no price")
 SESSION_TITLED = Message("Session titled: {title}")
-SESSION_TITLE = Message("{title}", banner=False)
+SESSION_TITLE = Message("{title}")
 SESSION_UNTITLED = Message("This session has no title. /name <text> gives it one.")
-SESSION_NOT_SAVED_TITLE = Message("This session is not saved. Nothing to title.", WARN)
-CWD_IS = Message("{path}", banner=False)
+SESSION_NOT_SAVED_TITLE = Message("This session is not saved. Nothing to title.")
+CWD_IS = Message("{path}")
 CD_DONE = Message("Working directory: {path}")
 CD_NOT_A_DIR = Message("/cd: not a directory: {path}")
 CD_OUTSIDE_JAIL = Message("/cd: {path} is outside the jail at {root}; /add it first.")
@@ -290,15 +505,41 @@ DROP_DONE = Message("{path} is no longer visible in the jail.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
+KEY_UNBOUND = "unbound"
+_HINT_ACTIONS = {
+    "INSTALL_ASK_PROVIDER": {"a": ("add",)},
+    "TURN_RUNNING": {"^C": ("interrupt",)},
+    "STARTUP_HINT": {"Ctrl-D": ("eof",)},
+    "PICKER_KEYS": {"↑↓/jk": ("up", "down"), "pgup/pgdn": ("page_up", "page_down"),
+                    "/": ("search",), "enter": ("choose",), "q/esc": ("quit",)},
+    "PICKER_KEYS_CHECKLIST": {"↑↓/jk": ("up", "down"), "/": ("search",), "space": ("toggle",),
+                              "a": ("all",), "n": ("none",), "enter": ("choose",), "q": ("quit",)},
+    "PICKER_KEYS_CHECKLIST_EDIT": {"↑↓/jk": ("up", "down"), "/": ("search",), "space": ("toggle",),
+                                   "a": ("all",), "n": ("none",), "e": ("edit",),
+                                   "enter": ("choose",), "q": ("quit",)},
+    "PICKER_KEYS_SEARCH": {"enter": ("choose",), "esc": ("back",)},
+    "PICK_HELP": {"tab": ("focus",), "↑↓": ("up", "down"), "enter": ("choose",),
+                  "f": ("fetch",), "esc/q": ("quit",)},
+    "SKILLS_KEYS": {"space": ("toggle",), "enter": ("choose",), "/": ("search",), "esc": ("back",)},
+    "SKILLS_QUERY_KEYS": {"enter": ("choose",), "esc": ("back",)},
+    "SESSIONS_KEYS": {"v": ("view",), "/": ("search",), "b": ("messages",),
+                      "i": ("info",), "a": ("all",), "esc": ("back",)},
+    "SESSIONS_QUERY_KEYS": {"enter": ("choose",), "esc": ("back",)},
+    "SESSIONS_MESSAGES_KEYS": {"enter": ("choose",), "r": ("resume",), "esc": ("back",)},
+    "SESSIONS_INFO_KEYS": {"enter": ("choose",), "esc": ("back",)},
+}
+
 TURN_RUNNING = Message("Turn running. {command} would clobber its context. ^C to cancel, or wait.")
 UNKNOWN_COMMAND = Message("Unknown command: {verb}")
+UNKNOWN_SLASH_COMMAND = Message("Invalid command")
 
 # --- /help: what each command does -------------------------------------------
 
-CMD_HELP = Message("Show this message.")
-CMD_SET = Message("List settings, show one, or change one. set -key clears one.")
+CMD_HELP = Message("Show this message. help set NAME explains a setting.")
+CMD_SET = Message("List settings, a group or a *_FILE wildcard, show one, or change one. set -NAME clears one.")
+CMD_FSET = Message("List what js looks like, show one entry, or change one. fset -NAME clears one.")
 CMD_SHOW = Message("List every setting and its effective value.")
-CMD_SAVE = Message("Rewrite the global jsrc from the live settings, handlers and aliases.")
+CMD_SAVE = Message("Write what you changed this session (settings, model, /fset, handlers, aliases) into the global jsrc, in place. /save server writes the model settings into the saved login.")
 CMD_LOAD = Message("Run each line of a file as a command. source is the same command.")
 CMD_ON = Message("List or register an event handler.")
 CMD_ALIAS = Message("List, show or define a command alias. alias -name removes one.")
@@ -311,17 +552,20 @@ CMD_LOGIN = Message("Load or save a provider login.")
 CMD_LOGOUT = Message("Clear provider credentials for this session.")
 CMD_MODELS = Message("List the provider's models.")
 CMD_RESET = Message("Clear the conversation in-process. The session log keeps it.")
-CMD_WIPE = Message("Rotate the session file away and clear the conversation.")
+CMD_WIPE = Message("Move the conversation to a new session file and clear it here.")
 CMD_PERSONA = Message("Print the system prompt.")
 CMD_TOOLS = Message("Show each tool's state and the entry that decided it. A state is eager, lazy or ban.")
 CMD_SKILL = Message(
     "List skills. With a name, send that skill's instructions with the request. User-only skills work too.")
+CMD_SKILLS = Message("Open the skill picker: switch each skill on or off. Enter sets SKILLS_DISABLED.")
 CMD_TURNS = Message("Count the messages in context.")
 CMD_COST = Message("Show the session's tokens and cost, in total and by model.")
+CMD_COPY = Message("Copy the last answer, or the one N back, to the clipboard as plain text.")
 CMD_SESSION = Message("Open the session picker. Words after it start a search.")
 CMD_NAME = Message("Pin a title on this session, or print the one it has.")
 CMD_JOBS = Message("List running turns and subagents.")
 CMD_CANCEL = Message("Cancel a job by id, or the active turn.")
+CMD_WINDOW = Message("List the windows, show window N, or close a finished subagent's window.")
 CMD_FLUSH = Message("Drop all prompts queued behind the active turn.")
 CMD_COMPACT = Message("Append a compaction summary mark.")
 CMD_COMPACT_AUTO = Message("Turn auto-compaction on or off.")
@@ -339,121 +583,177 @@ CMD_EXEC = Message(
 # --- /exec -------------------------------------------------------------------
 EXEC_QUEUED = Message("exec: {lines} queued for the next message.")
 EXEC_NO_OUTPUT = Message("exec: no output.")
-EXEC_EXITED = Message("exec: {command} exited {status}: {detail}", WARN)
-EXEC_TIMED_OUT = Message("exec: {command} killed after {seconds}s.", WARN)
-EXEC_FAILED = Message("exec: {command} did not start: {error}", WARN)
+EXEC_EXITED = Message("exec: {command} exited {status}: {detail}")
+EXEC_TIMED_OUT = Message("exec: {command} killed after {seconds}s.")
+EXEC_FAILED = Message("exec: {command} did not start: {error}")
 
 # --- js --help ----------------------------------------------------------------
 
 SHORT_HELP = Message(
-    "js — one agent, one terminal.\n"
-    "\n"
-    "RUN\n"
-    "  js                          Interactive REPL in this directory.\n"
-    "  js -p \"task\"                One prompt. Prints the answer.\n"
-    "  echo task | js -p           The same, from stdin.\n"
-    "  js -C DIR ...               Run as if launched from DIR.\n"
-    "\n"
-    "PICK\n"
-    "  -a NAME     Agent profile: ~/.js/agents/NAME\n"
-    "  -m MODEL    Provider/model, e.g. openai-codex/gpt-5.6-sol\n"
-    "  -r EFFORT   off|minimal|low|medium|high|xhigh|max\n"
-    "\n"
-    "STATE: sessions are saved by default. A driven agent normally wants that.\n"
-    "  -s NAME     Create or resume a named session.\n"
-    "  --session-key KEY   Derive a stable session from agent, cwd and key.\n"
-    "  --list [--json]     List every saved session.\n"
-    "  -n, --no-save\n"
-    "              Expensive throwaway choice: resume is unavailable, so the next\n"
-    "              run must re-read context. Use only for throwaway one-liners.\n"
-    "  --debug-file PATH   Full request trace, for debugging js.\n"
-    "\n"
-    "SCRIPTING\n"
-    "  -q          No resume hint after the answer. The session is still saved.\n"
-    "  -f PATH     Attach a file or image. Repeatable.\n"
-    "  --max-out N Max output tokens.\n"
-    "  --extra K=V One-off config, e.g. --extra limits.task_max_depth=3\n"
-    "\n"
-    "MORE\n"
-    "  js --login [PROVIDER]   Sign in.\n"
-    "  js --list-models        List the runnable models.\n"
-    "  js --commit             Run the commit agent.\n"
-    "  js --help-full          Every option.\n",
+    'js — one agent, one terminal.\n'
+    '\n'
+    'JOBS\n'
+    '  js -p "task"                         Run a task and print the answer.\n'
+    '  echo task | js -p                    Read the task from stdin.\n'
+    '  js --agent defaultagent -p "task"    Choose an agent.\n'
+    '  js -u http://qwen3:27b@box:11434/v1 -p "hello"\n'
+    '                                       Use a custom model endpoint.\n'
+    '  js --chat -p "question"              Chat with no tools or environment.\n'
+    '  js --session NAME -p "continue"      Resume a session.\n'
+    '  js --last -p "continue"              Resume this agent\'s latest session.\n'
+    '  js --list-sessions --json            Inspect saved sessions.\n'
+    '  js --list-agents                     List available agents.\n'
+    '  js --list-models                     List runnable provider/model names.\n'
+    '  js --login                          Sign in to a provider.\n'
+    '  js --verify                         Check agents and tool configuration.\n'
+    '  js --bench AGENT                    Run an agent benchmark.\n'
+    '  js --commit                         Run the commit agent.\n'
+    '  js -p "task" --json                  Print one final JSON object.\n'
+    '  js -p "task" --json-stream           Stream JSON Lines during the run.\n'
+    '  js -p "task" --loop 10               Repeat fresh turns.\n'
+    '  js                                  Open the interactive REPL.\n'
+    '\n'
+    'RUN SETTINGS\n'
+    '  -r WORD                 Reasoning effort sent to the provider; any word.\n'
+    '  --temperature VALUE     Set sampling for this run.\n'
+    '  --extra KEY=VALUE       Override a setting for this run.\n'
+    '  --home DIR              Choose js configuration and state.\n'
+    '  -f PATH                 Attach a file or image; repeat for more files.\n'
+    '  -C DIR                  Work inside DIR, with tools jailed there.\n'
+    '  --max-out N             Cap output tokens.\n'
+    '  --tools LIST            Choose tools, comma separated.\n'
+    '  --you-are TEXT          Use TEXT as the persona.\n'
+    '  -n, --no-save           Run without saving a resumable session.\n'
+    '  -q                      Omit the Continue command.\n'
+    '  --debug-file PATH       Write the full request trace.\n'
+    '  --help-full             Show every option, grouped by job.\n'
+    '\n'
+    'COMMANDS\n'
+    '  js -p "task"\n'
+    '  js --agent defaultagent -p "task"\n'
+    '  js -u http://qwen3:27b@box:11434/v1 -p "hello"\n'
+    '  js --session NAME -p "continue"\n'
+    '  js --list-sessions --json\n'
+    '  js --list-agents\n'
+    '  js --list-models\n'
+    '  js --verify\n'
+    '  js --commit\n'
+    '  js --bench AGENT\n'
+    '  js -p "task" --json-stream\n'
+    '  js --help-full\n',
     banner=False)
 
 # argparse: its headings, its refusal, and each option's help.
 ARGS_USAGE_PREFIX = Message("Usage: ")
 ARGS_POSITIONALS = Message("Arguments")
 ARGS_OPTIONS = Message("Options")
-ARGUMENTS_REFUSED = Message("{error}", GRAVE)
+ARGUMENTS_REFUSED = Message("{error}")
+UNKNOWN_OPTION = Message("unknown option {option}")
+BARE_WITH_AGENT = Message("--bare and --agent cannot be used together")
+TOOLS_LIST_ENTRY = Message("--tools: {entry!r} is not NAME, NAME:eager or NAME:lazy")
+TOOLS_ENTRY_MATCHES_NOTHING = Message("--tools: {entry!r} matches no tool")
+UNEXPECTED_ARGUMENT = Message("unexpected argument '{word}'")
 OPT_HELP_THIS = Message("Show this help and exit.")
 OPT_HELP = Message("Show the short usage guide and exit.")
 OPT_HELP_FULL = Message("Show the complete option reference and exit.")
 OPT_LOGIN = Message("Interactive provider login. Without PROVIDER it lists the providers.")
 OPT_LOGOUT = Message("Remove a saved provider login.")
 OPT_PROMPT = Message("Run one prompt and print the final answer. Reads stdin when the value is omitted or '-'.")
-OPT_FILE = Message("Attach a file or image to a one-shot prompt. Repeatable. '-' reads stdin bytes.")
+OPT_FILE = Message("Attach a file or image to a one-shot prompt; with no -p, the files are the prompt. Repeatable. '-' reads stdin bytes.")
 OPT_AGENT = Message(
     "Internal agent id. Sessions live in ~/.js/sessions/<start dir>, runtime state in ~/.js/state/<agent>.")
 OPT_MODEL = Message("Override the configured or env model for this session or prompt.")
 OPT_URL = Message(
-    "Reach an endpoint with no saved login in one string: model[:api-key][[shape]][[effort]]@url. "
-    "Shape is openai, the default, responses or anthropic. Effort is the usual off..max ladder. "
-    "The key defaults to a dummy. E.g. qwen27b@http://foo/v1  |  "
-    "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
-    "Desugars to --extra model.id/provider.id/provider.base_url/provider.api_key, "
+    "Reach an endpoint with no saved login in one string: [wire+]scheme://model[:key]@host/path. "
+    "Wire is openai+, responses+ or anthropic+; with none, a path ending in /v1 is OpenAI "
+    "chat-completions and anything else is Anthropic. The text after the last colon is the key "
+    "when it looks like one; otherwise it stays in the model. No key: JS_API_KEY, else a dummy. "
+    "No @: the model is JS_MODEL. E.g. http://qwen3:27b@box:11434/v1  |  "
+    "anthropic+https://deepseek-v4-pro:sk-xxxx@api.deepseek.com/anthropic. "
+    "Desugars to --extra MODEL/PROVIDER/BASE_URL/API_KEY, "
     "so an explicit --extra still wins.")
 OPT_CD = Message(
     "Keep the agent in DIR, for every mode: -p, the REPL, --commit and the rest. DIR is the "
     "working directory. Every tool that starts a process runs under bubblewrap: DIR "
-    "read-write, the system read-only, /home hidden except PATH directories and jail.bind "
+    "read-write, the system read-only, /home hidden except PATH directories and JAIL_BIND "
     "entries, a private /tmp, the network on. File tools refuse paths outside DIR and the "
     "bound paths. Needs bwrap.")
 OPT_DEBUG = Message(
-    "In prompt and --bench modes, stream the concise per-turn diagnostics and the answer live to the terminal: "
+    "In prompt mode, stream the concise per-turn diagnostics and the answer live to the terminal: "
     "run header, tool-call lines, per-call timing. The full request trace still goes only to the debug "
     "autolog file.")
 OPT_DEBUG_FILE = Message(
     "Also write the full byte-honest request trace to PATH: unclipped system prompt, full tool-schema JSON "
     "with descriptions, the messages sent each call, and per-call timings. The clean final answer still "
-    "prints to stdout. runtime.debug_autolog always writes the same trace under logs/<agent>/<session>.log.")
+    "prints to stdout. REQUEST_LOG always writes the same trace under logs/<agent>/<session>.log.")
 OPT_SESSION = Message(
-    "Create or resume a named session: this directory's folder first, then every folder under ~/.js/sessions."
-    " Bare, open the session picker.")
+    "--session NAME: resume NAME, looking in this directory's sessions first, then in all of them."
+    " Not found: start it. Bare, open the session picker.")
 OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
-OPT_NO_SAVE = Message(
-    "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "
-    "and the next run must re-read context.")
+OPT_NO_SAVE = Message("Do not save this run: no session is written, so it cannot be resumed.")
 OPT_QUIET = Message("Suppress the resume hint after a one-shot prompt.")
 OPT_REASONING = Message(
-    "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. Any other value is rejected.")
+    "Thinking effort word, sent as typed: off|minimal|low|medium|high|xhigh|max or any other word. "
+    "A model js recognizes may take it as its nearest effort; the banner shows what was sent.")
 OPT_MAX_OUT = Message("Max output tokens per call.")
+OPT_MAX_TURNS = Message("Set TURN_ROUNDS_MAX, the most model calls one turn makes.")
+OPT_TEMPLATE_KWARGS = Message(
+    "Set TEMPLATE_KWARGS: key=value entries sent as chat_template_kwargs, e.g. enable_thinking=false. "
+    "A value is read as JSON; one that is not JSON is a string.")
+OPT_SETTING_FLAG = Message("Set {setting} for this run.")
+OPT_SYSTEM_PROMPT_FILE = Message(
+    "Use one file as the full system prompt, with inline directives, and defaultagent's tools. "
+    "No agent directory, *-env.md or AGENTS.md.")
+OPT_SYSTEM_PROMPT = Message("Use TEXT in place of the agent's *-prompt.md files. Everything else about the agent loads.")
+OPT_YOU_ARE = Message(
+    "System prompt is only 'You are <model> running inside the js agent', then TEXT. "
+    "No tools, envctx, AGENTS.md, skills or MCP; --tools adds tools.")
+OPT_APPEND_SYSTEM_PROMPT = Message("Append TEXT to the selected system prompt.")
+OPT_NO_ENV = Message("Skip the agent's *-env.md files and envctx output.")
+OPT_CHAT = Message(
+    "Plain chat: no tools, *-env.md, AGENTS.md, skills or MCP. With --agent, that agent's *-prompt.md is the "
+    "persona; without it, no persona. --tools still adds tools.")
+OPT_TOOLS = Message("Exactly these comma-separated tools, globs or tags, each optionally :eager or :lazy.")
+OPT_NO_TOOLS = Message("Run with zero tools.")
+OPT_PI = Message("Use Pi read, bash, edit and write alongside compatible js tools.")
+OPT_PI_STRICT = Message("Use only Pi read, bash, edit and write.")
+OPT_NO_AGENTS_MD = Message("Do not load JS.md or AGENTS.md instruction files.")
+OPT_NO_SKILLS = Message("Disable skill discovery and the skill tool.")
+OPT_NO_MCP = Message("Disable MCP servers.")
+OPT_BARE = Message("Use slim without envctx, skills, or MCP.")
+OPT_VERIFY = Message("Validate configuration, agents, and reachable skills without executing prompts.")
 OPT_BENCH = Message(
     "Benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, "
     "measuring TTFT, tok/s and turn time. Pair with --stats-json or --stats-csv.")
+OPT_LOCK = Message("Refuse to start while another --lock run of the same agent is running. Works with --bench, --agent, or a bare run.")
+OPT_LOOP = Message(
+    "Repeat fresh invocations: a count, minutes as 45M, hours as 3H, or bare until Ctrl-C. "
+    "The deadline is checked between invocations; all other options carry through.")
 OPT_STATS_JSON = Message("Write per-turn stats to PATH as JSON: ttft, tok/s, turn time, tokens.")
 OPT_STATS_CSV = Message("Write per-turn stats to PATH as CSV.")
-OPT_BLOCKING = Message(
-    "Run the legacy blocking REPL: input waits for the turn to finish, and ^C exits. The default runs one "
-    "async event loop, so input stays live while a turn streams and subagents run, and ^C cancels the "
-    "active turn.")
 OPT_EXTRA = Message(
-    "Set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. May be repeated. "
+    "Set a dotted config key for this run, e.g. --extra SUBAGENT_DEPTH_MAX=3. May be repeated. "
     "Wins over env and all config files.")
 OPT_PRESET = Message(
     "Layer jsrc.<name> preset files on top of the base config, in order. The last wins. "
     "Comma-list and/or repeatable: --preset fast,debug. Looks for jsrc.<name> beside the global jsrc "
     "and in project .js/. Still below env and --extra.")
-OPT_IGNORE_LOCAL = Message("Ignore project .js/jsrc and .js/jsrc.local.")
-OPT_IGNORE_GLOBAL = Message("Ignore the platform jsrc.")
+OPT_NO_LOCAL_CONFIG = Message("Ignore project .js/jsrc and .js/jsrc.local.")
+OPT_HOME = Message("Use DIR as the complete js profile; overrides JS_HOME.")
+OPT_NO_GLOBAL_CONFIG = Message("Ignore the platform jsrc.")
 OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
-OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
 OPT_LAST = Message("Resume the most recently used session for this agent.")
-OPT_JSON = Message("With -p or pipe mode, print the run as JSON events one per line; "
-                   "with --list, print compact JSON objects one per line.")
-OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the bus tools, "
-                    "delivers inbox messages at every tool boundary, and sleeps on the inbox instead of "
-                    "exiting when a turn ends. A message of kind stop ends it.")
+OPT_LAST_PROMPT = Message("--last -p: run one prompt in the most recently used session for this agent.")
+LAST_PROMPT_WITH_PROMPT = Message("-lp already takes the prompt; drop -p")
+OPT_JSON = Message("Print the completed run or listing as one JSON object.")
+OPT_JSON_STREAM = Message("Stream JSON Lines while the run executes.")
+OPT_LIST_SESSIONS = Message("List saved sessions; requires --json.")
+OPT_LIST_AGENTS = Message("List available agents.")
+OPT_LIST_PROVIDERS = Message("List providers; requires --json.")
+OPT_LIST_LOGINS = Message("List saved logins; requires --json.")
+JSON_FLAGS_EXCLUSIVE = Message("--json and --json-stream cannot be used together")
+JSON_UNSUPPORTED = Message("{mode} is not supported with {command}")
+LIST_REQUIRES_JSON = Message("{command} requires --json")
 SWARM_CLI = Message("Post on a swarm bus, list who is on it, ask whether it is quiet, see or post work, "
                     "or run a spec of agents in one process.")
 SWARM_SEND = Message("Post a message. A text of - or no text reads stdin.")
@@ -464,9 +764,6 @@ SWARM_QUIET = Message("Exit 0 when every agent on the bus is asleep with an empt
 SWARM_CELLS = Message("The work board: open and taken tasks first, done ones last.")
 SWARM_POST = Message("Put a task on the work board. A body of - reads stdin.")
 SWARM_RUN = Message("Run every agent in a JSON spec in this one process; events go to stdout.")
-OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
-OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
-OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")
 OPT_LIST_MODELS = Message("Print human-readable models for PROVIDER and the exact --model values to pass.")
 OPT_REFRESH_MODEL_CATALOG = Message("Force-refresh js's local models.dev catalog now.")
 OPT_COMMIT = Message(
@@ -474,16 +771,12 @@ OPT_COMMIT = Message(
 OPT_COMPACT = Message("Compact an existing session id or path offline, append-only.")
 OPT_IM_A_PUSSY = Message(
     "Opt out of inline-code execution for this run: !{{sh|python|c|node ...}} directives and ```!lang fences "
-    "stay as written instead of running. Inline code runs by default. Set runtime.allow_inline_code off or "
-    "JS_ALLOW_INLINE_CODE=0 to make that permanent. {{{{VAR}}}} env expansion and !{{env}}/!{{file}} are "
+    "stay as written instead of running. Inline code runs by default. Set INLINE_CODE off or "
+    "JS_INLINE_CODE=0 to make that permanent. {{{{VAR}}}} env expansion and !{{env}}/!{{file}} are "
     "always on.")
-OPT_PRINTONLY = Message(
-    "Dry run: assemble what would be sent and print it instead of calling the model, then exit. "
-    "LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded b=benchmark "
-    "x=startup exchanges a=everything. "
-    "The default is a. An optional :COUNT caps output lines. An optional :PATH writes to a file instead of "
-    "stdout, and an empty slot skips, e.g. p::/tmp/x.md. Unknown letters and unwritable paths are reported "
-    "and skipped. The run still succeeds.")
+OPT_NO_SHELL_HISTORY = Message(
+    "Keep your recent shell commands out of the prompt for this run: envctx skips its recent_shell block. "
+    "Set ENVCTX_HIST=0 in your environment to make that permanent.")
 OPT_TARGET = Message("Target path for built-in commit mode.")
 
 # `python -m js.home`, `python -m js.toolstats`, `python -m js.tooldiag`.
@@ -511,135 +804,150 @@ LIST_NO = Message("no")
 
 # --- One-shot and startup ----------------------------------------------------
 
-BAD_REASONING = Message("--reasoning {value}: {error}", GRAVE)
-PROMPT_EMPTY = Message("Prompt is empty.", GRAVE)
-TURN_INTERRUPTED = Message("Turn interrupted.", WARN)
-TURN_INTERRUPTED_KEPT = Message("Turn interrupted. Partial work kept.", WARN)
-TURN_ABORTED = Message("Turn aborted.", WARN)
-NO_ASSISTANT_RESPONSE = Message("No assistant response.", GRAVE)
+BAD_REASONING = Message("--reasoning {value}: {error}")
+BAD_FLAG_VALUE = Message("{flag} {value}: {error}")
+PROMPT_EMPTY = Message("Prompt is empty.")
+TURN_INTERRUPTED = Message("Turn interrupted.")
+TURN_INTERRUPTED_KEPT = Message("Turn interrupted. Partial work kept.")
+TURN_ABORTED = Message("Turn aborted.")
+NO_ANSWER = Message("The model returned no answer.")
 CONTINUE_HINT = Message("Continue: {command}")
+
+# One-shot: what a turn is doing, while nothing else shows it.
 
 # --- Benchmarks --------------------------------------------------------------
 
-NO_BENCHMARKS = Message("Agent {agent!r} has no NN-benchmark.md files.", GRAVE)
+NO_BENCHMARKS = Message("Agent {agent!r} has no NN-benchmark.md files.")
 BENCH_START = Message("bench {name}: {prompt}")
-BENCH_FAILED = Message("{name}: {error}", GRAVE)
+BENCH_FAILED = Message("{name}: {error}")
 BENCH_ROW = Message("{name}: {tokens} tok  {tps:.1f} tok/s  ttft {ttft}  wall {wall:.2f}s")
 STATS_WRITTEN = Message("Stats: {path}")
 
 # --- Commit agent ------------------------------------------------------------
 
-COMMIT_TARGET_MISSING = Message("Commit target does not exist: {path}", GRAVE)
-COMMIT_TARGET_NOT_DIR = Message("Commit target is not a directory: {path}", GRAVE)
-GIT_INIT_FAILED = Message("git init failed in {path}: {error}", GRAVE)
-SNAPSHOT_FAILED = Message("Worktree snapshot failed: {error}", WARN)
+COMMIT_TARGET_MISSING = Message("Commit target does not exist: {path}")
+COMMIT_TARGET_NOT_DIR = Message("Commit target is not a directory: {path}")
+GIT_INIT_FAILED = Message("git init failed in {path}: {error}")
+SNAPSHOT_FAILED = Message("Worktree snapshot failed: {error}")
 SNAPSHOT_SAVED = Message("Worktree snapshot saved: {path}")
-SURVEY_FAILED = Message("Commit survey failed for {path}: {error}", GRAVE)
+SURVEY_FAILED = Message("Commit survey failed for {path}: {error}")
 SURVEY_EXITED = Message("commit_helper survey exited {code}")
 
 # --- Model listing, presets, binaries ---------------------------------------
 
 NO_LOGINS = Message("No providers logged in. Run js --login <provider>.")
-MODEL_LIST_FAILED = Message("{provider}: models not listed: {error}", WARN)
-PRESET_NOT_FOUND = Message("--preset {name}: no jsrc.{name}. Looked in {looked}.", WARN)
-PRESET_NO_CONFIG_DIRS = Message("--preset {name}: no jsrc.{name}. Every config dir is ignored.", WARN)
-BINARY_MISSING = Message("{name} not in tools/bin or PATH. {user} uses it. just install provisions it.", WARN)
+MODEL_LIST_FAILED = Message("{provider}: models not listed: {error}")
+PRESET_NOT_FOUND = Message("--preset {name}: no jsrc.{name}. Looked in {looked}.")
+PRESET_NO_CONFIG_DIRS = Message("--preset {name}: no jsrc.{name}. Every config dir is ignored.")
+BINARY_MISSING = Message("{name} not in tools/bin or PATH. {user} uses it. just install provisions it.")
 
 # --- The REPL ----------------------------------------------------------------
 
-INPUT_PROMPT = "❯ "
 NO_SKILLS = Message("No skills found.")
 SKILL_ROW = Message("{name} {source} {description}", banner=False)
 SKILL_ROW_USER_ONLY = Message("{name} user-only {source} {description}", banner=False)
-SKILL_HINT = Message("/skill <name> [request] sends one with your request.", banner=False)
-DROPPED_QUEUED = Message("Dropped {prompts}.", WARN)
+SKILL_HINT = Message("/skill <name> [request] sends one with your request.")
+DROPPED_QUEUED = Message("Dropped {prompts}.")
 QUEUED = Message("Queued. {ahead} ahead.")
-PRESS_CTRL_C_AGAIN = Message("Press ^C again to exit.")
-
-# --- --printonly -------------------------------------------------------------
-
-PRINTONLY_BAD_COUNT = Message("--printonly: {count!r} is not a count. Ignored.", WARN)
-PRINTONLY_LETTER_NOT_IMPLEMENTED = Message("--printonly: {letter!r} is not implemented. Skipped.", WARN)
-PRINTONLY_UNKNOWN_LETTER = Message("--printonly: unknown letter {letter!r}. Skipped.", WARN)
-PRINTONLY_NO_CONFIG = Message("--printonly: config not built: {error}", GRAVE)
-PRINTONLY_NO_PROMPT = Message("--printonly: prompt not loaded: {error}", GRAVE)
-PRINTONLY_NO_BENCHMARKS = Message("No NN-benchmark.md files.")
-PRINTONLY_NO_EXCHANGES = Message("No NN-user.md / NN-agent.md files.")
-PRINTONLY_SECTION_FAILED = Message("--printonly: section {section} unavailable: {error}", GRAVE)
-PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Printing to stdout.", WARN)
 
 # --- Command-line flags ------------------------------------------------------
 
-BAD_URL_SPEC = Message("-u: {error}", GRAVE)
-JAIL_REFUSED = Message("{error}", GRAVE)
-JSON_NEEDS_LIST = Message("--json requires -p, pipe mode or --list.", GRAVE)
-LIST_EXCLUSIVE = Message("--list does not combine with run or session options.", GRAVE)
-LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.", GRAVE)
-NO_PREVIOUS_SESSION = Message("No previous session for agent: {agent}", GRAVE)
-DEBUG_FLAGS_EXCLUSIVE = Message("--debug and --debug-file are mutually exclusive.", GRAVE)
-MODES_EXCLUSIVE = Message("--commit and --compact are mutually exclusive.", GRAVE)
-FILE_NEEDS_PROMPT_MODE = Message("-f/--file works only with a prompt or a pipe. Use @path in the REPL.", GRAVE)
-FILE_NEEDS_PROMPT = Message("-f/--file requires -p/--prompt or piped input. Use @path in the REPL.", GRAVE)
-BENCH_EXCLUSIVE = Message("--bench is its own mode. Name the agent as --bench AGENT, without --agent or a built-in mode.", GRAVE)
-COMMIT_WITH_AGENT = Message("--commit always uses the built-in commit agent. Omit --agent.", GRAVE)
-STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.", GRAVE)
-STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.", GRAVE)
+BAD_URL_SPEC = Message("-u: {error}")
+BAD_BASE_URL = Message("JS_BASE_URL: {error}")
+JAIL_REFUSED = Message("{error}")
+LIST_EXCLUSIVE = Message("--list does not combine with run or session options.")
+LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.")
+NO_PREVIOUS_SESSION = Message("No previous session for agent: {agent}")
+DEBUG_FLAGS_EXCLUSIVE = Message("--debug and --debug-file are mutually exclusive.")
+MODES_EXCLUSIVE = Message("--commit and --compact are mutually exclusive.")
+FILE_NEEDS_PROMPT_MODE = Message("-f/--file works only with a prompt or a pipe. Use @path in the REPL.")
+BENCH_EXCLUSIVE = Message("--bench is its own mode. Name the agent as --bench AGENT, without --agent or a built-in mode.")
+COMMIT_WITH_AGENT = Message("--commit always uses the built-in commit agent. Omit --agent.")
+STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.")
+STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.")
 # Raised as exception text and shown through FAILED.
 ATTACHMENT_NOT_FOUND = Message("Attachment not found: {path}")
+ATTACHMENT_TRUNCATED = Message("Attachment {path} cut to {cap} of {size} bytes: past ATTACHMENT_CONTEXT_MAX of the context left before compaction.")
 ATTACHMENT_NOT_A_FILE = Message("Attachment is not a regular file: {path}")
 ATTACHMENT_UNREADABLE = Message("Attachment {path} not read: {error}")
-ATTACHMENT_IMAGE_TOO_LARGE = Message("Image attachment {path} is {size} bytes. The maximum is {limit} bytes.")
 # The paste-image key (js.clipimage): one line, and the input line is unchanged.
-CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. ui.paste_image_command names a command that prints the image.", WARN)
-CLIPBOARD_TOOL_MISSING = Message("Clipboard image not read: {tool} is not installed.", WARN)
-CLIPBOARD_READ_FAILED = Message("Clipboard image not read: {tool}: {error}", WARN)
-CLIPBOARD_NO_IMAGE = Message("No image on the clipboard.", WARN)
-CLIPBOARD_IMAGE_TOO_LARGE = Message("Clipboard image is {size} bytes. The maximum is {limit} bytes.", WARN)
+CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. PASTE_IMAGE_COMMAND names a command that prints the image.")
+CLIPBOARD_TOOL_MISSING = Message("Clipboard image not read: {tool} is not installed.")
+CLIPBOARD_READ_FAILED = Message("Clipboard image not read: {tool}: {error}")
+CLIPBOARD_NO_IMAGE = Message("No image on the clipboard.")
 SESSION_NAME_UNSAFE = Message("Session name is not a safe relative path: {session}")
 SESSION_NAME_TRAVERSAL = Message("Session name has an empty or traversal component: {session}")
 SESSION_NAME_ABSOLUTE = Message("Session name is not a relative path: {session}")
 SESSION_NAME_SUFFIX = Message("Session name has a suffix other than .jsonl: {session}")
-NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.", WARN)
+NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.")
 
 # --- REPL startup ------------------------------------------------------------
 
-STARTUP = Message(
-    f"{C.CYAN}me — js agent{C.RESET}\n"
-    f"{C.MAGENTA}Agent:{C.RESET}  {{agent}}\n"
-    f"{C.MAGENTA}Model:{C.RESET}  {{model}}\n"
-    f"{C.MAGENTA}Prompt:{C.RESET} {{prompt}}\n"
-    f"{C.MAGENTA}Memory:{C.RESET} {{memory}}\n"
-    "\n"
-    f"{C.GREEN}Type exit or Ctrl-D to quit. /help lists commands.{C.RESET}\n",
-    banner=False,
-)
+# Each a line of the REPL's opening lines; js/fset gives them their colours.
+STARTUP_TITLE = Message("me — js agent", banner=False)
+STARTUP_AGENT = Message("Agent:  {agent}", banner=False)
+STARTUP_MODEL = Message("Model:  {model}", banner=False)
+STARTUP_PROMPT = Message("Prompt: {prompt}", banner=False)
+STARTUP_MEMORY = Message("Memory: {memory}", banner=False)
+STARTUP_HINT = Message("Type exit or Ctrl-D to quit. /help lists commands.", banner=False)
 RESUMED_MODEL = Message("Model: {model}")
-RESUME_MODEL_FALLBACK = Message("No login for {stamped}, the model this session last ran on. Continuing on {model}.", WARN)
+RESUME_MODEL_FALLBACK = Message("No login for {stamped}, the model this session last ran on. Continuing on {model}.")
 RESUMED = Message("Resumed: {messages}.")
-EMPTY_SESSION = Message("Empty session. Nothing to resume: {path}", WARN)
+EMPTY_SESSION = Message("Empty session. Nothing to resume: {path}")
 PROMPT_CHANGED = Message("Agent prompt changed on disk. Session keeps the one it started with.")
 NO_SUCH_AGENT = Message(
     "No such agent: {agent}. Looked in project .js/agents, {agents_dir}, and repo prompts. "
-    "Create {new_dir}/ with NN-*.md prompt files and an optional agent.yaml manifest.", GRAVE)
+    "Create {new_dir}/ with NN-*.md prompt files and an optional agent.yaml manifest.")
 
 # --- A turn ------------------------------------------------------------------
 
-# Chrome: the turn's own report lines. The caller paints them.
-RUN_LINE = Message("run  {fields}", banner=False)
-CALL_STATS = Message("{ms}ms  finish={finish}  tool_calls={tool_calls}  {tokens} tok  {tps:.1f} tok/s{ttft}{cache}",
-                     banner=False)
-RETRY_BUDGET_EXHAUSTED = Message("Tool-loop retry budget exhausted.", GRAVE)
-MAX_ITERATIONS = Message("Tool loop hit max iterations: {limit}", GRAVE)
-RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}", WARN)
+# The turn's own report lines. `label` is "" or the caller's, "Subagent 2: ".
+RUN_LINE = Message("run  {fields}")
+CALL_STATS = Message("{label}{ms}ms  finish={finish}  tool_calls={tool_calls}  {tokens} tok  {tps:.1f} tok/s{ttft}{cache}")
+RETRY_BUDGET_EXHAUSTED = Message("Tool-loop retry budget exhausted.")
+MAX_ITERATIONS = Message("Tool loop hit max iterations: {limit}")
+RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}")
 MAX_OUTPUT_ESCALATED = Message("Reply hit its output cap of {before}; sending again with {after}.")
-MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.", WARN)
+SIGNED_REASONING_DROPPED = Message(
+    "The provider refused replayed reasoning; dropped it from {messages} messages and sending again.")
+IMAGES_REFUSED = Message(
+    "{model} takes no images; dropped them, sending again, and sending it none for the rest of the run.")
+THINKING_TURN_RESTARTED = Message(
+    "The provider refused this turn's thinking; restarted the turn from {messages} messages and sending again.")
+MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.")
 RETRY_WAIT = Message("Retry {n}/{of} in {seconds:.1f}s: {failure}")
+RETRY_GAVE_UP = Message("Gave up after {n} retries: {failure}")
+RETRY_COUNTDOWN = Message("Retry {n}/{of} in {seconds:.0f}s")
+FIRST_BYTE_COUNTER = Message("Waiting for first byte {waited}")
 STEERED = Message("Steered.")
-FLIGHT_LOG_FAILED = Message("Flight log not written: {error}", GRAVE)
-COMPACTION_FAILED = Message("Compaction failed: {error}", GRAVE)
+
+# A subagent's run, from launch to end. `kind` is a SUBAGENT_KIND_* entry's
+# words; `route` is provider/model; `effort` the effort its requests send, or
+# SUBAGENT_EFFORT_UNSET's words; `tokens` is "" or SUBAGENT_TOKENS's line;
+# `window` is "", SUBAGENT_WINDOW's or SUBAGENT_NO_WINDOW's words.
+SUBAGENT_STARTED = Message(
+    "Subagent {index} of {total} started: {agent} ({kind})  {route}  effort {effort}  {tools} tools  "
+    "session {session}{window}")
+SUBAGENT_WINDOW = Message("  window {number}", banner=False)
+SUBAGENT_NO_WINDOW = Message("  no window: windows 2-{last} are open", banner=False)
+SUBAGENT_FINISHED = Message("Subagent {index} of {total} {outcome}: {agent}  {elapsed}{tokens}")
+SUBAGENT_KIND_TASK = Message("task", banner=False)
+SUBAGENT_KIND_AGENT = Message("named agent", banner=False)
+SUBAGENT_KIND_BACKGROUND = Message("background task", banner=False)
+SUBAGENT_EFFORT_UNSET = Message("unset", banner=False)
+SUBAGENT_SESSION_UNSAVED = Message("unsaved", banner=False)
+SUBAGENT_OUTCOME_OK = Message("ok", banner=False)
+SUBAGENT_OUTCOME_ERROR = Message("error", banner=False)
+SUBAGENT_OUTCOME_CANCELLED = Message("cancelled", banner=False)
+SUBAGENT_TOKENS = Message("  {prompt_tokens:,} tok in  {output_tokens:,} tok out", banner=False)
+FLIGHT_LOG_FAILED = Message("Flight log not written: {error}")
+COMPACTION_FAILED = Message("Compaction failed: {error}")
 
 # --- The network channel -----------------------------------------------------
 
+# A network line built from pieces, and a line behind its caller's label.
+NET_LINE = Message("{text}")
+NET_LABELLED = Message("{label}: {text}")
 NET_CONNECTING = Message("Connecting: {url}")
 NET_CONNECTED = Message("Connected: {host}  {ms}ms")
 NET_ROLE_CONNECTING = Message("{role}: connecting {url}")
@@ -648,11 +956,27 @@ NET_ROLE_CONNECTED = Message("{role}: connected: {host}  {ms}ms")
 NET_COMPACTING = Message("Compacting: {model} via {url}")
 NET_CACHE_BREAK = Message(
     "Prompt cache break: cache read {before} -> {after} tokens, down {drop:.0%}, {idle}s since the last request")
-NET_DNS_FAILURE = Message("DNS failure")
-NET_TIMEOUT = Message("Timeout")
-NET_CONNECT_FAILED = Message("Connection failed")
+# A failed request: what failed (an HTTP status, or one of the kinds below,
+# each painted in COLOR_ERROR), then what it names.
+NET_FAILURE = Message("{kind}: {detail}", banner=False)
+NET_STATUS_FAILURE = Message("{status} {reason}", banner=False)
+NET_FAILURE_STATUS = Message("{status}", banner=False)
+NET_FAILURE_TYPE = Message("{name}", banner=False)
+NET_DNS_FAILURE = Message("DNS failure", banner=False)
+NET_TIMEOUT = Message("Timeout", banner=False)
+NET_CONNECT_FAILED = Message("Connection failed", banner=False)
+NET_OUTAGE_OVERLOADED = Message("{service} is overloaded right now.", banner=False)
+NET_OUTAGE_UNAVAILABLE = Message("{service} is unavailable right now{status}.", banner=False)
+NET_OUTAGE_EMPTY = Message("{service} closed the connection before sending a reply.", banner=False)
+NET_OUTAGE_ACCOUNT = Message("The proxy has no usable account right now.", banner=False)
+NET_OUTAGE_ACCOUNT_OVERLOAD = Message("The proxy has no usable account after {service} reported overload.", banner=False)
+NET_OUTAGE_RETRY = Message("{failure} Retrying in {seconds:.1f}s (attempt {n}/{of}).")
+NET_OUTAGE_STOP = Message("{failure} Stopped after {n} retries; try again later or choose another provider.")
+NET_OUTAGE_ACTION = Message("{failure} Try again later or choose another provider.")
+NET_FAILURE_REPEATED = Message("{failure} (repeated {count} times)", banner=False)
+NET_RETRY_RECOVERED = Message("Recovered after {count} repeated failures.")
 CATALOG_UPDATING = Message("Updating the models.dev cache.")
-CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}", WARN)
+CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}")
 
 # --- Login -------------------------------------------------------------------
 
@@ -662,6 +986,7 @@ PICKER_NO_MATCHES = Message("No matches.")
 PICKER_SELECTED = Message("{selected}/{total} selected")
 PICKER_KEYS = Message("↑↓/jk move  pgup/pgdn page  / search  enter select  q/esc back")
 PICKER_KEYS_CHECKLIST = Message("↑↓/jk move  / search  space toggle  a all  n none  enter save  q back")
+PICKER_KEYS_CHECKLIST_EDIT = Message("↑↓/jk move  / search  space toggle  a all  n none  e defaults  enter save  q back")
 PICKER_KEYS_SEARCH = Message("Search: type to filter, enter to navigate, esc clear")
 LOGIN_PICK_MODELS = Message("Models to keep for {provider}. Kept for /model and --list-models.")
 LOGIN_ASK_EXTRA_MODELS = Message("Model ids the list missed, comma-separated. Enter skips")
@@ -676,15 +1001,15 @@ LOGIN_ASK_ENV_KEY = Message("Found ENV:{name} {key}. Use it? [y/N]")
 LOGIN_ASK_KEY = Message("Enter API key")
 LOGIN_ASK_KEY_OPTIONAL = Message("Enter API key. Enter for none")
 LOGIN_ASK_KEY_KEEP = Message("Enter API key. Enter keeps the saved one")
-LOGIN_NO_KEY = Message("Login aborted. No API key given.", GRAVE)
-LOGIN_PLACEHOLDER_KEY = Message("No key given. Storing placeholder 'x'; local endpoints ignore it.")
+LOGIN_NO_KEY = Message("Login aborted. No API key given.")
+LOGIN_PLACEHOLDER_KEY = Message("No key given. Storing placeholder '{key}'; local endpoints ignore it.")
 LOGIN_ASK_HEADERS = Message("Headers k=v,k=v, optional")
 LOGIN_MODEL_ROW = Message("[{index}] {model}", banner=False)
 LOGIN_LISTING_NOT_PROOF = Message("Model listing alone does not prove these credentials can generate.")
 LOGIN_ASK_TEST = Message("[enter] adds without a test. A model number verifies it first. q cancels: ")
 LOGIN_TEST_CHOICES = Message("Enter adds, q cancels, a model number or exact model id tests it.")
 LOGIN_TEST_USER = Message("[user] {prompt}")
-LOGIN_TEST_FAILED = Message("Secondary test failed: {error}", GRAVE)
+LOGIN_TEST_FAILED = Message("Secondary test failed: {error}")
 LOGIN_TEST_ANSWER = Message("[assistant] {answer}")
 LOGIN_DETAIL_BASE_URL = Message("Base URL: {url}")
 LOGIN_DETAIL_KEY = Message("API key: {key}")
@@ -693,9 +1018,12 @@ LOGIN_DETAIL_HEADERS = Message("Headers: {headers}")
 LOGIN_EDIT_BASE_URL = Message("Base URL. Enter keeps saved, - clears")
 LOGIN_EDIT_KEY = Message("API key. Enter keeps saved, - clears")
 LOGIN_EDIT_HEADERS = Message("Headers k=v,k=v. Enter keeps saved, - clears")
-LOGIN_BAD_HEADERS = Message("Headers must use k=v,k=v. Nothing saved yet.", WARN)
+LOGIN_BAD_HEADERS = Message("Headers must use k=v,k=v. Nothing saved yet.")
 LOGIN_MANAGE_PROVIDERS = Message("Manage providers")
-LOGIN_PROVIDER_NOT_CHANGED = Message("Provider not changed: {error}", GRAVE)
+LOGIN_PROVIDER_KEYS = Message("↑↓/jk move  / search  enter select  r rename  d delete  q/esc back")
+LOGIN_TYPEAHEAD_KEYS = Message("Type to filter  ↑↓ move  backspace erase  enter select  esc back")
+LOGIN_RENAME = Message("New provider id")
+LOGIN_PROVIDER_NOT_CHANGED = Message("Provider not changed: {error}")
 LOGIN_MODELS_SELECT = Message("Select / deselect cached models")
 LOGIN_MODELS_ADD = Message("Add model ids")
 LOGIN_MODELS_REFETCH = Message("Re-fetch live model list")
@@ -709,34 +1037,30 @@ LOGIN_UPDATE = Message("Update URL / API key / headers")
 LOGIN_MODELS = Message("Models")
 LOGIN_REMOVE = Message("Remove provider")
 LOGIN_MANAGE_ONE = Message("Manage {provider}")
-LOGIN_FAILED = Message("Login failed: {error}", GRAVE)
-LOGIN_TRY_V1 = Message("{base} does not end in /v1. OpenAI-compatible servers usually serve at {suggested}", WARN)
-LOGIN_NOT_SAVED = Message("Login not saved: {error}", GRAVE)
+LOGIN_FAILED = Message("Login failed: {error}")
+LOGIN_MODELS_UNREACHABLE = Message("Could not list models: {error}. Saving the server anyway.")
+LOGIN_DEFAULTS = Message("Defaults")
+LOGIN_DETAIL_DEFAULTS = Message("Defaults: {defaults}")
+LOGIN_EDIT_DEFAULTS = Message("Defaults NAME=value,NAME=value. NAME is one of {names}. Enter keeps saved, - clears")
+LOGIN_EDIT_MODEL_DEFAULTS = Message("{model} defaults NAME=value,NAME=value, - clears: ")
+LOGIN_BAD_DEFAULTS = Message("{error}. Nothing saved yet.")
+LOGIN_NOT_SAVED = Message("Login not saved: {error}")
 PROVIDER_ADDED = Message("Provider added: {provider}. Cached {models}.")
-PROVIDER_ADDED_AS = Message("Provider added: {provider} as {email}. Cached {models}.")
-LOGIN_NO_CACHED_MODELS = Message("No cached models for {provider}", GRAVE)
+LOGIN_NO_CACHED_MODELS = Message("No cached models for {provider}")
 LOGIN_CACHE_EDIT_CANCELLED = Message("Model cache edit cancelled. {provider} unchanged.")
 LOGIN_CACHED = Message("Cached {models} for {provider}")
-LOGOUT_FAILED = Message("Logout failed: {error}", GRAVE)
+LOGOUT_FAILED = Message("Logout failed: {error}")
 LOGGED_OUT = Message("Logged out of {provider}")
-NOT_LOGGED_IN = Message("Not logged in to {provider}", GRAVE)
-OAUTH_OPENING = Message("Opening the browser for {service} login. If it does not open, visit:\n{url}")
-OAUTH_PASTE_CALLBACK = Message(
-    "Over SSH, or if the callback page cannot connect, paste the full callback URL here and press Enter.")
-OAUTH_BAD_CALLBACK = Message("Callback URL invalid or its state does not match. Paste the URL from this login attempt.",
-                             WARN)
-OAUTH_DEVICE = Message("{service} login\n  URL:  {url}\n  Code: {code}\nWaiting for authorization.")
-OAUTH_REFRESH_NOT_SAVED = Message("Refreshed {service} login not saved: {error}", WARN)
+NOT_LOGGED_IN = Message("Not logged in to {provider}")
 
 # --- just install ------------------------------------------------------------
 INSTALL_ASK_KEY = Message("{name} for {use}. Enter skips")
 INSTALL_KEY_SAVED = Message("Saved {name} to {path}")
-INSTALL_KEYS_MISSING = Message("Not set: {names}. Run just install in a terminal to save them to {path}", WARN)
-INSTALL_MODEL_UNROUTED = Message("Default model {model} has no provider to run on", WARN)
-INSTALL_MODEL_UNSET = Message("No default model is set", WARN)
+INSTALL_KEYS_MISSING = Message("Not set: {names}. Run just install in a terminal to save them to {path}")
+INSTALL_MODEL_UNROUTED = Message("Default model {model} has no provider to run on")
+INSTALL_MODEL_UNSET = Message("No default model is set")
 INSTALL_LOGINS = Message("Saved logins: {logins}")
 INSTALL_LOGIN_ROW = Message("{provider} with {models}", banner=False)
-INSTALL_ASK_MODEL = Message("p picks a login and a model, a adds a provider, Enter skips")
 INSTALL_ASK_PROVIDER = Message("a adds a provider, Enter skips")
 
 # --- Tool binaries -----------------------------------------------------------
@@ -746,9 +1070,9 @@ TOOL_PRESENT_BREW = Message("Present: {name} from Homebrew at {path}")
 TOOL_PRESENT = Message("Present: {name} {version} at {path}, sha256 {sha}")
 TOOL_DOWNLOAD = Message("Download: {name} {version}, {asset}\n  {url}")
 TOOL_INSTALLED = Message("{state}: {path}. Asset sha256 {asset_sha}, executable sha256 {sha}")
-TOOL_INSTALL_FAILED = Message("Tool install failed: {error}", GRAVE)
+TOOL_INSTALL_FAILED = Message("Tool install failed: {error}")
 URLLIB_FALLBACK = Message(
-    "aria2c unavailable. {purpose} falls back to urllib: no segmented transfer, no resume across attempts.", WARN)
+    "aria2c unavailable. {purpose} falls back to urllib: no segmented transfer, no resume across attempts.")
 
 # --- Moving into ~/.js -------------------------------------------------------
 
@@ -758,8 +1082,8 @@ HOME_REMOVED_DUPLICATE = Message("Removed {source}: identical to {target}")
 HOME_WOULD_REMOVE_DUPLICATE = Message("Would remove {source}: identical to {target}")
 HOME_REMOVED_EMPTY = Message("Removed empty {source}")
 HOME_WOULD_REMOVE_EMPTY = Message("Would remove empty {source}")
-HOME_REFUSED = Message("Refused {source}: {reason}", WARN)
-HOME_WOULD_REFUSE = Message("Would refuse {source}: {reason}", WARN)
+HOME_REFUSED = Message("Refused {source}: {reason}")
+HOME_WOULD_REFUSE = Message("Would refuse {source}: {reason}")
 HOME_KIND_LINK = Message("a symlink")
 HOME_KIND_DIR = Message("a directory")
 HOME_KIND_FILE = Message("a file")
@@ -773,16 +1097,16 @@ HOME_TARGET_OTHER_KIND = Message("{target} already exists as {kind}. This is {so
 HOME_OLD_COPY_LEFT = Message("copied to {target}, but the old copy is left: {error}")
 HOME_NOT_MOVED = Message("not moved to {target}: {error}")
 HOME_NOT_A_DIR = Message("is {kind}, not a directory. Move it by hand")
-HOME_MIGRATION_FAILED = Message("Move into {home} failed: {error}", GRAVE)
-HOME_NOTHING_TO_MOVE = Message("Nothing to move into {home}.", banner=False)
+HOME_MIGRATION_FAILED = Message("Move into {home} failed: {error}")
+HOME_NOTHING_TO_MOVE = Message("Nothing to move into {home}.")
 HOME_RELINKED = Message("Relinked {source} to {target}")
 HOME_WOULD_RELINK = Message("Would relink {source} to {target}")
 HOME_CONVERTED = Message("Converted {source}: {reason}")
 HOME_WOULD_CONVERT = Message("Would convert {source}: {reason}")
 HOME_DROPPED = Message("Dropped from {source}, matching no tool: {reason}")
 HOME_WOULD_DROP = Message("Would drop from {source}, matching no tool: {reason}")
-HOME_LEFT = Message("Left {source}: {reason}", WARN)
-HOME_WOULD_LEAVE = Message("Would leave {source}: {reason}", WARN)
+HOME_LEFT = Message("Left {source}: {reason}")
+HOME_WOULD_LEAVE = Message("Would leave {source}: {reason}")
 HOME_REFILED = Message("Filed {reason} from {source} by start directory")
 HOME_WOULD_REFILE = Message("Would file {reason} from {source} by start directory")
 HOME_SESSION_IN_USE = Message("a js process has it open")
@@ -805,18 +1129,18 @@ AGENT_MIGRATE_SYMLINK = Message("symlink to {target}; convert it where it lives"
 
 # --- Session files -----------------------------------------------------------
 
-SESSION_AMBIGUOUS = Message("Session {session} is in more than one folder: {paths}")
-SESSION_NOT_RESERVED = Message("No free session name in {folder}")
+SESSION_AMBIGUOUS = Message("Session {session} is in more than one directory: {paths}")
+SESSION_NOT_RESERVED = Message("No free session name in {directory}")
 SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
-    "History may be incomplete.", WARN)
+    "History may be incomplete.")
 
 # --- The ex line -------------------------------------------------------------
 
 BUFFER_WRITTEN = Message("Buffer written to {path}. Not sent.")
-EX_UNKNOWN = Message("Not an editor command, js command or program: {verb}", GRAVE)
-EX_FAILED = Message(":{verb}: {error}", GRAVE)
+EX_UNKNOWN = Message("Not an editor command, js command or program: {verb}")
+EX_FAILED = Message(":{verb}: {error}")
 
 # --- The keys file -----------------------------------------------------------
 
@@ -826,50 +1150,56 @@ KEYS_UNBIND_USAGE = Message("unbind needs a key: unbind KEY...")
 KEYS_UNKNOWN_ACTION = Message("unknown action: {action}")
 KEYS_UNKNOWN_VERB = Message("unknown command {verb!r}: expected bind or unbind")
 KEYS_UNREADABLE = Message("{path} not read: {error}")
+# Under the input line after the interrupt or eof key arms the exit.
+EXIT_ARMED = Message("Press {key} again to exit", banner=False)
 
 # --- Agents, tools, skills, settings at load time ----------------------------
 
-TOOLSTATS_NO_SESSION = Message("toolstats: no session found.", GRAVE)
-TOOLDIAG_NO_TOOLS = Message("tooldiag: the surface matched no tools.", GRAVE)
-AGENT_DIR_UNREADABLE = Message("Agent dir {path} unreadable: {error}. Skipped.", WARN)
-AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool. Not exposed as a tool. Rename {root}/{agent}.",
-                             WARN)
-TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.", WARN)
-TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.", WARN)
-DESCRIPTION_PROBLEM = Message("description: {problem}", WARN)
+TOOLSTATS_NO_SESSION = Message("toolstats: no session found.")
+TOOLDIAG_NO_TOOLS = Message("tooldiag: the surface matched no tools.")
+AGENT_DIR_UNREADABLE = Message("Agent dir {path} unreadable: {error}. Skipped.")
+AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool. Not exposed as a tool. Rename {root}/{agent}.")
+TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.")
+TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.")
+TOOL_PROFILE_LEAVES_NO_TOOLS = Message("Tool profile {match!r} leaves no tools. Ignored.")
+DESCRIPTION_PROBLEM = Message("description: {problem}")
 DESCRIPTION_NESTED_BLOCK = Message("{label}nested {{{{#if}}}}/{{{{#unless}}}} block is unsupported. Kept as written.")
 DESCRIPTION_BLOCK_NAMES_NO_TOOL = Message("{label}conditional block names no tool. Kept as written.")
 DESCRIPTION_UNBALANCED = Message("{label}unbalanced {{{{#if}}}}/{{{{#unless}}}} tag. Kept as written.")
 SKILL_SKIPPED = Message("Skill {path} skipped: {error}")
 SKILL_DUPLICATE = Message("Skill {path} skipped: {root} already has a skill named {name!r} at {prior}")
 SKILL_OVERRIDES = Message("Skill {name!r} at {path} is used in place of {prior}")
-ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.", WARN)
-DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}", WARN)
+ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.")
+DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}")
 # Why a directive was not expanded: the {error} hole of DIRECTIVE_NOT_EXPANDED.
 DIRECTIVE_UNKNOWN_SUBSYSTEM = Message("Unknown inline subsystem {name!r}. Known: {known}")
 DIRECTIVE_CODE_OFF = Message(
     "Inline {name!r} runs code, and inline code is off: "
-    "--im-a-pussy, set runtime.allow_inline_code off or JS_ALLOW_INLINE_CODE=0")
+    "--im-a-pussy, set INLINE_CODE off or JS_INLINE_CODE=0")
 DIRECTIVE_ENV_NEEDS_NAME = Message("!{{env ...}} needs a variable name. Got {body!r}")
 DIRECTIVE_NOT_ON_PATH = Message("{label}: {program!r} not found on PATH")
 DIRECTIVE_TIMED_OUT = Message("{label}: timed out after {seconds}s")
 DIRECTIVE_EXITED = Message("{label}: exited {code}: {stderr}")
 DIRECTIVE_EXITED_SILENT = Message("{label}: exited {code}. No stderr")
-FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}", GRAVE)
-FLIGHT_NOTICE = Message("Compaction {event} {id}: operation={operation} {detail} flight={path}")
+DIRECTIVE_EXITED_OUTPUT_USED = Message("{label}: exited {code}. Its output was used")
+FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}")
+FLIGHT_NOTICE = Message("Compaction {stage} {id}: operation={operation} {detail} flight={path}")
 
 # --- Settings verbs ----------------------------------------------------------
 
 UNKNOWN_SETTING = Message("Unknown setting: {key}")
 EXTRA_UNKNOWN_SETTING = Message("--extra: unknown setting: {key}")
-SETTING_VALUE = Message("{key} = {value}", banner=False)
-SETTING_ALREADY_UNSET = Message("{key} = {value}  Already unset.", banner=False)
+SETTING_IS = Message("The value of {key} is: {value}")
+SETTING_CHANGED = Message("Value of {key} changed to: {value}")
+SETTING_ROW = Message("{key} {value}")
 SETTING_LIVE = Message("{line}  live: {source}", banner=False)
-NO_EVENT_HANDLERS = Message("No event handlers.", banner=False)
+NO_EVENT_HANDLERS = Message("No event handlers.")
 ON_NEEDS_TWO = Message("on needs an event and a handler.")
+ON_HANDLER_NEEDS_REPL = Message("on {event}: {command} needs the REPL and does not run outside it.")
 SET_NEEDS_TWO = Message("set needs a key and a value: {line!r}")
 EXPECTED_ONE_OF = Message("expected {choices}")
 EXPECTED_COLOUR = Message("expected a #rrggbb colour, got {value!r}")
+EXPECTED_COLOUR_VALUE = Message("expected #rrggbb, a palette slot 00-98 or $NAME, several joined by |, got {value!r}")
 EXPECTED_KEY = Message("expected prompt_toolkit key names such as c-v or escape v, got {value!r}")
 EXPECTED_URL = Message("expected a URL starting with http:// or https://, got {value!r}")
 EXPECTED_INTEGER = Message("expected an integer")
@@ -879,11 +1209,18 @@ EXPECTED_NONNEGATIVE_INTEGER = Message("expected an integer >= 0")
 EXPECTED_NUMBER = Message("expected a number")
 EXPECTED_NONNEGATIVE_NUMBER = Message("expected a number >= 0")
 EXPECTED_POSITIVE_NUMBER = Message("expected a number > 0")
-EXPECTED_PROBABILITY = Message("expected a number from 0 to 1")
+EXPECTED_FINITE_NUMBER = Message("expected a finite number")
+EXPECTED_RANGE = Message("expected a number from {low} to {high}")
+EXPECTED_AT_LEAST = Message("expected a number >= {low}")
 EXPECTED_JSON = Message("expected a JSON value")
 EXPECTED_JSON_OBJECT = Message("expected a JSON object")
 EXPECTED_ENV_NAMES = Message("expected a JSON list of non-empty environment-variable names")
+EXPECTED_SKILL_NAMES = Message("expected a JSON list of non-empty skill names")
 EXPECTED_JSON_LIST = Message("expected a JSON list")
+EXPECTED_EFFORT_WORD = Message("expected one word, got {value!r}")
+EXPECTED_TEMPLATE_KWARGS = Message("expected key=value entries split by ',', got {entry!r}")
+TEMPLATE_KWARGS_TWICE = Message("{key!r} is given twice")
+EXPECTED_STRING_LIST = Message("expected a JSON list of strings")
 EXPECTED_ALIAS_PROFILES = Message("expected profiles with match and aliases")
 EXPECTED_NONEMPTY_ALIASES = Message("expected non-empty aliases")
 EXPECTED_NONEMPTY_MATCH = Message("expected non-empty match values")
@@ -903,21 +1240,21 @@ NO_PROVIDER_SET = Message("No provider set.")
 PROVIDER_NOT_LOGGED_IN = Message(
     "Provider {provider!r} is not logged in. Run `js --login {provider}`. `js --list-models` lists what is runnable.")
 MODEL_UNCONFIGURED = Message(
-    "Model {model!r} has no provider and no login. Set provider.id or JS_PROVIDER, run `js --login`, "
+    "Model {model!r} has no provider and no login. Set PROVIDER or JS_PROVIDER, run `js --login`, "
     "or prefix a logged-in provider. `js --list-models` lists what is runnable.")
 PROVIDER_NEEDS_KEY = Message(
-    "Provider {provider!r} needs an API key. Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Provider {provider!r} needs an API key. Run `js --login {provider}` or `set API_KEY <value>`.")
 PROVIDER_NO_AUTH_METHOD = Message(
     "Provider {provider!r} needs an API key: the SDK found no way to authenticate. "
-    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Run `js --login {provider}` or `set API_KEY <value>`.")
 PROVIDER_UNKNOWN = Message(
     "Unknown provider {provider!r}. Run `js --login {provider}`. `js --list-models` lists what is runnable.")
 PROVIDER_AUTH_FAILED = Message(
     "Provider {provider!r} authentication failed: {detail}. "
-    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Run `js --login {provider}` or `set API_KEY <value>`.")
 PROVIDER_NOT_CONFIGURED = Message(
     "Provider {provider!r} is not configured: {detail}. "
-    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Run `js --login {provider}` or `set API_KEY <value>`.")
 
 # --- Tool policy table (/tools) ----------------------------------------------
 
@@ -948,29 +1285,53 @@ TOOL_CHAIN_BAN = Message("ban {tool}: {patterns}", banner=False)
 
 # --- Status bar --------------------------------------------------------------
 
-STATUS_COMPACTING = Message("compacting")
-STATUS_CACHE = Message("cache {pct}%")
+# Each field of the status bar, drawn only when it has a value.
+STATUS_CLOCK = Message("[{clock}]", banner=False)
+STATUS_ROUTE = Message("{route}", banner=False)
+STATUS_CONTEXT = Message("ctx {tokens}", banner=False)
+STATUS_SPINNER = Message("{spinner}", banner=False)
+STATUS_PHASE = Message("{phase}", banner=False)
+STATUS_REPLY = Message("out {tokens}", banner=False)
+STATUS_WHO = Message("{who}", banner=False)
+STATUS_CACHE = Message("cache {pct}%", banner=False)
+STATUS_COST = Message("{cost}", banner=False)
+STATUS_COMPACTING = Message("compacting", banner=False)
+STATUS_WINDOW = Message("[{number}]", banner=False)
+STATUS_ACTIVITY = Message("[Act: {numbers}]", banner=False)
+
+# --- Reasoning ---------------------------------------------------------------
+
+REASONING_HEADING = Message("reasoning", banner=False)
+REASONING_COUNT = Message("{tokens} tok", banner=False)
+REASONING_EXPAND = Message("  {key} to expand", banner=False)
 
 # --- Tool exchanges ----------------------------------------------------------
 
 TOOL_ARGS_UNPARSED = Message("<arguments are not a JSON object>")
-TOOL_MORE_LINES = Message("... +{count} lines")
+TOOL_MORE_LINES = Message("… {count} lines hidden")
+TOOL_TRIES_LEFT = Message("{left} of {allowed} tries left")
+TOOL_NO_OUTPUT = Message("no output")
+TOOL_RUNNING = Message("running {elapsed}")
+# Before a call's last word on the row under its header.
+TOOL_RESULT_LEAD = Message("⎿")
+# After a folded tool row on the screen: the key that unfolds it.
+TOOL_EXPAND = Message("{key} to expand", banner=False)
 
 # --- The kernel panel --------------------------------------------------------
 
 KERNEL_MORE_LINES = Message("... {count} more lines. The model got the full text.")
 KERNEL_MORE_CODE_LINES = Message("... {count} more lines of code.")
 KERNEL_EVENT_MORE_LINES = Message("... {count} more lines.")
-KERNEL_CELL = Message("Kernel cell {cell}: ")
+KERNEL_CELL = Message("Kernel cell {cell}:")
 KERNEL_CELL_INTERRUPTED = Message("Cell interrupted.")
 KERNEL_STOPPED = Message("SIGINT sent. Namespace intact.")
 KERNEL_PANEL_TITLE = Message("Kernel cell {cell}")
 KERNEL_STARTED = Message("Kernel started in {cwd}")
 KERNEL_RESTARTED = Message("Kernel restarted. Namespace cleared.")
-DEFAULTS_MISSING = Message("Defaults file missing: {path}", GRAVE)
+DEFAULTS_MISSING = Message("Defaults file missing: {path}")
 DEFAULTS_NOT_A_SET_LINE = Message("not a set line")
-DEFAULTS_BAD_LINE = Message("{location}: {error}", GRAVE)
-DEFAULTS_UNLISTED = Message("{path}: no line for {keys}", GRAVE)
+DEFAULTS_BAD_LINE = Message("{location}: {error}")
+DEFAULTS_UNLISTED = Message("{path}: no line for {keys}")
 
 # --- The model picker --------------------------------------------------------
 
@@ -985,6 +1346,15 @@ PICK_FETCHING = Message("Fetching…")
 PICK_PROVIDERS = Message("Providers")
 PICK_MODELS = Message("Models")
 PICK_PROVIDER_ROW = Message("● {provider}  {name}")
+
+# --- The skill picker ----------------------------------------------------------
+
+SKILLS_TITLE = Message(" SKILLS  {on} of {total} on", banner=False)
+SKILLS_KEYS = Message("space=on/off  enter=keep  /=search  esc=close", banner=False)
+SKILLS_QUERY_KEYS = Message("enter=keep  esc=clear", banner=False)
+SKILLS_NONE = Message("No skills match.", banner=False)
+SKILLS_ON = Message("[x]", banner=False)
+SKILLS_OFF = Message("[ ]", banner=False)
 
 # --- The session picker --------------------------------------------------------
 
@@ -1009,14 +1379,12 @@ SESSIONS_Q_DIR_ONE = Message("dir one level under {path}", banner=False)
 SESSIONS_Q_DIR_ANY = Message("dir {path} and anywhere under it", banner=False)
 SESSIONS_Q_MODE = Message("mode {mode}", banner=False)
 SESSIONS_Q_MODEL = Message("model {pattern}", banner=False)
-SESSIONS_Q_TAG = Message("tag {pattern}", banner=False)
 SESSIONS_Q_NOTHING = Message("every session", banner=False)
 SESSIONS_MESSAGES_TITLE = Message(" MESSAGES  {when} · {agent} · {dir} · {turns}", banner=False)
 SESSIONS_MESSAGES_KEYS = Message("enter=branch here  r=resume at end  esc=back", banner=False)
 SESSIONS_MESSAGES_NONE = Message("This session has no messages.", banner=False)
 SESSIONS_INFO_TITLE = Message(" INFO  {when} · {agent} · {dir}", banner=False)
 SESSIONS_INFO_KEYS = Message("enter=resume  esc=back", banner=False)
-SESSIONS_INFO_ROW = Message("  {label:<12} {value}", banner=False)
 SESSIONS_INFO_FILE = Message("file", banner=False)
 SESSIONS_INFO_TITLE_ROW = Message("title", banner=False)
 SESSIONS_INFO_AGENT = Message("agent", banner=False)
@@ -1035,18 +1403,11 @@ SESSIONS_INFO_BRANCH = Message("branched", banner=False)
 SESSIONS_INFO_BRANCH_VALUE = Message("from {parent} at {point}", banner=False)
 SESSIONS_INFO_PARENT = Message("subagent of", banner=False)
 SESSIONS_INFO_KIND = Message("kind", banner=False)
-SESSIONS_INFO_TAGS = Message("tags", banner=False)
-SESSIONS_NEEDS_TERMINAL = Message("The session picker needs a terminal. Name a session: --session NAME.", WARN)
+SESSIONS_NEEDS_TERMINAL = Message("The session picker needs a terminal. Name a session: --session NAME.")
 SESSIONS_ALREADY_HERE = Message("Already in that session.")
 SESSIONS_SWITCHING = Message("Switching to session {name} in {dir}")
-SESSIONS_DIR_GONE = Message("The session's directory {dir} is gone. Resuming in {cwd}.", WARN)
+SESSIONS_DIR_GONE = Message("The session's directory {dir} is gone. Resuming in {cwd}.")
 SESSIONS_BRANCHED = Message("Branched {parent} at {point} into {name}")
-
-# Session tags (js.session_tags). The sweep runs detached; these are the lines
-# it appends to ~/.js/logs/tags.log.
-TAGS_FILE_UNREADABLE = Message("{path}: tag list not read: {error}", banner=False)
-TAGS_FILE_SHAPE = Message("{path}: expected one `name: description` line per tag", banner=False)
-TAGS_LOG_FAILED = Message("{when} {session}: tagging stopped: {error}", banner=False)
 
 # --- The commit helper ---------------------------------------------------------
 
@@ -1065,8 +1426,8 @@ COMMIT_HELPER_HELP = Message(
     "  commit <message-file> [--amend]\n"
     "      Commit the staged changes with the message read from a file.", banner=False)
 COMMIT_HELPER_USAGE = Message("Usage: python3 -m js.commit_helper {usage}", banner=False)
-GIT_NOT_A_REPO = Message("Not a git repository: {repo}", GRAVE)
-GIT_FAILED = Message("Git failed in {repo}: git {argv}: {detail}", GRAVE)
+GIT_NOT_A_REPO = Message("Not a git repository: {repo}")
+GIT_FAILED = Message("Git failed in {repo}: git {argv}: {detail}")
 GIT_EXIT = Message("exit {code}")
 SURVEY_HEADING = Message("=== Survey: {repo} ===", banner=False)
 SURVEY_BRANCH = Message("Branch: {branch}", banner=False)
@@ -1091,16 +1452,557 @@ SURVEY_LOG = Message("\n-- Recent log --", banner=False)
 SURVEY_NO_HISTORY = Message("No history.", banner=False)
 STAGED_WHOLE = Message("Staged whole file: {path}")
 STAGED_HUNKS = Message("Staged {path}: hunks {hunks} of {total}")
-STAGE_NO_CHANGES = Message("{path} has no pending changes.", GRAVE)
+STAGE_NO_CHANGES = Message("{path} has no pending changes.")
 STAGE_UNTRACKED = Message(
-    "{path} is untracked. Use `stage {path} all`. Hunk specs work only for tracked text diffs.", GRAVE)
-STAGE_BAD_SPEC = Message("Hunks must be comma-separated numbers or all. Got {spec!r}.", GRAVE)
+    "{path} is untracked. Use `stage {path} all`. Hunk specs work only for tracked text diffs.")
+STAGE_BAD_SPEC = Message("Hunks must be comma-separated numbers or all. Got {spec!r}.")
 STAGE_NO_HUNKS = Message(
     "No unstaged text hunks in {path}. A binary, rename or mode change, or already staged: "
-    "use `stage {path} all`.", GRAVE)
-STAGE_OUT_OF_RANGE = Message("Hunks {bad} out of range. {path} has {count}.", GRAVE)
-STAGE_APPLY_FAILED = Message("{detail}\nFallback: `stage {path} all`", GRAVE)
+    "use `stage {path} all`.")
+STAGE_OUT_OF_RANGE = Message("Hunks {bad} out of range. {path} has {count}.")
+STAGE_APPLY_FAILED = Message("{detail}\nFallback: `stage {path} all`")
 GIT_APPLY_FAILED = Message("git apply failed")
-MESSAGE_FILE_UNREADABLE = Message("Message file not read: {error}", GRAVE)
-MESSAGE_FILE_EMPTY = Message("Commit message file is empty: {path}", GRAVE)
+MESSAGE_FILE_UNREADABLE = Message("Message file not read: {error}")
+MESSAGE_FILE_EMPTY = Message("Commit message file is empty: {path}")
 COMMITTED = Message("Committed.")
+
+# --- /fset ---------------------------------------------------------------------
+
+FSET_UNKNOWN = Message("Unknown /fset entry: {name}")
+# A refusal of a value for NAME, the reason worded by its own format.
+FSET_REFUSED = Message("{name}: {error}")
+FSET_NO_CODE_STYLE = Message("no Pygments style {value!r}")
+FSET_MARK_MODIFIER = Message("a mark takes no variation selector or skin-tone modifier")
+FSET_THEME_NOT_PALETTE = Message("{path}: {name} is not a palette slot's #rrggbb; a theme sets PALETTE_00 to PALETTE_98")
+FSET_BAD_CODE = Message("{code!r} is not a format code: a format takes %Cnn, %C, %G, %%, $N, $N-, $* and $$")
+FSET_BAD_SLOT = Message("{code} names no palette slot: slots are 00 to 98")
+FSET_BAD_HOLE = Message("{hole} names no word this event passes: its words are $0 to ${last}")
+FSET_NO_HOLES = Message("{hole} names no word: this event passes none")
+FSET_VALUE = Message("{name}: {value}")
+FSET_EMPTY = Message("{name}:")
+
+
+COMPACTING_ROLE = Message("Compacting", banner=False)
+
+CLEARING_OVERFLOW_START = Message("provider overflow; round={round_}; keeping newest {keep_recent} tool results", banner=False)
+
+CLEARING_OVERFLOW_RESULT = Message("cleared {cleared} old tool results; reclaimed {reclaimed} chars", banner=False)
+
+CLEARING_NO_RESULTS = Message("no eligible tool results; summary recovery may follow", banner=False)
+
+CLEARING_BUDGET_START = Message("{value} context budget; keeping newest {keep_recent} tool results", banner=False)
+
+CLEARING_BUDGET_RESULT = Message("cleared {total} old tool results; reclaimed {reclaimed} chars", banner=False)
+
+CLEARING_STILL_OVER_BUDGET = Message("; still over budget", banner=False)
+
+SUMMARY_RESPONSE_INCOMPLETE = Message("summary response incomplete: {value}", banner=False)
+
+SUMMARY_RESPONSE_NO_TEXT = Message("summary response did not contain a completed text summary", banner=False)
+
+COMPACTION_FLIGHT_START = Message("model={compact_model} trigger={value} messages={original_len}", banner=False)
+
+STREAM_IDLE_NO_BYTES = "no response bytes for {seconds:g}s after the first (STREAM_IDLE_TIMEOUT)"
+FIRST_BYTE_NONE = "no response byte {seconds:g}s after the request was sent (FIRST_BYTE_TIMEOUT)"
+CONNECT_TIMED_OUT = "no connection after {seconds:g}s (CONNECT_TIMEOUT)"
+
+RESPONSES_STREAM_FAILED = Message("OpenAI Responses stream failed", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_A_NUMBER = Message("sampling.{key} must be a number", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER = Message("sampling.{key} must be a finite number", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_AN_INTEGER = Message("sampling.{key} must be an integer", banner=False)
+
+SAMPLING_MUST_BE_A_LIST_OF_STRINGS = Message("sampling.{key} must be a JSON list of strings", banner=False)
+
+EVENT_HANDLER_COMMAND_UNSUPPORTED = Message("unsupported event handler command: {value}", banner=False)
+
+SETTING_SOURCE_LOGIN = Message("login {provider_id}", banner=False)
+
+SETTING_SOURCE_SESSION = Message("session", banner=False)
+
+SETTING_SOURCE_PROVIDER_DEFAULT = Message("provider default", banner=False)
+
+SETTING_SOURCE_ENVIRONMENT_VARIABLE = Message("env {env_var}", banner=False)
+
+SETTING_SOURCE_ENVIRONMENT = Message("env", banner=False)
+
+SETTING_SOURCE_AGENT_SAMPLING = Message("agent sampling", banner=False)
+
+SETTING_SOURCE_LOGIN_LAYER = Message("login {provider_id} {source}", banner=False)
+
+SETTING_SOURCE_UNSET = Message("unset", banner=False)
+
+LOOP_LOOP_EXPECTS_A_POSITIVE_TURN_COUNT_MINUTES = "--loop expects a positive turn count, minutes (M), or hours (H)"
+
+LOOP_ATTEMPTS_EXHAUSTED = Message("STOP: {completed} completed turns after {attempts} attempts.", banner=False)
+
+LOOP_UNLIMITED = "unlimited"
+
+LOOP_ATTEMPT = Message("\n=== js loop attempt {attempts}, completed {completed}/{value} ===", banner=False)
+
+LOOP_CHILD_STOPPED = Message("STOP: child exited {code}; {completed} turns completed.", banner=False)
+
+LOOP_CHILD_RETRY = "Child exited {code}; retrying in {delay}s ({failures}/{failure_limit} consecutive failures)."
+
+LOOP_STOPPED = Message("Stopped by operator; owned child has exited.", banner=False)
+
+DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE = Message("fenced directive body carries a ``` line; the closing fence is ambiguous, so the directive is not run - indent the nested fence four spaces or split the directives", banner=False)
+
+DIRECTIVE_ = Message("!{{{name}}}: {__name__}: {exc}", banner=False)
+
+DIRECTIVE_UNREADABLE_AS_TEXT = "unreadable as text: {path} ({exc})"
+
+SETTING_VALUE_OFF = Message("off", banner=False)
+
+SETTING_VALUE_ON = Message("on", banner=False)
+
+SETTING_VALUE_UNSET = Message("<unset>", banner=False)
+
+SETTING_VALUE_NONE = Message("<none>", banner=False)
+
+SETTING_VALUE_SECRET = Message("<set>", banner=False)
+
+EVENT_HANDLER_REGISTERED = Message("on {prefix}{event} = {handler}", banner=False)
+
+TOOL_SIZE_BYTES = Message("{count} B", banner=False)
+
+TOOL_SIZE_KILOBYTES = Message("{value:.1f} KB", banner=False)
+
+TOOL_SIZE_MEGABYTES = Message("{value:.1f} MB", banner=False)
+
+COUNT_ONE = Message("{number} {noun}", banner=False)
+
+COUNT_MANY = Message("{number} {noun}s", banner=False)
+
+TOOL_EXIT_CODE = Message("exit {exit_code}", banner=False)
+
+TOOL_LINES_OF_TOTAL = Message("{total} of {value}", banner=False)
+
+TOOL_LINES_SHOWN = Message("{shown} shown", banner=False)
+
+TOOL_BYTE_RANGE = Message("bytes {value}-{value2}", banner=False)
+
+TOOL_LINE_RANGE = Message("lines {value}-{value2}", banner=False)
+
+TOOL_FOLD_COUNT = Message("{value} {value2}", banner=False)
+
+# What a fold row counts, by a tool's `Presentation.fold_noun`: singular, plural.
+TOOL_FOLD_NOUNS = {
+    "call": ("call", "calls"),
+    "file": ("file", "files"),
+    "search": ("search", "searches"),
+    "page": ("page", "pages"),
+    "look": ("look", "looks"),
+}
+
+TOOL_LINE_NOUN = Message("line", banner=False)
+
+TOOL_EDIT_NOUN = Message("edit", banner=False)
+
+TOOL_FAILURE_TRIES_LEFT = Message("failed · {left} of {allowed} tries left", banner=False)
+
+STATUS_TOOL_EXTRA = Message(" +{tool_extra}", banner=False)
+
+STATUS_TOOL_ELAPSED = Message("{tool}{extra} {elapsed}s", banner=False)
+
+STATUS_FIRST_BYTE_WAIT = Message("waiting for first byte {waited}", banner=False)
+DURATION_SECONDS = Message("{s}s", banner=False)
+DURATION_MINUTES = Message("{m}m{s:02d}s", banner=False)
+DURATION_HOURS = Message("{h}h{m:02d}m{s:02d}s", banner=False)
+
+STATUS_RETRY = Message("retry {n}/{of} in {seconds:.0f}s", banner=False)
+
+KEY_ACTION_SUBMIT = "Send the input line (emacs mode)."
+
+KEY_ACTION_HISTORY_SEARCH = Message("Search every prompt in the history; pressed again, the next older match.", banner=False)
+
+KEY_ACTION_EX_OPEN = "Open the ex line (vi normal mode)."
+
+KEY_ACTION_EX_RUN = Message("Run the ex line.", banner=False)
+
+KEY_ACTION_EX_CANCEL = Message("Close the ex line without running it.", banner=False)
+
+KEY_ACTION_INTERRUPT = Message("Cancel the running turn and drop queued prompts; with none, clear the line, and pressed again, quit.", banner=False)
+KEY_ACTION_CANCEL_TURN = Message("Cancel the running turn from the input line.", banner=False)
+
+KEY_ACTION_EOF = Message("Delete the next character; on an empty line, quit; at the end of a line, pressed twice, quit.", banner=False)
+
+KEY_ACTION_SUSPEND = Message("Suspend js to the shell.", banner=False)
+
+KEY_ACTION_REASONING_TOGGLE = Message("Collapse or expand reasoning blocks.", banner=False)
+
+KEY_ACTION_REDRAW = Message("Redraw the screen.", banner=False)
+
+KEY_ACTION_SCROLL_UP = Message("Scroll the output up a page.", banner=False)
+
+KEY_ACTION_SCROLL_DOWN = Message("Scroll the output down a page.", banner=False)
+
+KEY_ACTION_COMPLETE = Message("Complete the word at the cursor, or cycle completions.", banner=False)
+
+KEY_ACTION_WINDOW = Message("Show window {n}; window 1 is the main conversation.", banner=False)
+
+KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
+
+KEY_ESCAPE = Message("Esc", banner=False)
+
+
+def describe_keys(sequence: tuple[str, ...]) -> str:
+    """A key sequence as the screen names it: `c-o` is Ctrl-O."""
+    def one(key: str) -> str:
+        if key.startswith("c-") and len(key) == 3:
+            return KEY_CONTROL_PREFIX.words() + key[2:].upper()
+        return {"escape": KEY_ESCAPE.words()}.get(key, key)
+
+    return " ".join(one(key) for key in sequence)
+
+PASTE_MARKER_LINES = "[paste #{n} +{lines} lines]"
+
+PASTE_MARKER_CHARACTERS = "[paste #{n} {value} chars]"
+
+IMAGE_PLACEHOLDER = "[image #{n}]"
+
+CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS = "agent id must contain only letters, numbers, '_' or '-'"
+
+CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL = "session path must be an existing .jsonl file: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_INSIDE = "session path must be inside {root}: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_INSIDE_273 = "session path must be inside {sessions_dir}: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE = "session path must be a .jsonl file: {session}"
+
+CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE = "no session matches {session}"
+
+CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY = "session parent must be a directory: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307 = "session path must be a .jsonl file inside {sessions_dir}: {session}"
+
+EXPECTED_SHELL_QUOTED_COMMAND = Message("expected a shell-quoted command: {exc}", banner=False)
+
+EXPECTED_COMMAND = Message("expected a command", banner=False)
+
+SETTING_NOT_A_HEADER_WANT_NAME_VALUE = "not a header (want 'Name: value'): {entry}"
+
+SETTING_EMPTY_KEY = "empty key: {key!r}"
+
+LOGIN_DEFAULT_NOT_NAME_VALUE_WITH_NAME_ONE_OF = "not NAME=value with NAME one of {value}: {entry}"
+
+LOGIN_DEFAULT_ = "{key}: {error}"
+
+LOGIN_STORE_HELD_BY_ANOTHER_PROCESS_FOR_S = "{store} held by another process for {timeout_s:g}s"
+
+LOGIN_STORE_EXISTS_BUT_FAILED_TO_PARSE_AS_TOML = "{path} exists but failed to parse as TOML ({exc}); refusing to overwrite it. Fix or remove the file by hand, then retry."
+
+LOGIN_STORE_MUST_BE_A_STRING_NOT = "{name} must be a string, not {__name__}"
+
+LOGIN_STORE_PROVIDER_ID_MUST_BE_A_NON_EMPTY = "provider_id must be a non-empty string, not {stored_id!r}"
+
+LOGIN_STORE_PROVIDER_HEADERS_MUST_BE_A_TABLE = "provider_headers must be a table"
+
+LOGIN_STORE_DEFAULTS_MUST_BE_A_TABLE = "defaults must be a table"
+
+LOGIN_STORE_MODEL_DEFAULTS_MUST_BE_A_TABLE_OF = "model_defaults must be a table of tables"
+
+LOGIN_STORE_ = "{path}: {exc}"
+
+LOGIN_STORE__911 = "{value}: {exc}"
+
+LOGIN_SHAPE_CHAT_COMPLETIONS = "OpenAI-compatible chat completions"
+
+LOGIN_SHAPE_RESPONSES = "OpenAI Responses-style endpoint"
+
+LOGIN_SHAPE_ANTHROPIC = "Anthropic-compatible endpoint"
+
+LOGIN_SHAPE_PROXY = "CLIProxyAPI / OpenAI-compatible proxy with optional headers"
+
+LOGIN_PICKER_ROW = "{cursor} {box}{label}{tag}"
+
+LOGIN_PROVIDER_ROW = "{pid:<28} {name} [{source}]"
+
+LOGIN_API_SHAPE_ROW = "{pid}  {desc}"
+
+LOGIN_SAVED_PROVIDER_DETAIL = "{provider_id} — {value} [saved]"
+
+LOGIN_PICKER_CURSOR = ">"
+
+LOGIN_PICKER_SELECTED = "[x] "
+
+LOGIN_PICKER_UNSELECTED = "[ ] "
+
+LOGIN_SOURCE_SAVED = Message("saved", banner=False)
+
+LOGIN_SOURCE_ENVIRONMENT = Message("env", banner=False)
+
+LOGIN_SOURCE_REGISTRY = Message("registry", banner=False)
+
+LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT = "needs an interactive terminal (stdin and stdout must be a TTY)"
+
+
+PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING = "provider {id!r} has no base URL configured; refusing to fall back to the {sdk!r} SDK default endpoint and credentials. Run `js --login {id2}` or {hint}."
+
+PROVIDER_ENDPOINT_ENV_HINT = Message("set {value}", banner=False)
+
+PROVIDER_ENDPOINT_CONFIGURE_HINT = Message("configure its base URL", banner=False)
+
+ENDPOINT_EMPTY = "empty endpoint URL; expected [wire+]scheme://model[:key]@host/path"
+
+ENDPOINT_BRACKET = "'[' in {spec!r}: the wire goes in the scheme (anthropic+https://...), effort goes in -r"
+
+ENDPOINT_NO_SCHEME = "no scheme in {spec!r}; expected [wire+]scheme://model[:key]@host/path"
+
+ENDPOINT_UNKNOWN_WIRE = "unknown wire {wire!r}+; wires are {wires}"
+
+ENDPOINT_UNKNOWN_SCHEME = "scheme {scheme!r} in {spec!r}; write http:// or https://"
+
+ENDPOINT_EMPTY_AFTER_COLON = "nothing after the last ':' before '@' in {spec!r}"
+
+ENDPOINT_NO_MODEL_BEFORE_AT = "no model before '@' in {spec!r}"
+
+ENDPOINT_NO_HOST = "no host in {spec!r}"
+
+ENDPOINT_NO_MODEL = "no model in {spec!r} and no JS_MODEL; write scheme://model@host/path"
+
+ENDPOINT_ENV_MODEL_DIFFERS = "model {url!r} in the URL, JS_MODEL is {env!r}"
+
+ENDPOINT_ENV_KEY_DIFFERS = "the key in the URL differs from JS_API_KEY"
+
+ENDPOINT_ENV_PROVIDER_DIFFERS = "wire {wire}+ in the URL is provider {provider!r}, JS_PROVIDER is {env!r}"
+
+ENDPOINT_ENV_NO_MODEL = "no model in the URL and JS_MODEL is unset; write scheme://model@host/path"
+
+TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR = "aria2: no verified release asset for {system} {machine}"
+
+TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH = "Termux: pkg unavailable; restore pkg on PATH and rerun `just install-tool-binaries`"
+
+TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK = "Termux: pkg install failed: {exc}; no desktop fallback"
+
+TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO = "Termux: pkg did not provide executable {candidate}; no desktop fallback"
+
+TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS = "Termux: package executable {candidate} resolves to managed tools"
+
+
+TOOL_TERMUX_OBSCURA_MISSING = "obscura/obscura-worker: no verified Termux release; install native builds separately"
+
+TOOL_VERIFIED_RELEASE_MISSING = "{name}: no verified release asset for {system} {machine}"
+
+TOOL_RELEASE_GLIBC_REQUIRED = "{name}: {value} requires glibc >= {minimum}; found {value2} {version}; no verified musl asset"
+
+TOOL_OBSCURA_RELEASE_MISSING = "obscura: no verified compatible release for {system} {machine} {libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; ARM64 Linux/macOS archives await content verification"
+
+TOOL_ARIA2_HOMEBREW_FAILED = "aria2: Homebrew unavailable or `brew install aria2` failed; install Homebrew (https://brew.sh) and rerun `just install`"
+
+TOOLKIT_INCOMPLETE_PREFIX = "toolkit incomplete:\n"
+
+SESSION_PICKER_HEADER = Message("  {value:<{_WHEN}}  {value2:<{_MODE}}  {value3:<{_AGENT}}  {value4:<{_DIR}} {value5:>{_TURNS}}  {value6:<{_LENGTH}} name", banner=False)
+
+SESSION_COLUMN_WHEN = Message("when", banner=False)
+
+SESSION_COLUMN_MODE = Message("mode", banner=False)
+
+SESSION_COLUMN_AGENT = Message("agent", banner=False)
+
+SESSION_COLUMN_DIR = Message("dir", banner=False)
+
+SESSION_COLUMN_TURNS = Message("turns", banner=False)
+
+SESSION_COLUMN_LENGTH = Message("length", banner=False)
+
+AGENT_MANIFEST_DUPLICATE_FILE_FOR_EXCHANGE = "duplicate {role} file for exchange {number}: {path}"
+
+AGENT_MANIFEST_INVALID_YAML_MANIFEST_IN = "invalid YAML manifest in {path}: {exc}"
+
+AGENT_MANIFEST_YAML_MANIFEST_IN_MUST_BE_A_MAPPING = "YAML manifest in {path} must be a mapping"
+
+AGENT_MANIFEST_IS_NO_LONGER_READ = "{legacy} is no longer read; {_MIGRATE_HINT}"
+
+AGENT_MANIFEST_FRONTMATTER_IN_IS_NO_LONGER_READ = "frontmatter in {path} is no longer read; {_MIGRATE_HINT}"
+
+AGENT_MANIFEST_SKILLS_IN_MUST_BE_A_LIST_OF = "skills in {path} must be a list of family:name entries"
+
+AGENT_MANIFEST_SKILLS_ENTRY_IN_IS_NOT_FAMILY_NAME = "skills entry {item!r} in {path} is not family:name or family:*"
+
+AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING = "frontmatter in {path} is missing a closing ---"
+
+AGENT_MANIFEST_INVALID_YAML_FRONTMATTER_IN = "invalid YAML frontmatter in {path}: {exc}"
+
+AGENT_MANIFEST_FRONTMATTER_IN_MUST_BE_A_MAPPING = "frontmatter in {path} must be a mapping"
+
+AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING = "reasoning in {path} must be a string"
+
+AGENT_MANIFEST_REASONING_IN = "reasoning in {path}: {error}"
+
+AGENT_MANIFEST_MAX_TOKENS_IN_MUST_BE_AN_INTEGER = "max_tokens in {path} must be an integer"
+
+AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING = "sampling frontmatter in {path} must be a mapping"
+
+AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED = "unknown sampling key '{key}' in {path}; allowed: {value}"
+
+AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER = "sampling.{key} in {path} must be a number"
+
+AGENT_MANIFEST_SAMPLING_IN = "sampling.{key} in {path}: {error}"
+
+MODEL_PROFILES_NOT_A_LIST = "{where} must be a list of profiles"
+
+MODEL_PROFILE_NOT_A_MAPPING = "{where} must be a mapping"
+
+MODEL_PROFILE_UNKNOWN_KEYS = "unknown key(s) {keys} in {where}; allowed: {allowed}"
+
+MODEL_PROFILE_MATCH = "match in {where} must be a non-empty string or list of non-empty strings"
+
+MODEL_PROFILE_MODE = "mode in {where} must be one of: {modes}"
+
+MODEL_PROFILE_CORE = "core in {where} must be true or false"
+
+MODEL_PROFILE_PROMPT = "prompt in {where}: {error}"
+
+AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
+
+
+AGENT_MANIFEST_MIGRATION_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
+
+SKILL_FRONTMATTER_FRONTMATTER_IS_MISSING_A_CLOSING = "frontmatter is missing a closing ---"
+
+SKILL_FRONTMATTER_INVALID_YAML_FRONTMATTER = "invalid YAML frontmatter: {value}"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING = "frontmatter must be a mapping"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_STRING = "{field} frontmatter must be a string"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_TRUE_OR_FALSE = "{field} frontmatter must be true or false"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF = "tools frontmatter must be a list of strings"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_CONTAIN_SAFE_NON_EMPTY = "tools frontmatter must contain safe non-empty strings"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_CONTAINS_DUPLICATE = "tools frontmatter contains duplicate {tool!r}"
+
+SKILL_FRONTMATTER_PATHS_FRONTMATTER_MUST_BE_A_LIST_OF = "paths frontmatter must be a list of glob strings"
+
+SKILL_FRONTMATTER_UNSAFE_SKILL_NAME = "unsafe skill name {name!r}"
+
+SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF = "swarm name must be one word of [A-Za-z0-9_.-]: {name!r}"
+
+SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF = "a message kind is one word of [A-Za-z0-9_.-]: {kind!r}"
+
+SWARM_SENT = Message("sent #{seq}", banner=False)
+
+SWARM_POSTED = Message("posted #{id}", banner=False)
+
+SWARM_ROSTER_YOU = '(you)'
+
+SWARM_ROSTER_SILENT = 'no answer at rollcall since {value}'
+
+SWARM_ROSTER_ASLEEP = Message('asleep', banner=False)
+
+SWARM_ROSTER_WORKING = Message('working', banner=False)
+
+SWARM_ROSTER_EMPTY = '(nobody yet)'
+
+SWARM_BOARD_EMPTY = '(no tasks on the board)'
+
+SWARM_BOARD_TAKEN = 'taken by {holder}'
+
+SWARM_BOARD_DONE = 'done by {holder}'
+
+SWARM_BOARD_ROW = '#{id} [{state}] {title}'
+
+SWARM_BOARD_FROM = ' (from {by})'
+
+SWARM_ROSTER_HOLDS = Message('holds {claims}', banner=False)
+
+SWARM_BOARD_OPEN = Message('open', banner=False)
+
+SWARM_RUN_THE_SPEC_NEEDS_A_ROOT_THE_BUS = "the spec needs a root: the bus directory"
+
+SWARM_RUN_THE_SPEC_NAMES_NO_AGENTS = "the spec names no agents"
+
+SWARM_RUN_AGENT_NAMES_REPEAT = "agent names repeat: {value}"
+
+SWARM_RUN_FAILED = "swarm run: {exc}"
+
+EVENT_HOOK_UNKNOWN_EVENT = "unknown event: {clean}"
+
+EVENT_HOOK_ON_NEEDS_A_HANDLER = "on needs a handler"
+
+EVENT_HOOK_UNKNOWN_EVENT_149 = "unknown event: {event}"
+
+AGENT_LOCK_ANOTHER_LOCK_RUN_OF_AGENT_IS_RUNNING = "another --lock run of agent {agent_id!r} is running ({path})"
+
+JAIL_SETTING_EMPTY_BIND = "empty bind: {spec!r}"
+
+JAIL_SETTING_BIND_PATH_MUST_BE_ABSOLUTE_OR_START = "bind path must be absolute or start with ~: {spec!r}"
+
+JAIL_SETTING_JAIL_BIND_IS_A_JSON_LIST_OF = "JAIL_BIND is a JSON list of \"path[:rw]\" strings"
+
+JAIL_SETTING_HIDE_PATH_MUST_BE_ABSOLUTE_OR_START = "hide path must be absolute or start with ~: {spec!r}"
+
+JAIL_SETTING_JAIL_HIDE_IS_A_JSON_LIST_OF = "JAIL_HIDE is a JSON list of path strings"
+
+JAIL_SETTING_C_TARGET_IS_NOT_A_DIRECTORY = "-C target is not a directory: {directory}"
+
+JAIL_SETTING_C_IS_NOT_A_JAIL_NAME_A = "-C / is not a jail; name a directory"
+
+JAIL_SETTING_C_RUNS_TOOLS_UNDER_BUBBLEWRAP_AND_BWRAP = "-C runs tools under bubblewrap, and bwrap is not on PATH; install bubblewrap"
+
+JAIL_SETTING_C_IS_INSIDE_A_PATH_HIDDEN_IN = "-C {directory} is inside {inside}, a path hidden in the jail (JAIL_HIDE)"
+
+JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL = "-C: bubblewrap cannot start a jail: {failure}"
+
+MCP_CONFIG_DUPLICATE_OBJECT_KEY = "duplicate object key: {key!r}"
+
+MCP_CONFIG_MUST_BE_A_JSON_OBJECT = "{setting} must be a JSON object"
+
+MCP_CONFIG_MUST_BE_AN_OBJECT_OF_STRING_VALUES = "{field} must be an object of string values"
+
+MCP_CONFIG_MUST_BE_A_LIST_OF_NON_EMPTY = "{field} must be a list of non-empty strings"
+
+MCP_CONFIG_MCP_SERVERS_MUST_BE_A_JSON_OBJECT = "MCP_SERVERS must be a JSON object"
+
+MCP_CONFIG_MCP_SERVER_NAMES_MUST_BE_NON_EMPTY = "mcp server names must be non-empty strings"
+
+MCP_CONFIG_MCP_SERVER_NAME_HAS_NO_USABLE_CHARACTERS = "mcp server name {name!r} has no usable characters"
+
+MCP_CONFIG_MCP_SERVER_NAMES_AND_NORMALIZE_TO_THE = "mcp server names {previous!r} and {name!r} normalize to the same name"
+
+MCP_CONFIG_MCP_SERVER_MUST_BE_AN_OBJECT = "mcp server {name!r} must be an object"
+
+MCP_CONFIG_MCP_SERVER_HAS_UNKNOWN_FIELD = "mcp server {name!r} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_SERVER_ENABLED_MUST_BE_A_BOOLEAN = "mcp server {name!r}.enabled must be a boolean"
+
+MCP_CONFIG_MCP_SERVER_REQUIRES_EXACTLY_ONE_OF_COMMAND = "mcp server {name!r} requires exactly one of command or url"
+
+MCP_CONFIG_MCP_SERVER_COMMAND_MUST_BE_A_NON = "mcp server {name!r}.command must be a non-empty string"
+
+MCP_CONFIG_MCP_SERVER_HEADERS_IS_ONLY_VALID_WITH = "mcp server {name!r}.headers is only valid with url"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_BE_A_NON = "mcp server {name!r}.url must be a non-empty string"
+
+MCP_CONFIG_MCP_SERVER_URL_IS_INVALID = "mcp server {name!r}.url is invalid"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_USE_HTTP_OR = "mcp server {name!r}.url must use http or https"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_NOT_CONTAIN_USERINFO = "mcp server {name!r}.url must not contain userinfo"
+
+MCP_CONFIG_MCP_SERVER_STDIO_FIELDS_REQUIRE_COMMAND = "mcp server {name!r} stdio fields require command"
+
+MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_A_JSON = "MCP_AGENT_POLICY must be a JSON object"
+
+MCP_CONFIG_MCP_AGENT_IDS_MAY_CONTAIN_ONLY_LETTERS = "mcp agent ids may contain only letters, numbers, '_' or '-'"
+
+MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r} policy must be an object"
+
+MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD = "mcp agent {agent_id!r} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_AGENT_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r}.{section} must be an object"
+
+MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD_226 = "mcp agent {agent_id!r}.{section} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER = "MCP_TIMEOUT must be a positive number, got {value!r}"
+
+# Every entry by name; each knows its own, for its /fset format.
+ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
+for _name, _entry in ENTRIES.items():
+    object.__setattr__(_entry, "name", _name)

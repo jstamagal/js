@@ -37,8 +37,8 @@ from typing import Any
 
 import yaml
 
-from .. import paths
-from .. import messages as msgs
+from .. import messages as msgs, output, paths, settings as _settings
+from . import tool_suites
 from .core import Tool
 
 MODIFIERS = ("eager", "lazy", "ban")
@@ -54,7 +54,7 @@ class ToolPolicyError(ValueError):
 
 
 def tools_config_path() -> Path:
-    return paths.tools_config_file()
+    return paths.find("tools.yaml") or paths.tools_config_file()
 
 
 @dataclass(frozen=True)
@@ -77,40 +77,40 @@ def load_tools_config(path: Path | None = None) -> ToolsConfig:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise ToolPolicyError(msgs.POLICY_UNREADABLE.text(path=path, error=' '.join(str(exc).split()))) from exc
+        raise ToolPolicyError(msgs.POLICY_UNREADABLE.said(path=path, error=' '.join(str(exc).split()))) from exc
     if data is None:
         return ToolsConfig(path=path)
     if not isinstance(data, dict):
-        raise ToolPolicyError(msgs.POLICY_NOT_A_MAPPING.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_NOT_A_MAPPING.said(path=path))
     unknown = sorted(str(key) for key in data if key not in ("tags", "ban", "skills"))
     if unknown:
-        raise ToolPolicyError(msgs.POLICY_UNKNOWN_KEYS.text(path=path, keys=', '.join(unknown)))
+        raise ToolPolicyError(msgs.POLICY_UNKNOWN_KEYS.said(path=path, keys=', '.join(unknown)))
 
     tags: dict[str, tuple[Any, ...]] = {}
     raw_tags = data.get("tags") or {}
     if not isinstance(raw_tags, dict):
-        raise ToolPolicyError(msgs.POLICY_TAGS_NOT_A_MAPPING.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_TAGS_NOT_A_MAPPING.said(path=path))
     for name, entries in raw_tags.items():
         if not isinstance(name, str) or not name.strip():
-            raise ToolPolicyError(msgs.POLICY_TAG_NAME_EMPTY.text(path=path, name=name))
+            raise ToolPolicyError(msgs.POLICY_TAG_NAME_EMPTY.said(path=path, name=name))
         if name in INTRINSIC_TAGS:
-            raise ToolPolicyError(msgs.POLICY_TAG_INTRINSIC.text(path=path, name=name))
+            raise ToolPolicyError(msgs.POLICY_TAG_INTRINSIC.said(path=path, name=name))
         if not isinstance(entries, list):
-            raise ToolPolicyError(msgs.POLICY_TAG_NOT_A_LIST.text(path=path, name=name))
+            raise ToolPolicyError(msgs.POLICY_TAG_NOT_A_LIST.said(path=path, name=name))
         tags[name] = tuple(entries)
 
     bans: dict[str, tuple[str, ...]] = {}
     raw_bans = data.get("ban") or {}
     if not isinstance(raw_bans, dict):
-        raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_MAPPING.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_MAPPING.said(path=path))
     for tool_name, patterns in raw_bans.items():
         if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
-            raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_LIST.text(path=path, tool=tool_name))
+            raise ToolPolicyError(msgs.POLICY_BAN_NOT_A_LIST.said(path=path, tool=tool_name))
         bans[str(tool_name).strip().lower()] = tuple(patterns)
 
     raw_skills = data.get("skills") or []
     if not isinstance(raw_skills, list) or not all(isinstance(s, str) and s.strip() for s in raw_skills):
-        raise ToolPolicyError(msgs.POLICY_SKILLS_NOT_A_LIST.text(path=path))
+        raise ToolPolicyError(msgs.POLICY_SKILLS_NOT_A_LIST.said(path=path))
     return ToolsConfig(tags=tags, bans=bans, skills=tuple(s.strip() for s in raw_skills), path=path)
 
 
@@ -130,22 +130,22 @@ class Entry:
 
 def parse_entry(raw: Any, where: str) -> Entry:
     if not isinstance(raw, str):
-        raise ToolPolicyError(msgs.POLICY_ENTRY_NOT_A_STRING.text(where=where, entry=raw))
+        raise ToolPolicyError(msgs.POLICY_ENTRY_NOT_A_STRING.said(where=where, entry=raw))
     text = raw.strip()
     noun, sep, rest = text.partition(":")
     noun, rest = noun.strip().lower(), rest.strip()
     if not sep or not noun or not rest:
-        raise ToolPolicyError(msgs.POLICY_ENTRY_SHAPE.text(where=where, entry=text))
+        raise ToolPolicyError(msgs.POLICY_ENTRY_SHAPE.said(where=where, entry=text))
     if noun == "tag":
         name, _, modifier = rest.partition(":")
         name, modifier = name.strip(), modifier.strip()
         if modifier and name not in INTRINSIC_TAGS:
-            raise ToolPolicyError(msgs.POLICY_TAG_MODIFIER.text(where=where, entry=text))
+            raise ToolPolicyError(msgs.POLICY_TAG_MODIFIER.said(where=where, entry=text))
         if modifier and modifier not in MODIFIERS:
-            raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.text(where=where, entry=text))
+            raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.said(where=where, entry=text))
         return Entry(text, "tag", modifier or "eager", tag=name)
     if rest not in MODIFIERS:
-        raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.text(where=where, entry=text))
+        raise ToolPolicyError(msgs.POLICY_BAD_MODIFIER.said(where=where, entry=text))
     return Entry(text, noun, rest)
 
 
@@ -154,7 +154,7 @@ def parse_entries(raw: Any, where: str) -> tuple[str, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ToolPolicyError(msgs.POLICY_TOOLS_NOT_A_LIST.text(where=where))
+        raise ToolPolicyError(msgs.POLICY_TOOLS_NOT_A_LIST.said(where=where))
     return tuple(parse_entry(item, where).text for item in raw)
 
 
@@ -195,10 +195,10 @@ def expand(entries: Iterable[Any], config: ToolsConfig, where: str) -> tuple[Rul
             if entry.tag not in config.tags:
                 known = ", ".join(sorted((*config.tags, *INTRINSIC_TAGS)))
                 raise ToolPolicyError(
-                    msgs.POLICY_UNKNOWN_TAG.text(where=where, entry=entry.text, config=config.where, known=known))
+                    msgs.POLICY_UNKNOWN_TAG.said(where=where, entry=entry.text, config=config.where, known=known))
             if entry.tag in stack:
                 cycle = " > ".join(f"tag:{name}" for name in (*stack, entry.tag))
-                raise ToolPolicyError(msgs.POLICY_TAG_CYCLE.text(config=config.where, cycle=cycle))
+                raise ToolPolicyError(msgs.POLICY_TAG_CYCLE.said(config=config.where, cycle=cycle))
             walk(config.tags[entry.tag], f"{config.where} tags.{entry.tag}",
                  (*via, entry.text), (*stack, entry.tag))
 
@@ -225,15 +225,15 @@ def resolve(tools: Sequence[Tool], rules: Sequence[Rule]) -> tuple[Decision, ...
 
 
 def warn_unmatched(tools: Sequence[Tool], rules: Sequence[Rule], agent_id: str | None = None) -> None:
-    """One stderr line per exact noun that names no tool at all."""
+    """One warning event per exact noun that names no tool at all."""
     for rule in rules:
         if rule.entry.noun == "tag" or rule.entry.is_glob:
             continue
         if not any(rule.matches(tool) for tool in tools):
             if agent_id:
-                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
+                output.notice(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
             else:
-                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
+                output.notice(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
 
 
 @dataclass(frozen=True)
@@ -280,7 +280,10 @@ def argument_refusal(tool_name: str, args: Any, bans: Mapping[str, Sequence[str]
     A pattern with glob characters must match a whole string argument; any
     other pattern matches as a substring. Matching ignores case.
     """
-    patterns = bans.get(tool_name.lower())
+    canonical = tool_name.lower()
+    patterns = bans.get(canonical, ())
+    if legacy := tool_suites.ARGUMENT_BAN_FALLBACKS.get(canonical):
+        patterns = (*patterns, *bans.get(legacy, ()))
     if not patterns:
         return None
     values = [value.casefold() for value in _string_values(args)]
@@ -290,8 +293,7 @@ def argument_refusal(tool_name: str, args: Any, bans: Mapping[str, Sequence[str]
         for value in values:
             if fnmatchcase(value, folded) if glob else folded in value:
                 return (
-                    f"ERROR: {tool_name} call refused before running: an argument matches "
-                    f"ban pattern {pattern!r} in tools.yaml."
+                    f'ERROR: {tool_name} call refused before running: an argument matches ban pattern {pattern!r} in tools.yaml.'
                 )
     return None
 
@@ -302,15 +304,37 @@ def render_table(decisions: Sequence[Decision], bans: Mapping[str, Sequence[str]
     order = {"eager": 0, "lazy": 1, "ban": 2, None: 3}
     rows = sorted(decisions, key=lambda d: (order[d.modifier], d.tool.name))
     width = max((len(d.tool.name) for d in rows), default=4)
-    lines = [msgs.TOOL_CHAIN_ROW.text(tool=msgs.TOOL_CHAIN_TOOL.text(), width=width,
-                                      state=msgs.TOOL_CHAIN_STATE.text(),
-                                      decided=msgs.TOOL_CHAIN_DECIDED_BY.text())]
+    lines = [msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=msgs.TOOL_CHAIN_TOOL.said(), width=width,
+                                      state=msgs.TOOL_CHAIN_STATE.said(),
+                                      decided=msgs.TOOL_CHAIN_DECIDED_BY.said())]
     for d in rows:
         state = d.modifier or "-"
-        decided = d.rule.label if d.rule is not None else msgs.NONE_VALUE.text()
-        lines.append(msgs.TOOL_CHAIN_ROW.text(tool=d.tool.name, width=width, state=state, decided=decided))
+        decided = d.rule.label if d.rule is not None else msgs.NONE_VALUE.said()
+        lines.append(msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=d.tool.name, width=width, state=state, decided=decided))
     shown = {d.tool.name.lower() for d in rows if d.modifier in ("eager", "lazy")}
     for name, patterns in sorted(bans.items()):
         if name in shown:
-            lines.append(msgs.TOOL_CHAIN_BAN.text(tool=name, patterns=", ".join(repr(p) for p in patterns)))
+            lines.append(msgs.line_for(msgs.TOOL_CHAIN_BAN, tool=name, patterns=", ".join(repr(p) for p in patterns)))
     return lines
+
+
+def removal_decision(context: Any, *, permanent: bool | None, size: int) -> tuple[bool, str | None]:
+    """The removal mode and any refusal under the operator's trash policy."""
+    permanent = bool(permanent) or not _settings.knob_attr(context, "remove_trash", "REMOVE_TRASH")
+    maximum = int(_settings.knob_attr(context, "trash_bytes_max", "TRASH_BYTES_MAX"))
+    if not permanent and size > maximum:
+        limit = f"{maximum // (1024 * 1024)} MiB" if maximum % (1024 * 1024) == 0 else f"{maximum} bytes"
+        return permanent, (f"ERROR: target is over the {limit} trash limit ({size} bytes); "
+                           "confirm with the operator and pass permanent=true to delete directly.")
+    return permanent, None
+
+
+def schema_flags(config: Any) -> tuple[str, ...]:
+    """Schema features allowed by this configuration's tool policy."""
+    return () if getattr(config, "lock_subagent_model", False) else ("model_override",)
+
+
+def legacy_entry(raw: Any) -> str:
+    """An old bare selector means a tool on the agent's eager boot surface."""
+    text = str(raw).strip()
+    return text if ":" in text else f"{text}:eager"

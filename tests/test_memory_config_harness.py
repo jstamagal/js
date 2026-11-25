@@ -74,24 +74,23 @@ def test_memory_loader_heals_orphaned_tool_calls(tmp_path):
     assert actual[0] == {"role": "user", "content": "go"}
 
 
-def test_memory_append_mark_append_message_and_wipe_rotate_session(tmp_path):
+def test_memory_append_mark_append_message_and_wipe_moves_session(tmp_path):
     session = tmp_path / "agent" / "sessions" / "active.jsonl"
 
     memory.append_mark(session, "session_start")
     memory.append_message(session, {"role": "user", "content": "hello"})
     memory.append_message(session, {"role": "assistant", "content": "world"})
     actual_messages = memory.load_messages(session)
-    actual_backup = memory.wipe(session)
+    moved = memory.wipe(session)
 
     expected_messages = [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "world"},
     ]
     assert actual_messages == expected_messages
-    assert actual_backup == session.with_suffix(".jsonl.bak")
+    assert moved.parent == session.parent and moved.suffix == ".jsonl"
     assert not session.exists()
-    assert actual_backup.exists()
-    assert memory.load_messages(actual_backup) == expected_messages
+    assert memory.load_messages(moved) == expected_messages
 
 
 def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatch, tmp_path):
@@ -99,10 +98,10 @@ def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
     monkeypatch.delenv("JS_SESSION", raising=False)
     for name in (
         "JS_MAX_OUTPUT_TOKENS",
-        "JS_MAX_TOOL_ITERATIONS",
-        "JS_MAX_TOOL_CALLS_PER_MESSAGE",
-        "JS_MAX_BASH_OUTPUT_BYTES",
-        "JS_MAX_TOOL_RESULT_BYTES",
+        "JS_TURN_ROUNDS_MAX",
+        "JS_REPLY_TOOL_CALLS_MAX",
+        "JS_SHELL_OUTPUT_MAX",
+        "JS_TOOL_RESULT_MAX",
         "JS_FETCH_TIMEOUT",
         "JS_INLINE_CODE_TIMEOUT",
     ):
@@ -110,16 +109,16 @@ def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatc
     config_dir = tmp_path / ".js"
     config_dir.mkdir(parents=True)
     (config_dir / "jsrc").write_text(
-        """set model.max_output_tokens true
-set limits.max_tool_iterations true
-set limits.max_tool_calls_per_message true
-set limits.max_bash_output_bytes true
-set limits.max_tool_result_bytes true
-set limits.fetch_timeout_s true
-set limits.inline_code_timeout_s true
-set limits.max_read_lines true
-set limits.max_file_bytes true
-set limits.task_max_depth true
+        """set OUTPUT_TOKENS_MAX true
+set TURN_ROUNDS_MAX true
+set REPLY_TOOL_CALLS_MAX true
+set SHELL_OUTPUT_MAX true
+set TOOL_RESULT_MAX true
+set FETCH_TIMEOUT true
+set INLINE_CODE_TIMEOUT true
+set READ_LINES_MAX true
+set FILE_BYTES_MAX true
+set SUBAGENT_DEPTH_MAX true
 """,
         encoding="utf-8",
     )
@@ -127,15 +126,15 @@ set limits.task_max_depth true
     actual = from_env(save_session=False)
 
     assert actual.max_output_tokens is None
-    assert actual.max_tool_iterations == settings.default_value("limits.max_tool_iterations")
-    assert actual.max_tool_calls_per_message == settings.default_value("limits.max_tool_calls_per_message")
-    assert actual.max_bash_output_bytes == settings.default_value("limits.max_bash_output_bytes")
-    assert actual.max_tool_result_bytes == settings.default_value("limits.max_tool_result_bytes")
-    assert actual.fetch_timeout_s == settings.default_value("limits.fetch_timeout_s")
-    assert actual.inline_code_timeout_s == settings.default_value("limits.inline_code_timeout_s")
-    assert actual.max_read_lines == settings.default_value("limits.max_read_lines")
-    assert actual.max_file_bytes == settings.default_value("limits.max_file_bytes")
-    assert actual.task_max_depth == settings.default_value("limits.task_max_depth")
+    assert actual.max_tool_iterations == settings.default_value("TURN_ROUNDS_MAX")
+    assert actual.max_tool_calls_per_message == settings.default_value("REPLY_TOOL_CALLS_MAX")
+    assert actual.max_bash_output_bytes == settings.default_value("SHELL_OUTPUT_MAX")
+    assert actual.max_tool_result_bytes == settings.default_value("TOOL_RESULT_MAX")
+    assert actual.fetch_timeout_s == settings.default_value("FETCH_TIMEOUT")
+    assert actual.inline_code_timeout_s == settings.default_value("INLINE_CODE_TIMEOUT")
+    assert actual.max_read_lines == settings.default_value("READ_LINES_MAX")
+    assert actual.max_file_bytes == settings.default_value("FILE_BYTES_MAX")
+    assert actual.task_max_depth == settings.default_value("SUBAGENT_DEPTH_MAX")
 
 def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -143,15 +142,15 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     monkeypatch.setenv("JS_MODEL", "custom-model")
     monkeypatch.setenv("JS_BASE_URL", "http://proxy.test/v1")
     monkeypatch.setenv("JS_API_KEY", "sk-proxy")
-    monkeypatch.setenv("JS_AGENT", "agent_one")
-    monkeypatch.setenv("JS_DEBUG", "1")
+    monkeypatch.setenv("JS_DEFAULT_AGENT", "agent_one")
+    monkeypatch.setenv("JS_DEBUG_LOG", "1")
     monkeypatch.setenv("JS_TRACE", "0")
     monkeypatch.setenv("JS_REASONING", "max")
     monkeypatch.setenv("JS_MAX_OUTPUT_TOKENS", "1234")
-    monkeypatch.setenv("JS_MAX_TOOL_ITERATIONS", "7")
-    monkeypatch.setenv("JS_MAX_TOOL_CALLS_PER_MESSAGE", "23")
-    monkeypatch.setenv("JS_MAX_BASH_OUTPUT_BYTES", "4567")
-    monkeypatch.setenv("JS_MAX_TOOL_RESULT_BYTES", "8910")
+    monkeypatch.setenv("JS_TURN_ROUNDS_MAX", "7")
+    monkeypatch.setenv("JS_REPLY_TOOL_CALLS_MAX", "23")
+    monkeypatch.setenv("JS_SHELL_OUTPUT_MAX", "4567")
+    monkeypatch.setenv("JS_TOOL_RESULT_MAX", "8910")
     monkeypatch.setenv("JS_FETCH_TIMEOUT", "42")
     monkeypatch.setenv("JS_INLINE_CODE_TIMEOUT", "77")
     monkeypatch.setenv("JS_VISION", "0")
@@ -164,7 +163,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.agent_dir == expected_state_dir
     assert actual.session_file == Path(os.devnull)
     assert actual.history_file == tmp_path / ".js" / "state" / "history.jsonl"
-    assert actual.prompts_dir.name == "agent_one"
+    assert all(path.name == "agent_one" for path in actual.prompts_dir)
     assert actual.model == "custom-model"
     assert actual.provider_id == "openai"
     assert actual.provider_base_url == "http://proxy.test/v1"
@@ -173,8 +172,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert not hasattr(actual, "OPENAI_API_BASE")
     assert not hasattr(actual, "OPENAI_API_KEY")
     assert actual.trace is False
-    # `max` is a real ladder stop (reasoning.py) -- config._norm_effort no
-    # longer collapses it to "high" (dropped from _EFFORT_ALIASES).
+    # `max` is a real ladder stop (reasoning.py), kept as it is.
     assert actual.reasoning_effort == "max"
     assert actual.max_output_tokens == 1234
     assert actual.max_tool_iterations == 7
@@ -187,20 +185,8 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     # save_session=False means no session file, no latest.json.
     assert not (expected_state_dir / "latest.json").exists()
     assert not (tmp_path / ".js" / "sessions").exists()
-    # JS_DEBUG writes under state/, separate from append-only sessions.
+    # JS_DEBUG_LOG writes under state/, separate from append-only sessions.
     assert actual.debug_log == expected_state_dir / "debug.log"
-
-
-def test_documented_bytes_env_names_are_canonical(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setenv("JS_MAX_BASH_OUTPUT_BYTES", "222")
-    monkeypatch.setenv("JS_MAX_TOOL_RESULT_BYTES", "444")
-
-    actual = from_env(save_session=False)
-
-    assert actual.max_bash_output_bytes == 222
-    assert actual.max_tool_result_bytes == 444
 
 
 def test_resolve_session_file_creates_and_resumes_nested_named_session(tmp_path):

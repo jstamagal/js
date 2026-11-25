@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import time
 
-from js.toolkit import ToolContext
-from js.toolkit import process_net
-from js.toolkit.process_net import shell
+from js.toolkit import ToolContext, shell as shell_module
+from js.toolkit.core import for_model
+from js.toolkit.shell import shell as _shell
+
+
+def shell(*args, **kwargs):
+    """The shell tool's result as the model receives it (`for_model`)."""
+    return for_model(_shell(*args, **kwargs))
 
 
 def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
@@ -19,7 +24,7 @@ def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
     The wait window then opens after the command has printed ``marker``, so
     "printed before the window closed" holds however slowly the shell starts.
     """
-    real_start = process_net.start_capped
+    real_start = shell_module.start_capped
 
     def start(*args, **kwargs):
         process = real_start(*args, **kwargs)
@@ -36,7 +41,7 @@ def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
         process.wait = wait
         return process
 
-    monkeypatch.setattr(process_net, "start_capped", start)
+    monkeypatch.setattr(shell_module, "start_capped", start)
 
 
 def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path, monkeypatch):
@@ -86,18 +91,6 @@ def test_handle_defaults_to_the_latest_running_job(tmp_path):
     shell("sleep 30", timeout=1, context=context)
     killed = shell(action="kill", context=context)
     assert killed.startswith("killed handle")
-
-
-def test_clipped_output_still_reports_truncation(tmp_path):
-    context = ToolContext(
-        cwd=tmp_path,
-        max_bash_output_bytes=64,
-        max_bash_output_ceiling=32,
-    )
-    result = shell("head -c 4096 /dev/zero | tr '\\0' x", timeout=10, context=context)
-    assert "exit=0" in result
-    assert "[truncated: limits.max_bash_output_bytes (32) reached;" in result
-    assert "x" * 33 not in result
 
 
 def test_unknown_action_and_missing_command_are_errors(tmp_path):

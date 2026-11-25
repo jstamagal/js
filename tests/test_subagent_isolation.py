@@ -1,29 +1,28 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
 import asyncio
 import time
+from dataclasses import replace
+from pathlib import Path
 
-from js import runtime
-from js.config import Config
-from js.memory import load_messages
-from js.mcp_config import resolve as resolve_mcp
-from js.toolkit import ToolContext, call_tool
-from js.toolkit import fs
-from js.toolkit.meta import task
-from js.toolkit.registry import build_default_registry, select
-from js.model_client import ModelStreamResult, ModelToolCall
 import ai
 import pytest
-
 from tool_loading import after_loading
+
+from js import context_window, runtime
+from js.config import Config
+from js.mcp_config import resolve as resolve_mcp
+from js.memory import load_messages
+from js.model_client import ModelStreamResult, ModelToolCall
+from js.toolkit import ToolContext, call_tool, file_search, fs, patch
+from js.toolkit.registry import build_default_registry, select
+from js.toolkit.subagents import task
 
 
 @pytest.fixture(autouse=True)
 def offline_model_metadata(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -77,7 +76,7 @@ def prompt_dir(tmp_path: Path, agent: str, manifest: str = "tools: []\n", body: 
     prompts = tmp_path / "prompts" / agent
     prompts.mkdir(parents=True)
     (prompts / "agent.yaml").write_text(manifest, encoding="utf-8")
-    (prompts / "01-body.md").write_text(body, encoding="utf-8")
+    (prompts / "01-prompt.md").write_text(body, encoding="utf-8")
     return prompts
 
 
@@ -93,11 +92,8 @@ def patch_from_env(monkeypatch, tmp_path: Path, prompt_root: Path):
 
     import js.config as config
 
-    # meta.py does `from ..config import from_env` inside the task function
-    # (a local import), so it can't be monkeypatched through the meta module
-    # namespace. Patching js.config.from_env is enough because by the time
-    # the local import runs, it re-reads from the same module object —
-    # which monkeypatch has already updated.
+    # subagents looks up config.from_env when the task runs, so patching it on
+    # js.config reaches the task tool.
     monkeypatch.setattr(config, "from_env", from_env_stub)
 
 
@@ -113,7 +109,7 @@ def test_subagent_prompt_roots_use_project_global_repo_precedence(monkeypatch, t
         worker = root / "worker"
         worker.mkdir(parents=True)
         (worker / "agent.yaml").write_text(f"tools:\n  - {tool}:lazy\n", encoding="utf-8")
-        (worker / "01-body.md").write_text(body, encoding="utf-8")
+        (worker / "01-prompt.md").write_text(body, encoding="utf-8")
 
     def from_env_stub(*, save_session: bool = True):
         agent = "defaultagent"
@@ -153,8 +149,8 @@ def test_task_requires_named_agent_id(tmp_path):
 
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
 def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, outcome):
-    from js.toolkit.meta import _run_one_task_async
-    from js.toolkit.terminal import terminal_session, close_terminal_sessions
+    from js.toolkit.subagents import _run_one_task_async
+    from js.toolkit.terminal import close_terminal_sessions, terminal_session
 
     prompts = prompt_dir(tmp_path, "worker")
     cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -193,6 +189,29 @@ def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, ou
             close_terminal_sessions(child)
 
 
+def test_child_turn_is_on_disk_before_it_ends(monkeypatch, tmp_path):
+    from js.toolkit.subagents import _run_one_task_async
+
+    prompts = prompt_dir(tmp_path, "worker")
+    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    on_disk: list[list[str]] = []
+
+    async def turn(cfg, system, messages, telemetry, *, checkpoint, **kwargs):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": "read-1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+        messages.append({"role": "tool", "tool_call_id": "read-1", "name": "read", "content": "found"})
+        checkpoint()
+        # What a kill here would leave behind.
+        on_disk.append([m["role"] for m in load_messages(cfg.session_file)])
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    result = asyncio.run(_run_one_task_async(
+        1, 1, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None))
+    assert "done" in result
+    assert on_disk == [["user", "assistant", "tool"]]
+
+
 @pytest.mark.parametrize("parent_cap", [None, 777])
 def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch, tmp_path, parent_cap):
     prompts = prompt_dir(tmp_path, "worker", "tools: []\nmax_tokens: 123\n",
@@ -207,7 +226,7 @@ def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch
     context.config = cfg
     monkeypatch.setenv("CHILD_VALUE", "expanded")
     monkeypatch.setenv("CHILD_INJECT", "{{CHILD_VALUE}}")
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     seen = []
 
     async def stream(**kwargs):
@@ -251,10 +270,27 @@ def test_worker_system_prompt_ends_with_the_agent_own_prompt(monkeypatch, tmp_pa
     assert system.rstrip().endswith(delivery)
 
 
+@pytest.mark.parametrize(("reasoning", "expected"), [("", "high"), ("low", "low")])
+def test_a_child_of_a_config_without_layers_runs_its_agent_yaml_reasoning(monkeypatch, tmp_path, reasoning, expected):
+    prompts = prompt_dir(tmp_path, "worker", "reasoning: high\ntools: []\n")
+    context = ToolContext(cwd=tmp_path)
+    context.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs["reasoning_effort"])
+        return _fake_stream_result("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    assert "ok" in task(["work"], agent_id="worker", context=context, reasoning=reasoning)
+
+    assert seen == [expected]
+
+
 @pytest.mark.parametrize("async_dispatch", [False, True])
 @pytest.mark.parametrize("session_id", [None, "existing"])
 def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_path, async_dispatch, session_id):
-    from js.toolkit.meta import task_async
+    from js.toolkit.subagents import task_async
 
     cfg = make_cfg(tmp_path, "parent", tmp_path / "prompts" / "parent")
     context = ToolContext(cwd=tmp_path)
@@ -370,8 +406,8 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
     target = tmp_path / "owned.txt"
     target.write_text("old\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.read("owned.txt", context=parent)
-    fs.patch("owned.txt", old_string="old", new_string="new", context=parent)
+    fs.fs_read("owned.txt", context=parent)
+    patch.patch("owned.txt", old_string="old", new_string="new", context=parent)
     tool_results: list[str] = []
     calls = 0
 
@@ -398,7 +434,7 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
     target = tmp_path / "guard.txt"
     target.write_text("old\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.read("guard.txt", context=parent)
+    fs.fs_read("guard.txt", context=parent)
     tool_results: list[str] = []
     calls = 0
 
@@ -424,7 +460,7 @@ def test_subagent_search_cache_is_fresh(monkeypatch, tmp_path):
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.fs_search("needle", path=".", context=parent)
+    file_search.fs_search("needle", path=".", context=parent)
     tool_results: list[str] = []
     calls = 0
 
@@ -449,7 +485,7 @@ def test_task_return_clears_the_parent_search_cache(monkeypatch, tmp_path):
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.fs_search("needle", path="needle.txt", context=parent)
+    file_search.fs_search("needle", path="needle.txt", context=parent)
     assert parent.search_cache
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("CACHE_TEST_DONE"))
@@ -505,7 +541,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
     actual = call_tool(tool, {"tasks": ["hello from named tool"]}, ToolContext(cwd=tmp_path))
 
     assert tool.required == ("tasks",)
-    assert set(tool.params) == {"tasks"}
+    assert set(tool.params) == {"tasks", "model", "reasoning"}
     assert actual == "NAMED_AGENT_DONE"
     assert "WORKER SYSTEM" in str(seen["system"])
     assert set(seen["tools"]) == {"plan", "tool_discovery"}
@@ -582,13 +618,10 @@ def test_one_failing_parallel_worker_does_not_sink_siblings(monkeypatch, tmp_pat
 def test_subagent_reresolves_mcp_policy_and_cannot_see_parent_server(monkeypatch, tmp_path):
     prompts = prompt_dir(tmp_path, "worker", "tools: []\n")
     settings = {
-        "mcp": {
-            "servers": {"parent-only": {"command": "never-started"}},
-            "agents": {
+        "MCP_SERVERS": {"parent-only": {"command": "never-started"}}, "MCP_AGENT_POLICY": {
                 "parent": {"servers": {"allow": ["parent-only"]}},
                 "worker": {"servers": {"deny": ["parent-only"]}},
             },
-        },
     }
 
     def from_env_stub(*, save_session: bool = True):
@@ -656,7 +689,7 @@ def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp
     actual = task(["talk too much"], agent_id="worker", context=parent)
 
     # Single child: fair share == full budget (64 // 1), marker still fires.
-    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in actual
+    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in actual
     assert "X" * 65 not in actual
     assert len(actual.encode("utf-8")) <= 64
     assert "�" not in actual
@@ -683,7 +716,7 @@ def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):
     # Short siblings survive intact — the fat one is bounded to its 1/N slice.
     assert "KEEP-ME-TWO" in actual
     assert "KEEP-ME-THREE" in actual
-    assert "[truncated: limits.max_tool_result_bytes (133) reached]" in actual  # 400 // 3
+    assert "[truncated: TOOL_RESULT_MAX (133) reached]" in actual  # 400 // 3
     assert "X" * 200 not in actual
 
 
@@ -700,3 +733,34 @@ def test_one_task_returns_the_worker_text_verbatim(monkeypatch, tmp_path):
     actual = task(["summarize it"], agent_id="worker", context=ToolContext(cwd=tmp_path))
 
     assert actual == "/tmp/out/summary.md"
+
+
+def test_registered_setting_can_disable_child_reply_share(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from js import turn_settings
+
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    parent = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
+    turn_settings.install(parent, SimpleNamespace(**turn_settings.project({"SUBAGENT_RESULT_SHARE": False})))
+    parent.max_tool_result_bytes = 64
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("X" * 500))
+    assert task(["reply"], agent_id="worker", context=parent) == "X" * 500
+
+
+def test_named_agent_tool_call_sets_the_subagent_model_and_reasoning(monkeypatch, tmp_path):
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n", "WORKER SYSTEM\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    tool = build_default_registry(prompts_root=prompts.parent).resolve("worker")
+    seen: dict[str, object] = {}
+
+    def completion_stub(**kwargs):
+        seen["model"], seen["effort"] = kwargs["model_id"], kwargs["reasoning_effort"]
+        return _fake_stream_result("DONE")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan", expected_native={"plan"}))
+
+    call_tool(tool, {"tasks": ["hi"], "model": "named-model", "reasoning": "LOW"}, ToolContext(cwd=tmp_path))
+
+    assert seen == {"model": "named-model", "effort": "low"}

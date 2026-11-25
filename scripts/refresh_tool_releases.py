@@ -31,7 +31,6 @@ REPOS = {
     "fd": "sharkdp/fd",
     "bat": "sharkdp/bat",
     "fzf": "junegunn/fzf",
-    "ast-grep": "ast-grep/ast-grep",
 }
 
 

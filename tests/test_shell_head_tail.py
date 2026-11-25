@@ -10,9 +10,14 @@ from pathlib import Path
 
 from js import paths
 from js.capped_process import _StreamCapture
-from js.toolkit import ToolContext
-from js.toolkit import fs
-from js.toolkit.process_net import shell
+from js.toolkit import ToolContext, fs
+from js.toolkit.core import for_model
+from js.toolkit.shell import shell as _shell
+
+
+def shell(*args, **kwargs):
+    """The shell tool's result as the model receives it (`for_model`)."""
+    return for_model(_shell(*args, **kwargs))
 
 # The facts a marker carries, in order: the limit that cut the output, the
 # stream, the omitted byte range, the stream's total, the file with all of it,
@@ -60,13 +65,6 @@ def test_a_megabyte_of_output_returns_head_and_tail_with_a_marker_naming_the_dro
     assert stdout.endswith(MB_OUTPUT[stop:].decode())
 
 
-def test_the_result_fits_the_inline_limit_so_the_runtime_does_not_spill_it_again(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    result = shell(MB_COMMAND, timeout=60, context=context)
-    assert len(result.encode()) <= context.max_tool_result_inline_bytes
-    assert _marker(result)["knob"] == "limits.max_tool_result_inline_bytes"
-
-
 def test_binary_output_still_fits_the_inline_limit(tmp_path):
     # Each invalid UTF-8 byte renders as a 3-byte replacement character.
     context = ToolContext(cwd=tmp_path)
@@ -108,7 +106,7 @@ def test_read_with_start_byte_reaches_any_byte_of_the_spill_file(tmp_path):
     middle = MB_OUTPUT.index(b"MIDDLE_TOKEN")
     for offset, expected in ((middle, "MIDDLE_TOKEN"), (len(MB_OUTPUT) - len(b"LAST_LINE\n"), "LAST_LINE"),
                              (0, "FIRST_LINE")):
-        read = fs.read(file_path=spill, range={"start_byte": offset}, context=context)
+        read = fs.fs_read(file_path=spill, range={"start_byte": offset}, context=context)
         assert expected in read
 
 

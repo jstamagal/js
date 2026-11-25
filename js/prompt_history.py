@@ -1,13 +1,13 @@
 """The prompt history: every line submitted at a REPL prompt, in one file.
 
-`history.file` (unset = ~/.js/state/history.jsonl) holds one JSON object per
+`HISTORY_FILE` (unset = ~/.js/state/history.jsonl) holds one JSON object per
 line: ts (epoch seconds), cwd, session, agent and text. Every js process
-appends to the same file, one whole line per write.
+appends to the same file under an exclusive lock.
 
 `PromptHistory` is that file as a prompt_toolkit history. It loads the newest
-`history.max_entries` entries. With `history.cwd_first` on, Up browses the
+`HISTORY_SIZE` entries. With `HISTORY_ORDER` cwd, Up browses the
 entries typed in the current directory first, newest first, then the rest;
-off, every entry in time order. A text is offered once, at its first place in
+with last, every entry in time order. A text is offered once, at its first place in
 that order. Ctrl-R's incremental search runs over the same loaded entries, so
 it finds a prompt typed in any directory, session or agent.
 
@@ -19,8 +19,10 @@ it is loaded after they appear, then removed.
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import json
+import math
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -31,7 +33,6 @@ from pathlib import Path
 from prompt_toolkit.history import History
 
 from . import pastes
-
 
 
 @dataclass(frozen=True)
@@ -56,8 +57,11 @@ def _entry(record: object) -> Entry | None:
     if not isinstance(record, dict) or not isinstance(record.get("text"), str):
         return None
     ts = record.get("ts")
+    timestamp = float(ts) if isinstance(ts, (int, float)) else 0.0
+    if not math.isfinite(timestamp):
+        return None
     return Entry(
-        ts=float(ts) if isinstance(ts, (int, float)) else 0.0,
+        ts=timestamp,
         cwd=str(record.get("cwd") or ""),
         session=str(record.get("session") or ""),
         agent=str(record.get("agent") or ""),
@@ -67,16 +71,18 @@ def _entry(record: object) -> Entry | None:
 
 def read_entries(path: Path, limit: int | None = None) -> list[Entry]:
     """The entries in ``path``, oldest first; only the newest ``limit`` when
-    it is given. A line that is not an entry is skipped."""
+    it is given. A line that is not an entry is skipped. Records split on
+    "\n" only: older writers left U+2028/U+2029/U+0085 raw inside a record,
+    and str.splitlines() would cut it there."""
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
     except FileNotFoundError:
         return []
     entries: list[Entry] = []
     for line in lines:
         try:
             entry = _entry(json.loads(line))
-        except ValueError:
+        except (ValueError, OverflowError):
             continue
         if entry is not None:
             entries.append(entry)
@@ -103,15 +109,32 @@ def browse_order(entries: Iterable[Entry], cwd: str, *, cwd_first: bool) -> list
 
 
 def _line(entry: Entry) -> bytes:
-    return (json.dumps(asdict(entry), ensure_ascii=False) + "\n").encode("utf-8")
+    # One record, one physical line for every line tool: the separators
+    # splitlines() honours besides \n go in as JSON escapes.
+    text = json.dumps(asdict(entry), ensure_ascii=False)
+    text = text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").replace("\x85", "\\u0085")
+    return (text + "\n").encode("utf-8", errors="backslashreplace")
+
+
+def _append_lines(fd: int, data: bytes) -> None:
+    size = os.fstat(fd).st_size
+    if size and os.pread(fd, 1, size - 1) != b"\n":
+        data = b"\n" + data
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(fd, remaining)
+        if not written:
+            raise OSError(errno.EIO, "history write made no progress")
+        remaining = remaining[written:]
 
 
 def append_entry(path: Path, entry: Entry) -> None:
-    """Add ``entry`` to the end of ``path`` in one write."""
+    """Add ``entry`` under the history lock, closing a torn tail first."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, _line(entry))
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        _append_lines(fd, _line(entry))
     finally:
         os.close(fd)
 
@@ -147,7 +170,7 @@ def import_legacy(path: Path, state_root: Path) -> int:
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     added = 0
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         for old in legacy:
@@ -156,7 +179,7 @@ def import_legacy(path: Path, state_root: Path) -> int:
             except (FileNotFoundError, UnicodeError):
                 continue  # another process folded it first
             if entries:
-                os.write(fd, b"".join(_line(entry) for entry in entries))
+                _append_lines(fd, b"".join(_line(entry) for entry in entries))
             added += len(entries)
             with contextlib.suppress(FileNotFoundError):
                 old.unlink()
@@ -171,18 +194,19 @@ class PromptHistory(History):
 
     def __init__(self, path: Path, origin: Callable[[], Origin], *,
                  cwd_first: bool = True, limit: int | None = None,
-                 state_root: Path | None = None) -> None:
+                 state_root: Path | None = None, migrate=None) -> None:
         super().__init__()
         self.path = path
         self._origin = origin
         self._cwd_first = cwd_first
         self._limit = limit
         self._state_root = state_root
+        self._migrate = migrate
 
     def load_history_strings(self) -> Iterable[str]:
         if self._state_root is not None:
             with contextlib.suppress(OSError):
-                import_legacy(self.path, self._state_root)
+                (import_legacy if self._migrate is None else self._migrate)(self.path, self._state_root)
         entries = read_entries(self.path, self._limit)
         return browse_order(entries, self._origin().cwd, cwd_first=self._cwd_first)
 

@@ -10,8 +10,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from .core import CatalogEntry, Tool, ToolContext
-from .descriptions import load_description
-
+from .descriptions import load_description, load_parameter_description
+from .presentation import Presentation
 
 DISCOVERY_TOOL_NAME = "tool_discovery"
 
@@ -34,12 +34,13 @@ def discovery_tool(surface: Any) -> Tool:
         load_description(DISCOVERY_TOOL_NAME),
         discover,
         {
-            "query": {"type": "string", "description": "Intent or words to search; empty returns a compact index."},
-            "offset": {"type": "integer", "minimum": 0, "description": "Continue the same search at next_offset from a truncated result."},
-            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": "Optional catalog kind filter."},
-            "source": {"type": "string", "description": "Optional exact source filter."},
-            "load": {"type": "string", "description": "Stable catalog id to load, such as native:browser_probe or skill:review."},
+            "query": {"type": "string", "description": load_parameter_description('tool_discovery', 'query')},
+            "offset": {"type": "integer", "minimum": 0, "description": load_parameter_description('tool_discovery', 'offset')},
+            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": load_parameter_description('tool_discovery', 'kind')},
+            "source": {"type": "string", "description": load_parameter_description('tool_discovery', 'source')},
+            "load": {"type": "string", "description": load_parameter_description('tool_discovery', 'load')},
         },
+        presentation=Presentation(key=("query",)),
     )
 
 
@@ -55,7 +56,6 @@ _NATIVE_INTENTS = {
     "patch": "edit file modify replace patch",
     "write": "write file create save overwrite",
     "fs_search": "find files filename glob search directory",
-    "ast_search": "find code syntax structural search",
     "task": "spawn agent delegate worker subagent",
     "terminal_session": "terminal shell interactive process kill stop terminate",
 }
@@ -199,7 +199,7 @@ def ranked_entries(entries: Iterable[CatalogEntry], query: str) -> list[CatalogE
 def catalog_result(entries: Iterable[CatalogEntry], query: str, loaded: set[str], offset: int = 0) -> str:
     """Bound serialized UTF-8 bytes while retaining stable ids and pagination."""
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        return "ERROR: offset must be a non-negative integer"
+        return 'ERROR: offset must be a non-negative integer'
     matches = ranked_entries(entries, query)
     searching = bool(str(query).strip())
     cap = 8192 if searching else 4096
@@ -227,5 +227,5 @@ def catalog_result(entries: Iterable[CatalogEntry], query: str, loaded: set[str]
     if cursor < len(matches):
         result.update(truncated=True, next_offset=cursor)
     if not matches:
-        result["hint"] = "Browse with an empty query; narrow with kind or source."
+        result["hint"] = 'Browse with an empty query; narrow with kind or source.'
     return compact_result(result)

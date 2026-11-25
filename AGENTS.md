@@ -24,40 +24,11 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
 3. **Make the change in a worktree.** The `~/js` checkout stays on main: the
    `js` on PATH runs whatever it has checked out, so a branch left there
    changes the js the owner uses. Work on a branch in its own worktree:
-   `git worktree add ../js-<topic> -b <topic>`.
-4. **One bug, one test, one seam.** Write one test that fails on the bug.
-   Fix the bug. Run that test. Then run the test file for the seam you
-   touched (`just test-file tests/test_<seam>.py`). That is the whole loop.
-   A second test needs a second distinct behavior to pin. Wording, comments,
-   docstrings and messages get no test. Do not run `just test` after an
-   edit: it runs 2400+ tests on every logical core and lags the box. Run it
-   once before a merge. It is cached per tree state — an unchanged tree
-   replays the last run and says who ran it, so rerunning tells you nothing
-   new. Whose change broke a test does not matter; "it was failing before
-   me" is not a state of the tree, it is a description of you walking past
-   it. Do not delete the test. Do not edit the test to pass. If you cannot
-   make it pass, the only other way out is a written confession: append to
-   `FAILURES.md` at the repo root your full model name, the date, the failing
-   test names, what you tried, and the sentence "I could not make this pass."
-   A confession is public and permanent; that is the point. The suite has
-   never found a bug here; using js and auditing it have. `just test-live`'s
-   e2e is the one that resembles use; run it now and then.
-5. **`just lint`** before calling it clean. ruff is the gate.
-6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
-   Commits are authored by whoever made them. The owner is
-   `John Stamagal <jstamagal@gmail.com>` and that is the global config. A model
-   commits as itself, name and vendor, set per command with
-   `-c user.name=... -c user.email=...`: `Claude Fable 5.1 <claude@anthropic>`,
-   `Qwen <qwen@alibaba>`. The commit agent is
-   `js commit agent <jstamagal+agent@gmail.com>`.
-7. **Merge it.** A branch nobody merged is organized forgetting — the work is
-   not done while it sits unmerged. Merge to main when green; if main moved
-   underneath, review then merge. Never park work on a branch silently: 28
-   commits rotted that way once. Saying "awaiting review" once and moving on
-   counts as silent. Once merged, remove the worktree and delete the branch.
-8. **Say where the work is.** The owner does not do git. End every report
-   with one plain line: the branch the work is on, whether main has it,
-   whether it is pushed. Anything he has to run, give as the exact command.
+   `git worktree add ~/.js/worktrees/js-<topic> -b <topic>`.
+4. **`just lint`** before calling it clean. ruff is the gate.
+5. **Done means merged and installed.** Merge the branch into main in `~/js`,
+   then run `just install` there (it refuses to run from a worktree), so the
+   `js` on PATH runs the change.
 
 ## Privacy 
 - Keep our chat out of the files unless its relavent.
@@ -75,14 +46,23 @@ provider creds: `just test-live`. One test directly:
 
 ## Architecture in one breath
 
-Streaming tool-use loop: sync runtime over the async SDK.
-`js/model_client.py` is the model I/O boundary (new providers land next to
-`codex_provider.py`); `js/runtime.py` is the loop (streaming, dispatch,
-subagent fan-out); `js/toolkit/` is the tools — model-facing contracts live
+Streaming tool-use loop on one event loop, over the async SDK; tools are
+sync and run on executor threads. `js/model_client.py` is the model I/O boundary (providers are registered in
+`js/providers.py`); `js/runtime.py` is the loop (dispatch, subagent
+fan-out), and a turn's model call and streamed reply live in
+`js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` is `main`: it reads
+the command line (`js/command_line.py` defines it) and picks the mode, each
+side mode (`--bench`, `--commit`, `--list-*`) living in a module of its own, `js/repl.py` is the interactive REPL (startup,
+the input loop, the turn queue, steering), and `js/prompt_run.py` is the `-p`
+run (its steps, the answer, the Continue line); `js/run_assembly.py` turns config,
+agent and model into a settled run, the ready-to-run turn that `-p`, the REPL
+at startup, `--bench` and swarm agents start from; `js/conversation.py` keeps
+a session's history across turns, and `-p` and swarm agents run their turns
+through it; `js/toolkit/` is the tools — model-facing contracts live
 in `tool_descriptions/*.md`, not in code. Agents are prompt directories
-(`js/persona.py` + `prompts/`; layered project > global > repo; `agent.yaml`
+(`js/persona.py` + `defaults/agents/`; layered per file, project > home > defaults; `agent.yaml`
 beside the prompt picks model, reasoning and tool surface, resolved against
-`tools.yaml` noun:modifier rules). Config layers jsrc < `.js/jsrc` <
+`tools.yaml` noun:modifier rules). Config layers `defaults/jsrc` < home `jsrc` < `.js/jsrc` <
 `.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
@@ -90,13 +70,45 @@ guard; preserve it. Project instructions come from the start directory only
 (`AGENTS.md`, `AGENTS.local.md`): js never walks up to parent directories, so
 `~/js` never reads `~/AGENTS.md`. Deep dives belong in `docs/technical-guide.md`.
 
+Stock setup lives in `defaults/`: jsrc, fset, agents, themes, tool descriptions,
+skills, help, snippets and secret-patterns. A home file replaces only the same
+relative stock file; an empty file shadows it too. Listings union names across
+layers. Skills shadow whole directories by name. Only agents, skills, commands,
+toolbox and jsrc use the project layer. Missing named setup is a hard error.
+`--home DIR` beats `JS_HOME`, then `~/.js`; the selected absolute directory holds
+all configuration, sessions, logs, state, cache and tmp. Prompts and shell commands
+receive `JS_HOME`; inline prompts also support `{{JS_HOME}}` and `%%JS_HOME%%`.
+
+`--json` prints one final object; `--json-stream` streams typed JSON Lines.
+Use `--list-models` or `--list-agents` for text or JSON; `--list-sessions`,
+`--list-providers` and `--list-logins` require `--json`. Sampling flags
+(`--temperature`, `--top-p`, `--top-k`, `--min-p`, `--top-n-sigma`,
+`--repetition-penalty`, `--presence-penalty`, `--xtc-probability`,
+`--xtc-threshold`, `--dry-multiplier`, `--dry-base`, `--dry-allowed-length`,
+`--dry-penalty-last-n`, `--dry-sequence-breakers`) override `--extra`, agent
+sampling and jsrc. A Continue command records the effective run options.
+
 Anything settable is a registered setting (`js/settings.py`). `/set` with no
 argument dumps every settable setting, `/set <key> <value>` sets one, and
-`/save` rewrites jsrc from the full live state, no confirmation. A setting
+`/save` writes to jsrc only what was changed in the session; nothing else
+writes the user jsrc. A setting
 reachable only through an env var or a hardcoded default is not finished.
 A setting a turn reads is also one `TurnSetting` row in `js/turn_settings.py`;
 the row makes it a `Config` field and, with `on_context`, a `ToolContext` field
 that subagents inherit.
+
+### Naming a setting
+
+- A setting is a global variable, named UPPER_SNAKE: `set BANNER ***`.
+- Spell words out. No clipped abbreviations (`CTX` is wrong). `ENV`, `URL`
+  and `API` are fine.
+- A cap ends `_MAX`, as in C's `limits.h`. A timeout that kills ends
+  `_TIMEOUT`, in seconds. A wait that returns a handle ends `_WAIT`, in
+  seconds.
+- One file ends `_FILE`, a directory ends `_DIR`, so `/set *_FILE` lists them.
+- Setting `NAME` is also env var `JS_NAME`.
+- When in doubt, do it the way bash, unix, ircII, C or classic tooling does.
+- js output never says "knob" or "folder". Say setting, and directory.
 
 ## Docs
 

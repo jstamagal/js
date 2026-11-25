@@ -1,6 +1,6 @@
 """The session picker's state and keys, and how js opens it: `/session` in
-the REPL and a bare `js --session`. No test builds the prompt_toolkit app;
-the state is driven with `press`. Every test runs in the tmp HOME the
+the REPL and a bare `js --session`. The state is driven with `press`; one
+test draws the prompt_toolkit layout on a short screen. Every test runs in the tmp HOME the
 conftest installs."""
 
 from __future__ import annotations
@@ -12,15 +12,25 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from repl_driver import record_turns, run_async
+from session_marks import append_compaction_mark
+from test_repl_info_cmds import make_cfg
 
-from js import cli, runtime, session_picker, session_store, session_text
-from js import memory as M
-from js import messages as msgs
-from js import session_query as Q
+from js import (
+    cli,
+    jail,
+    memory as M,
+    messages as msgs,
+    repl,
+    run_assembly,
+    runtime,
+    session_picker,
+    session_query as Q,
+    session_store,
+    session_text,
+)
 from js.session_catalog import first_metadata, record_session_start
 from js.session_index import Hit
-
-from test_repl_info_cmds import make_cfg
 
 HOME = "/home/op"
 CWD = "/home/op/js"
@@ -54,8 +64,21 @@ def _picker(sessions, **kwargs) -> session_picker.SessionPicker:
     return session_picker.SessionPicker(sessions, cwd=CWD, home=HOME, now=NOW, **kwargs)
 
 
+def _retained(path: str) -> list[dict]:
+    """The messages a session file keeps, as the picker's preview reads them."""
+    return M.retained_messages(Path(path))
+
+
 def _listed(picker) -> list[str]:
     return [session.path for session in picker.shown()]
+
+
+def test_session_picker_accepts_context_keymaps():
+    picker = _picker([_session("chosen")], keymaps={"list": {"choose": (("space",),)}})
+    assert picker.press("enter") is None
+    choice = picker.press(" ")
+    assert choice.action == session_picker.RESUME
+    assert choice.session.path == "chosen"
 
 
 def _body_lines(picker) -> list[str]:
@@ -141,6 +164,34 @@ def test_enter_resumes_the_highlighted_session():
 @pytest.mark.parametrize("key", ["escape", "q", "c-c"])
 def test_esc_q_and_ctrl_c_close_with_no_choice(key):
     assert _picker([_session("a")]).press(key) is session_picker.CLOSED
+
+
+def test_b_on_a_session_whose_file_is_gone_shows_an_empty_list():
+    # FileNotFoundError out of the key handler killed the app.
+    def gone(path):
+        raise FileNotFoundError(path)
+
+    picker = _picker([_session("a")], rows=gone)
+    picker.press("b")
+    assert picker.screen == "messages"
+    assert picker.message_rows == []
+
+
+def test_root_cwd_sessions_carry_the_here_dot():
+    picker = session_picker.SessionPicker(
+        [_session("a", cwd="/"), _session("b", cwd=HOME, started=_ts(2026, 9, 28, 8, 0))],
+        cwd="/", home=HOME, now=NOW)
+    picker.press("down")
+    assert any(line.startswith("•") for line in _body_lines(picker))
+
+
+@pytest.mark.parametrize("unknown", [None, ""])
+def test_a_session_with_no_known_cwd_is_not_marked_here_under_root(unknown):
+    # An unknown cwd must not read as "/".
+    picker = session_picker.SessionPicker(
+        [_session("b", cwd=HOME), _session("a", cwd=unknown, started=_ts(2026, 9, 28, 8, 0))],
+        cwd="/", home=HOME, now=NOW)
+    assert not any(line.startswith("•") for line in _body_lines(picker))
 
 
 # --- messages and info ---------------------------------------------------------
@@ -286,6 +337,15 @@ def _choice(path: Path, cwd: Path, agent: str = "defaultagent", action=session_p
     return session_picker.Choice(action, session, message, message_id)
 
 
+def _repl_cfg(tmp_path, monkeypatch):
+    """make_cfg with its agent prompt in place, the working directory `tmp_path`."""
+    monkeypatch.chdir(tmp_path)
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    return cfg
+
+
 def test_slash_session_opens_the_picker_and_a_chosen_session_ends_the_repl_to_switch(tmp_path, monkeypatch):
     other = _write_session(tmp_path / "other", agent="research")
     opened = {}
@@ -295,32 +355,34 @@ def test_slash_session_opens_the_picker_and_a_chosen_session_ends_the_repl_to_sw
         return _choice(other, tmp_path / "other", agent="research")
 
     monkeypatch.setattr(session_picker, "pick_session", pick)
-    cfg = make_cfg(tmp_path)
-    state = {"messages": [], "running": True}
-    assert cli._handle_command("/session niri", state, cfg) is True
+    cfg = _repl_cfg(tmp_path, monkeypatch)
+    turns = record_turns(monkeypatch)
+
+    state = run_async(monkeypatch, cfg, ["/session niri", "typed after"], wait=True)
+
     assert opened["query"] == "niri"
-    assert state["running"] is False
-    target = state["switch_session"]
+    assert turns == []  # the REPL closed: the line after it never ran
+    target = state.switch_session
     assert (target.path, target.agent, target.cwd) == (other.resolve(), "research", str((tmp_path / "other").resolve()))
 
 
 def test_slash_session_on_the_current_session_or_closed_keeps_the_repl(tmp_path, monkeypatch):
-    cfg = make_cfg(tmp_path)
+    cfg = _repl_cfg(tmp_path, monkeypatch)
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     cfg.session_file.write_text("", encoding="utf-8")
-    state = {"messages": [], "running": True}
-    monkeypatch.setattr(session_picker, "pick_session", lambda cwd, query="": None)
-    cli._handle_command("/session", state, cfg)
-    monkeypatch.setattr(session_picker, "pick_session",
-                        lambda cwd, query="": _choice(cfg.session_file, tmp_path))
-    cli._handle_command("/session", state, cfg)
-    assert state["running"] is True and "switch_session" not in state
+    picks = iter([None, _choice(cfg.session_file, tmp_path)])
+    monkeypatch.setattr(session_picker, "pick_session", lambda cwd, query="": next(picks))
+    turns = record_turns(monkeypatch)
+
+    state = run_async(monkeypatch, cfg, ["/session", "/session", "typed after"], wait=True)
+
+    assert len(turns) == 1 and state.switch_session is None
 
 
 def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):
     parent = _write_session(tmp_path / "proj")
     first = session_text.rows(parent)[0]
-    target = cli._session_target(_choice(parent, tmp_path / "proj", action=session_picker.BRANCH,
+    target = session_picker.session_target(_choice(parent, tmp_path / "proj", action=session_picker.BRANCH,
                                          message=first.number, message_id=first.id))
     assert target.path != parent and target.path.parent == parent.parent
     start = first_metadata(target.path)
@@ -330,7 +392,7 @@ def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):
 
 
 def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monkeypatch):
-    target = cli._SessionTarget(tmp_path / "s.jsonl", str(tmp_path), "research")
+    target = session_picker.SessionTarget(tmp_path / "s.jsonl", str(tmp_path), "research")
     ran = {}
 
     def execv(program, argv):
@@ -339,24 +401,23 @@ def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monk
     monkeypatch.setattr(cli.os, "execv", execv)
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", Path.cwd())
     monkeypatch.chdir(Path.cwd())
-    cli._exec_session(target, blocking=True)
+    repl.exec_session(target)
     assert ran["cwd"] == str(tmp_path)
     assert ran["argv"][ran["argv"].index("--session") + 1] == str(tmp_path / "s.jsonl")
     assert ran["argv"][ran["argv"].index("-a") + 1] == "research"
-    assert "--blocking" in ran["argv"]
 
 
 def test_a_session_started_under_c_resumes_jailed_in_its_dir(tmp_path, monkeypatch):
     path = _write_session(tmp_path / "proj")
-    target = cli._session_target(_choice(path, tmp_path / "proj", command=["js", "-C", "proj"]))
+    target = session_picker.session_target(_choice(path, tmp_path / "proj", command=["js", "-C", "proj"]))
     assert target.jailed
     ran = {}
     monkeypatch.setattr(cli.os, "execv", lambda program, argv: ran.update(argv=argv))
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", Path.cwd())
     monkeypatch.chdir(Path.cwd())
-    cli._exec_session(target, blocking=False)
+    repl.exec_session(target)
     assert ran["argv"][ran["argv"].index("-C") + 1] == str((tmp_path / "proj").resolve())
-    assert not cli._session_target(_choice(path, tmp_path / "proj", command=["js", "--commit"])).jailed
+    assert not session_picker.session_target(_choice(path, tmp_path / "proj", command=["js", "--commit"])).jailed
 
 
 class _Terminal:
@@ -394,7 +455,7 @@ def test_bare_session_resumes_the_choice_with_its_own_agent_and_dir(tmp_path, mo
         seen.update(session=session, agent=kwargs.get("agent_id"), cwd=os.getcwd())
         raise ValueError("stop here")
 
-    monkeypatch.setattr(cli, "_from_env", config)
+    monkeypatch.setattr(run_assembly, "from_env", config)
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
     assert cli.main(["--session"]) == 2
     assert seen == {"session": str(path.resolve()), "agent": "research", "cwd": str(session_dir.resolve())}
@@ -411,10 +472,123 @@ def test_bare_session_enters_the_jail_of_a_session_started_under_c(tmp_path, mon
     monkeypatch.chdir(tmp_path)
     entered = {}
 
-    def enter(root):
+    def enter(root, **_settings):
         entered["root"] = root
-        raise cli._jail.JailError("no bwrap here")
+        raise jail.JailError("no bwrap here")
 
-    monkeypatch.setattr(cli._jail, "enter", enter)
+    monkeypatch.setattr(jail, "enter", enter)
     assert cli.main(["--session"]) == 2
     assert entered["root"] == session_dir.resolve()
+
+
+# --- the highlighted session's last lines ----------------------------------------
+
+
+def _preview_picker(messages: list[dict], sessions=None) -> session_picker.SessionPicker:
+    return _picker(sessions or [_session("a")], messages=lambda path: messages)
+
+
+def _call(call_id: str) -> dict:
+    return {"id": call_id, "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+
+
+def test_two_messages_that_open_alike_preview_the_later_one():
+    picker = _preview_picker([
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "Checking now\nold tail", "tool_calls": [_call("c1")]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "assistant", "content": "Checking now", "tool_calls": [_call("c2")]},
+        {"role": "tool", "tool_call_id": "c2", "content": "ok"},
+    ])
+
+    body = "\n".join(_body_lines(picker))
+
+    assert "old tail" not in body
+
+
+def test_text_beside_a_tool_call_still_waiting_for_its_result_is_previewed():
+    picker = _preview_picker([
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "📌 old diagnosis"},
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "content": "📌 new diagnosis", "tool_calls": [_call("c1")]},
+    ])
+
+    body = "\n".join(_body_lines(picker))
+
+    assert "📌 new diagnosis" in body
+    assert "old diagnosis" not in body
+
+
+def test_a_compacted_session_previews_what_its_transcript_still_holds(tmp_path):
+    """Compaction drops summarized history from the model's replay, not from
+    the session; the preview reads the session. A reattached file is js's,
+    not the operator's."""
+    path = tmp_path / "s.jsonl"
+    M.append_message(path, {"role": "user", "content": "fix the nfs mount"})
+    M.append_message(path, {"role": "assistant", "content": "📌 mount fixed in fstab"})
+    append_compaction_mark(path, summary="the operator fixed a mount", keep_from=2,
+                             rehydrated={"role": "user", "content": "REATTACHED FILE BODY"})
+    M.append_message(path, {"role": "assistant", "content": "anything else?"})
+    picker = _picker([_session(str(path))], messages=_retained)
+
+    body = "\n".join(_body_lines(picker))
+
+    assert "fix the nfs mount" in body
+    assert "📌 mount fixed in fstab" in body
+    assert "REATTACHED FILE BODY" not in body
+
+
+def test_a_signed_reply_kept_by_compaction_then_rolled_back_is_not_previewed(tmp_path):
+    """Compaction replaces a signed reply with a copy without its signature;
+    the rollback that takes the copy out takes the reply out."""
+    path = tmp_path / "s.jsonl"
+    M.append_message(path, {"role": "user", "content": "why is it slow"})
+    M.append_message(path, {"role": "assistant", "content": "📌 old diagnosis",
+                            "reasoning_parts": [{"type": "thinking", "signature": "sig"}],
+                            "reasoning_from": {"provider": "anthropic", "model": "m"}})
+    append_compaction_mark(path, summary="asked why it is slow", keep_from=0)
+    M.append_mark(path, "rollback_to:2")
+    M.append_message(path, {"role": "assistant", "content": "current reply"})
+    picker = _picker([_session(str(path))], messages=_retained)
+
+    body = "\n".join(_body_lines(picker))
+
+    assert "current reply" in body
+    assert "old diagnosis" not in body
+
+
+def test_a_session_from_before_the_record_envelope_is_previewed(tmp_path):
+    path = tmp_path / "s.jsonl"
+    path.write_text(json.dumps({"role": "user", "content": "old question"}) + "\n"
+                    + json.dumps({"role": "assistant", "content": "📌 old answer"}) + "\n", encoding="utf-8")
+    picker = _picker([_session(str(path))], messages=_retained)
+
+    body = "\n".join(_body_lines(picker))
+
+    assert "old question" in body
+    assert "📌 old answer" in body
+
+
+def test_an_open_picker_previews_a_session_file_that_changed(tmp_path):
+    path = tmp_path / "s.jsonl"
+    M.append_message(path, {"role": "user", "content": "first"})
+    picker = _picker([_session(str(path))], messages=_retained)
+    _body_lines(picker)
+    M.append_message(path, {"role": "user", "content": "second"})
+
+    assert "second" in "\n".join(_body_lines(picker))
+
+
+def test_session_picker_accepts_its_view_and_streams(monkeypatch):
+    from types import SimpleNamespace
+
+    from js import picker
+
+    source, target = object(), object()
+    seen = []
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    assert session_picker.pick_session("/work", input=source, output=target,
+                                       load_picker=lambda *args: state) == "app"
+    assert seen == [{"input": source, "output": target}]

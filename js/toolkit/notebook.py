@@ -2,28 +2,39 @@
 one cell by id.
 
 A cell's id is its nbformat `id`; a notebook older than nbformat 4.5 has none,
-and its cells are named `cell-N` by 0-based index. The notebook view records a
+and its cells are initially named `cell-N` by 0-based index. Editing persists
+those ids and upgrades an older nbformat 4 notebook to 4.5. The notebook view records a
 read of the file (path and content hash) but no line coverage: `patch` on the
 raw JSON still needs a ranged `read` of the lines it edits.
 """
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import json
+import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
 from .core import Tool, ToolContext
-from .descriptions import load_description
-from .fs import _detect_line_ending, _hash_bytes, _normalize_line_endings, _read_regular_bytes
+from .descriptions import load_description, load_parameter_description
+from .file_bytes import (
+    detect_line_ending,
+    hash_bytes,
+    normalize_line_endings,
+    read_regular_bytes,
+)
+from .presentation import Presentation
+from .reads import require_read
 from .sanitize import int_or_default
 
 EDIT_MODES = ("replace", "insert", "delete")
 CELL_TYPES = ("code", "markdown", "raw")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
-_INDEXED_ID = re.compile(r"cell-(\d+)")
 # Characters of one output's text shown per shown line.
 _CHARS_PER_LINE = 200
 
@@ -34,7 +45,7 @@ class NotebookError(Exception):
 
 def _load(data: bytes) -> dict:
     try:
-        notebook = json.loads(data.decode("utf-8"))
+        notebook = json.loads(data.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise NotebookError(f"not valid notebook JSON: {exc}") from exc
     if not isinstance(notebook, dict) or not isinstance(notebook.get("cells"), list):
@@ -51,21 +62,31 @@ def _text(value: Any) -> str:
 
 
 def cell_ids(cells: list[dict]) -> list[str]:
-    """Each cell's id: its `id`, or `cell-N` when it has none."""
-    return [cell["id"] if isinstance(cell.get("id"), str) and cell["id"] else f"cell-{index}"
-            for index, cell in enumerate(cells)]
+    """Each cell's id, with unique synthetic names reserved around native ids."""
+    taken = {cell["id"] for cell in cells if isinstance(cell.get("id"), str) and cell["id"]}
+    ids: list[str] = []
+    for index, cell in enumerate(cells):
+        cell_id = cell.get("id")
+        if not isinstance(cell_id, str) or not cell_id:
+            base = f"cell-{index}"
+            cell_id = base
+            suffix = 1
+            while cell_id in taken:
+                cell_id = f"{base}-{suffix}"
+                suffix += 1
+            taken.add(cell_id)
+        ids.append(cell_id)
+    return ids
 
 
 def find_cell(cells: list[dict], cell_id: str) -> int | None:
-    """The index of the cell ``cell_id`` names: an `id`, else `cell-N`."""
-    wanted = str(cell_id).strip()
-    for index, cell in enumerate(cells):
-        if cell.get("id") == wanted:
-            return index
-    match = _INDEXED_ID.fullmatch(wanted)
-    if match and int(match.group(1)) < len(cells):
-        return int(match.group(1))
-    return None
+    """The index of the cell under the same ids shown by `read`."""
+    wanted = str(cell_id)
+    ids = cell_ids(cells)
+    if wanted in ids:
+        return ids.index(wanted)
+    wanted = wanted.strip()
+    return ids.index(wanted) if wanted in ids else None
 
 
 def _language(notebook: dict) -> str:
@@ -84,9 +105,16 @@ def _clip(text: str, max_lines: int) -> list[str]:
     return shown
 
 
-def _size(payload: Any) -> str:
-    text = _text(payload)
-    size = len(text) * 3 // 4 if text and not text.lstrip().startswith("<") else len(text.encode("utf-8"))
+def _size(payload: Any, mime: str) -> str:
+    if mime == "application/json" or mime.endswith("+json"):
+        size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    else:
+        text = _text(payload)
+        size = len(text.encode("utf-8"))
+        binary = mime.startswith(("image/", "audio/", "video/")) and mime != "image/svg+xml"
+        if binary or mime in {"application/pdf", "application/octet-stream"}:
+            with contextlib.suppress(ValueError):
+                size = len(base64.b64decode("".join(text.split()), validate=True))
     return f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"
 
 
@@ -100,7 +128,7 @@ def summarize_output(output: dict, max_lines: int) -> list[str]:
         head = f"error {output.get('ename', '')}: {_ANSI.sub('', str(output.get('evalue', '')))}"
         return [head.rstrip(": ")]
     data = output.get("data") if isinstance(output.get("data"), dict) else {}
-    others = [f"{mime} ({_size(payload)})" for mime, payload in data.items() if mime != "text/plain"]
+    others = [f"{mime} ({_size(payload, mime)})" for mime, payload in data.items() if mime != "text/plain"]
     label = kind if kind != "execute_result" else "result"
     heading = f"{label}: " + ", ".join(["text/plain", *others] if "text/plain" in data else others)
     lines = _clip(_text(data.get("text/plain")), max_lines) if "text/plain" in data else []
@@ -142,17 +170,17 @@ def read_view(target: Path, context: ToolContext) -> str | None:
         if size > context.max_file_bytes:
             return (f"ERROR: file size ({size} bytes) exceeds the maximum allowed size of "
                     f"{context.max_file_bytes} bytes")
-        data = _read_regular_bytes(target)
+        data = read_regular_bytes(target)
     except OSError as exc:
         return f"ERROR: {exc}"
     try:
         notebook = _load(data)
     except NotebookError:
         return None
-    content_hash = _hash_bytes(data)
-    context.remember_read(target, content_hash, whole_file=False)
-    context.remember_content(target, content_hash, data)
-    max_lines = int_or_default(getattr(context, "notebook_output_lines", None), 10, minimum=0)
+    content_hash = hash_bytes(data)
+    context.reads.remember(target, content_hash, whole_file=False)
+    context.reads.remember_content(target, content_hash, data)
+    max_lines = int_or_default(context.notebook_output_lines, 10, minimum=0)
     return render(notebook, target, content_hash, max_lines)
 
 
@@ -219,12 +247,12 @@ def notebook_edit(
     if not target.is_file():
         return f"ERROR: no such notebook: {target}"
     try:
-        data = _read_regular_bytes(target)
+        data = read_regular_bytes(target)
     except OSError as exc:
         return f"ERROR: {exc}"
-    current_hash = _hash_bytes(data)
-    guard = context.require_read(target, f"{mode} a cell of it", content_hash=current_hash)
-    if guard:
+    current_hash = hash_bytes(data)
+    guard = require_read(context, target, f"{mode} a cell of it", content_hash=current_hash)
+    if context.notebook_require_read and guard:
         return guard
     try:
         notebook = _load(data)
@@ -241,7 +269,12 @@ def notebook_edit(
     as_list = any(isinstance(cell.get("source"), list) for cell in cells) or not cells
     major = int_or_default(notebook.get("nbformat"), 4)
     minor = int_or_default(notebook.get("nbformat_minor"), 0)
-    has_ids = major > 4 or (major == 4 and minor >= 5)
+    # Persist the displayed names before positions change, including cells the
+    # current edit leaves untouched. nbformat 4.5 introduces native cell ids.
+    for cell, stable_id in zip(cells, cell_ids(cells), strict=True):
+        cell["id"] = stable_id
+    if major == 4 and minor < 5:
+        notebook["nbformat_minor"] = 5
 
     if mode == "delete":
         assert index is not None
@@ -251,40 +284,52 @@ def notebook_edit(
     elif mode == "insert":
         assert kind is not None and new_source is not None
         taken = set(cell_ids(cells))
-        new_id = None
-        if has_ids:
+        new_id = uuid.uuid4().hex[:8]
+        while new_id in taken:
             new_id = uuid.uuid4().hex[:8]
-            while new_id in taken:
-                new_id = uuid.uuid4().hex[:8]
         index = 0 if index is None else index + 1
         cells.insert(index, _new_cell(kind, _source_value(new_source, as_list), new_id))
-        done = f"inserted {kind} cell {new_id or f'cell-{index}'} at index {index}"
+        done = f"inserted {kind} cell {new_id} at index {index}"
     else:
         assert index is not None and new_source is not None
         cell = cells[index]
         cell["source"] = _source_value(new_source, isinstance(cell.get("source"), list) or as_list)
         if kind is not None and kind != cell.get("cell_type"):
             _retype(cell, kind)
-        if cell.get("cell_type") == "code":
+        if context.notebook_clear_outputs and cell.get("cell_type") == "code":
             cell["execution_count"] = None
             cell["outputs"] = []
-        done = f"replaced cell {cell_ids(cells)[index]} ({cell.get('cell_type', 'code')}); its outputs are cleared"
+        done = f"replaced cell {cell_ids(cells)[index]} ({cell.get('cell_type', 'code')})"
+        if context.notebook_clear_outputs:
+            done += "; its outputs are cleared"
 
-    original = data.decode("utf-8")
+    original = data.decode("utf-8-sig")
     text = json.dumps(notebook, indent=_indent(original), ensure_ascii=False)
     if original.endswith(("\n", "\r")):
         text += "\n"
-    payload = _normalize_line_endings(text, _detect_line_ending(original)).encode("utf-8")
+    payload = normalize_line_endings(text, detect_line_ending(original)).encode("utf-8")
+    temporary = None
     try:
         context.snapshot(target)
-        target.write_bytes(payload)
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".notebook-",
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fchmod(stream.fileno(), target.stat().st_mode)
+            os.fsync(stream.fileno())
+        temporary.replace(target)
     except OSError as exc:
         return f"ERROR: {exc}"
-    new_hash = _hash_bytes(payload)
+    finally:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
+    new_hash = hash_bytes(payload)
     # The model knows the notebook it just changed; the raw JSON lines moved,
     # so no line coverage carries over.
-    context.replace_read_coverage(target, new_hash, [], len(payload.splitlines()), whole_file=False)
-    context.remember_content(target, new_hash, payload)
+    context.reads.replace(target, new_hash, [], len(payload.splitlines()), whole_file=False)
+    context.reads.remember_content(target, new_hash, payload)
     return f"{done} in {target}; {len(cells)} cells now (hash {new_hash})"
 
 
@@ -295,12 +340,13 @@ def tools() -> tuple[Tool, ...]:
             load_description("notebook_edit"),
             notebook_edit,
             {
-                "file_path": {"type": "string", "description": "Path to the .ipynb notebook."},
-                "cell_id": {"type": "string", "description": "Id of the cell to replace or delete, or to insert after. Omit to insert at the top."},
-                "new_source": {"type": "string", "description": "The cell's whole new source. Not used by delete."},
-                "cell_type": {"type": "string", "enum": list(CELL_TYPES), "description": "Required to insert; on replace, changes the cell's type."},
-                "edit_mode": {"type": "string", "enum": list(EDIT_MODES), "default": "replace", "description": "replace, insert or delete."},
+                "file_path": {"type": "string", "description": load_parameter_description('notebook_edit', 'file_path')},
+                "cell_id": {"type": "string", "description": load_parameter_description('notebook_edit', 'cell_id')},
+                "new_source": {"type": "string", "description": load_parameter_description('notebook_edit', 'new_source')},
+                "cell_type": {"type": "string", "enum": list(CELL_TYPES), "description": load_parameter_description('notebook_edit', 'cell_type')},
+                "edit_mode": {"type": "string", "enum": list(EDIT_MODES), "default": "replace", "description": load_parameter_description('notebook_edit', 'edit_mode')},
             },
             required=("file_path",),
+            presentation=Presentation(kind="diff"),
         ),
     )

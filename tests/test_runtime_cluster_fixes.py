@@ -9,16 +9,15 @@ import io
 import json
 from types import SimpleNamespace
 
-import pytest
 import ai
+import pytest
+from turn_driver import one_turn
 
-from js import runtime, turn_call
-from js import model_client as MC
+from js import debug_trace, history_record, model_client as MC, result_caps, runtime, turn_call
 from js.config import Config
-from js.toolkit import ToolContext
-from js.toolkit.core import Tool
-from js.toolkit.registry import ToolRegistry, build_default_registry
 from js.model_client import ModelStreamResult
+from js.toolkit import ToolContext
+from js.toolkit.registry import build_default_registry
 
 
 def _cfg(tmp_path, agent="a"):
@@ -57,7 +56,7 @@ def _result(text="ok"):
 
 
 class _Recorder:
-    """Minimal event sink: run_turn only reads emission.results / .hooks."""
+    """Minimal event sink: run_turn_async only reads emission.results / .hooks."""
 
     def __init__(self):
         self.events: list[tuple[str, dict]] = []
@@ -65,6 +64,26 @@ class _Recorder:
     def emit(self, event, **payload):
         self.events.append((event, payload))
         return SimpleNamespace(results=[], hooks=[])
+
+
+def test_reused_context_clears_subagent_hooks_when_turn_has_none(tmp_path, monkeypatch):
+    context = ToolContext(cwd=tmp_path)
+    hooks = _Recorder()
+    inherited = []
+
+    def stream(**kwargs):
+        inherited.append(context.tool_call_hooks)
+        return _result()
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    for current_hooks in (hooks, None):
+        one_turn(
+            _cfg(tmp_path), "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(None), tool_registry=build_default_registry().select([]),
+            tool_context=context, suppress_output=True, event_hooks=current_hooks,
+        )
+
+    assert inherited == [hooks, None]
 
 
 # --------------------------------------------------------------------------
@@ -104,6 +123,56 @@ def test_turn_end_cancelled_emitted_on_cancel(tmp_path, monkeypatch):
     assert ends == ["cancelled"]  # exactly one, balancing turn_start
 
 
+def test_turn_end_error_emitted_on_unexpected_exception(tmp_path, monkeypatch):
+    # An Exception escaping the turn (a provider bug, a
+    # crash in a safety net) left turn_start unpaired.
+    rec = _Recorder()
+
+    async def boom(self, **kwargs):
+        raise RuntimeError("unexpected fixture bug")
+
+    monkeypatch.setattr(turn_call.ModelCaller, "call", boom)
+    cfg = _cfg(tmp_path)
+
+    with pytest.raises(RuntimeError, match="unexpected fixture bug"):
+        asyncio.run(runtime.run_turn_async(
+            cfg, "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(debug_log=None),
+            tool_registry=build_default_registry(prompts_root=None),
+            tool_context=ToolContext(cwd=tmp_path),
+            suppress_output=True, event_hooks=rec,
+        ))
+
+    ends = [p for e, p in rec.events if e == "turn_end"]
+    assert [p["reason"] for p in ends] == ["error"]
+    assert "unexpected fixture bug" in ends[0]["error"]
+
+
+def test_exception_after_turn_end_adds_no_second_end(tmp_path, monkeypatch):
+    rec = _Recorder()
+    real_end = runtime.TurnEvents.end
+
+    def end_then_fail(self, reason, **extra):
+        real_end(self, reason, **extra)
+        raise RuntimeError("hook blew up after end")
+
+    monkeypatch.setattr(runtime.TurnEvents, "end", end_then_fail)
+
+    async def ok(self, **kwargs):
+        return None
+
+    monkeypatch.setattr(turn_call.ModelCaller, "call", ok)
+    with pytest.raises(RuntimeError):
+        asyncio.run(runtime.run_turn_async(
+            _cfg(tmp_path), "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(debug_log=None),
+            tool_registry=build_default_registry(prompts_root=None),
+            tool_context=ToolContext(cwd=tmp_path),
+            suppress_output=True, event_hooks=rec,
+        ))
+    assert len([e for e, _ in rec.events if e == "turn_end"]) == 1
+
+
 # --------------------------------------------------------------------------
 # retry closes the partial text stream
 # --------------------------------------------------------------------------
@@ -121,12 +190,12 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
         return _result("FINAL")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
-    monkeypatch.setattr(turn_call, "_backoff", lambda a: 0.0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda *_: 0.0)
     cfg = _cfg(tmp_path)
     registry = build_default_registry(prompts_root=None)
     ctx = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(
+    one_turn(
         cfg, "SYS", [{"role": "user", "content": "hi"}],
         runtime.Telemetry(debug_log=None),
         tool_registry=registry, tool_context=ctx, suppress_output=False,
@@ -140,7 +209,7 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
 
 
 # --------------------------------------------------------------------------
-# --debug-file request trace is byte-honest (finding 62)
+# --debug-file request trace is byte-honest
 # --------------------------------------------------------------------------
 
 def test_request_trace_is_byte_honest(capsys):
@@ -158,7 +227,7 @@ def test_request_trace_is_byte_honest(capsys):
     ])
 
     sink = io.StringIO()
-    MC._emit_request_trace(
+    debug_trace.emit_request_trace(
         sink=sink,
         model_id="m", provider_id="deepseek", provider_base_url="https://x",
         params=None, messages=messages, tools=tools, dump_schemas=True, dump_from=0,
@@ -175,7 +244,7 @@ def test_request_trace_is_byte_honest(capsys):
 def test_request_trace_skips_schemas_on_followup(capsys):
     messages = [ai.system_message("SYS"), ai.user_message("u"), ai.assistant_message("a")]
     sink = io.StringIO()
-    MC._emit_request_trace(
+    debug_trace.emit_request_trace(
         sink=sink,
         model_id="m", provider_id=None, provider_base_url=None,
         params=None, messages=messages, tools=[], dump_schemas=False, dump_from=2,
@@ -211,7 +280,7 @@ def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "hi"}]
     telemetry_log = tmp_path / "telemetry-incomplete.jsonl"
-    runtime.run_turn(
+    one_turn(
         cfg, "SYS", messages, runtime.Telemetry(debug_log=telemetry_log),
         tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True, event_hooks=rec, call_stats=calls,
@@ -236,7 +305,7 @@ def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path
     assert end["reason"] == "incomplete"
     assert end["finish_reason"] == "incomplete:max_output_tokens"
 
-    replay = MC.history_to_ai_messages("SYS", [assistant])[-1]
+    replay = history_record.history_to_ai_messages("SYS", [assistant])[-1]
     assert replay.provider_metadata == meta
 
 
@@ -251,7 +320,7 @@ def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypa
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "hi"}]
     telemetry_log = tmp_path / "telemetry-normal.jsonl"
-    runtime.run_turn(
+    one_turn(
         cfg, "SYS", messages, runtime.Telemetry(debug_log=telemetry_log),
         tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True, event_hooks=rec, call_stats=calls,
@@ -275,26 +344,9 @@ def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypa
 # --------------------------------------------------------------------------
 
 def test_cap_result_marks_only_when_it_shortens():
-    assert runtime._cap_result("short", 100) == "short"           # untouched
-    assert runtime._cap_result("x" * 100, 0) == "x" * 100          # 0 == unlimited
-    clipped = runtime._cap_result("x" * 100, 64)
+    assert result_caps.cap_result("short", 100) == "short"           # untouched
+    assert result_caps.cap_result("x" * 100, 0) == "x" * 100          # 0 == unlimited
+    clipped = result_caps.cap_result("x" * 100, 64)
     assert clipped.startswith("x")
     assert len(clipped.encode("utf-8")) <= 64
-    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in clipped
-
-
-def test_dispatch_marks_truncated_leaf_result():
-    big = "Z" * 500
-
-    def _handler(context=None, **kwargs):
-        return big
-
-    tool = Tool(name="bigtool", description="", handler=_handler, params={})
-    registry = ToolRegistry(tools=(tool,), aliases={})
-    _args, result = runtime._dispatch(
-        "bigtool", "{}", runtime.Telemetry(debug_log=None),
-        cap_bytes=64, registry=registry, tool_context=ToolContext(),
-    )
-    assert result.startswith("Z")
-    assert len(result.encode("utf-8")) <= 64
-    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in result
+    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in clipped

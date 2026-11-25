@@ -3,16 +3,16 @@ write first touches a matching file, once per session."""
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
-from js import memory, runtime
-from js import skills as skills_mod
-from js.toolkit import ToolContext, fs
-from js.toolkit.registry import build_default_registry
-
 from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import one_turn
+
+from js import memory, runtime, skills as skills_mod
+from js.toolkit import ToolContext, fs, fs_tools
+from js.toolkit.registry import build_default_registry
 
 SELECTION = ['read:eager', 'write:eager', 'patch:eager', 'skill:lazy']
 
@@ -39,7 +39,7 @@ def project(tmp_path, monkeypatch):
 def _run(project, monkeypatch, cfg, responses, context=None, *, prompt='work', selection=SELECTION):
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(responses))
     messages = [{'role': 'user', 'content': prompt}]
-    runtime.run_turn(cfg, 'system', messages, runtime.Telemetry(None),
+    one_turn(cfg, 'system', messages, runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(selection),
                      tool_context=context or ToolContext(cwd=project))
     return [m['content'] for m in messages if m.get('role') == 'tool']
@@ -193,7 +193,7 @@ def test_offer_survives_a_result_spilled_past_the_inline_cap(project, monkeypatc
     context = ToolContext(cwd=project)
     context.max_tool_result_inline_bytes = 51200
     results = _turn(project, monkeypatch, _cfg(project), [('read', {'file_path': 'big.rs'})], context)
-    assert 'max_tool_result_inline_bytes' in results[0]
+    assert 'TOOL_RESULT_INLINE_MAX' in results[0]
     offered = _reminders(results)
     assert len(offered) == 1 and 'rust-style' in offered[0]
 
@@ -214,3 +214,32 @@ def test_parallel_reads_in_one_batch_offer_once(project, monkeypatch):
         _result(text='done'),
     ])
     assert len(_reminders(_run(project, monkeypatch, _cfg(project), responses))) == 1
+
+
+def test_a_disabled_skill_is_absent_from_tool_discovery_and_cannot_be_loaded(project, monkeypatch):
+    cfg = replace(_cfg(project), skills_disabled=('plain',))
+    results = _turn(project, monkeypatch, cfg, [
+        ('tool_discovery', {'kind': 'skill'}),
+        ('tool_discovery', {'load': 'skill:plain'}),
+        ('skill', {'name': 'plain'}),
+        ('tool_discovery', {'load': 'skill:rust-style'}),
+    ], selection=['read:eager', 'skill:eager'])
+    listing, discovery_load, skill_load, other = results
+    assert 'skill:rust-style' in listing and 'plain' not in listing
+    assert discovery_load.startswith('ERROR') and skill_load.startswith('ERROR')
+    assert 'Body of plain' not in discovery_load + skill_load
+    assert 'Body of rust-style' in other
+
+
+def test_file_suite_can_leave_results_unwrapped(tmp_path):
+    from types import SimpleNamespace
+
+    path = tmp_path / "example.txt"
+    path.write_text("content")
+    context = ToolContext(cwd=tmp_path)
+    offers = []
+    context.tool_registry = SimpleNamespace(offer_path_skills=lambda *args: offers.append(args))
+    tool = next(tool for tool in fs_tools.tools(result_wrapper=lambda handler: handler) if tool.name == "read")
+    result = tool.handler(file_path=str(path), context=context)
+    assert "content" in result
+    assert offers == []

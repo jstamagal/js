@@ -1,6 +1,6 @@
 """`lsp`: diagnostics, definition, references and hover from a language server.
 
-The `lsp.servers` setting lists the servers: each entry names a command, the
+The `LSP_SERVERS` setting lists the servers: each entry names a command, the
 file extensions it serves and the files that mark a workspace root. For a
 file, the first entry that serves its extension and whose command is on PATH
 is used.
@@ -26,12 +26,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlsplit
 
-from .. import jail as _jail
-from .. import paths
+from .. import jail as _jail, paths
 from .core import Tool, ToolContext
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 from .sanitize import int_or_default
 
 OPERATIONS = ("diagnostics", "definition", "references", "hover")
@@ -69,24 +68,24 @@ class ServerSpec:
 
 
 def parse_servers(raw: Any) -> list[ServerSpec]:
-    """The `lsp.servers` setting as server specs. Raises LspError naming the
+    """The `LSP_SERVERS` setting as server specs. Raises LspError naming the
     first entry that is not {name, command, extensions[, roots]}."""
     if not isinstance(raw, list):
-        raise LspError("lsp.servers must be a JSON list of {name, command, extensions, roots} objects")
+        raise LspError("LSP_SERVERS must be a JSON list of {name, command, extensions, roots} objects")
     specs: list[ServerSpec] = []
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise LspError(f"lsp.servers entry {index} is not an object")
+            raise LspError(f"LSP_SERVERS entry {index} is not an object")
         command = entry.get("command")
         extensions = entry.get("extensions")
         roots = entry.get("roots", [])
         if (not isinstance(command, list) or not command
                 or not all(isinstance(part, str) and part for part in command)):
-            raise LspError(f"lsp.servers entry {index}: command must be a non-empty list of strings")
+            raise LspError(f"LSP_SERVERS entry {index}: command must be a non-empty list of strings")
         if not isinstance(extensions, list) or not all(isinstance(ext, str) for ext in extensions):
-            raise LspError(f"lsp.servers entry {index}: extensions must be a list of strings such as \".py\"")
+            raise LspError(f"LSP_SERVERS entry {index}: extensions must be a list of strings such as \".py\"")
         if not isinstance(roots, list) or not all(isinstance(marker, str) for marker in roots):
-            raise LspError(f"lsp.servers entry {index}: roots must be a list of file names")
+            raise LspError(f"LSP_SERVERS entry {index}: roots must be a list of file names")
         name = entry.get("name")
         specs.append(ServerSpec(
             name=str(name) if isinstance(name, str) and name else command[0],
@@ -106,7 +105,7 @@ def pick_server(path: Path, specs: list[ServerSpec], env_path: str | None = None
         covered = sorted({ext for spec in specs for ext in spec.extensions})
         kind = f"{ext} files" if ext else "files without an extension"
         listing = ", ".join(covered) if covered else "nothing"
-        raise LspError(f"no language server is configured for {kind}; lsp.servers covers {listing}")
+        raise LspError(f"no language server is configured for {kind}; LSP_SERVERS covers {listing}")
     for spec in serving:
         found = shutil.which(spec.command[0], path=env_path)
         if found:
@@ -114,7 +113,7 @@ def pick_server(path: Path, specs: list[ServerSpec], env_path: str | None = None
     looked = ", ".join(dict.fromkeys(spec.command[0] for spec in serving))
     raise LspError(
         f"no language server for {ext} files is on PATH (looked for {looked}); "
-        "install one or add an entry to lsp.servers"
+        "install one or add an entry to LSP_SERVERS"
     )
 
 
@@ -122,22 +121,26 @@ def workspace_root(path: Path, spec: ServerSpec, context: ToolContext) -> Path:
     """The directory the server treats as its workspace: the nearest ancestor
     holding one of the spec's root markers, else the nearest holding `.git`,
     else the working directory when it holds the file, else the file's
-    directory. The operator's home and `/` are never a root, and under `js -C`
-    neither is a directory outside the jail."""
+    directory. LSP_ALLOW_HOME_ROOT controls whether the operator's home,
+    its ancestors and `/` can be roots,
+    and under `js -C` neither is a directory outside the jail."""
     jail = _jail.active()
-    never = {Path("/"), paths.user_home().resolve()}
+    home = paths.user_home().resolve()
+    never = set() if context.lsp_allow_home_root else {Path("/"), home}
     for markers in (spec.roots, (".git",)):
         if not markers:
             continue
         for directory in path.parents:
             if jail is not None and not jail.bound(directory, context.jail_bind):
                 break
+            if not context.lsp_allow_home_root and directory == home:
+                break
             if directory in never:
                 continue
             if any((directory / marker).exists() for marker in markers):
                 return directory
     cwd = Path(context.cwd).resolve()
-    if cwd in path.parents and cwd not in never:
+    if cwd in path.parents and cwd not in never and (context.lsp_allow_home_root or cwd not in home.parents):
         return cwd
     return path.parent
 
@@ -147,7 +150,7 @@ def file_uri(path: Path) -> str:
 
 
 def uri_path(uri: str) -> Path | None:
-    parsed = urlparse(uri)
+    parsed = urlsplit(uri)
     if parsed.scheme != "file":
         return None
     return Path(unquote(parsed.path))
@@ -193,6 +196,7 @@ class LanguageServer:
     spec: ServerSpec
     root: Path
     process: subprocess.Popen
+    configuration: Any = field(default=None, repr=False)
     documents: dict[str, _Document] = field(default_factory=dict)
     capabilities: dict = field(default_factory=dict)
     stderr_tail: deque = field(default_factory=lambda: deque(maxlen=_STDERR_LINES))
@@ -304,6 +308,9 @@ class LanguageServer:
             params = message.get("params") or {}
             uri = params.get("uri")
             if isinstance(uri, str):
+                path = uri_path(uri)
+                if path is not None:
+                    uri = file_uri(path)
                 with self._cond:
                     self._publishes += 1
                     version = params.get("version")
@@ -314,12 +321,12 @@ class LanguageServer:
                     self._cond.notify_all()
 
     def _answer(self, request_id: Any, method: str, params: Any) -> None:
-        """Reply to a request the server sent. js offers no settings, so a
-        configuration request gets null for every item."""
+        """Reply to a server request with the caller's configuration, null by default."""
         result: Any = None
         if method == "workspace/configuration":
             items = params.get("items") if isinstance(params, dict) else None
-            result = [None] * (len(items) if isinstance(items, list) else 0)
+            result = [self.configuration(item) if self.configuration is not None else None
+                      for item in (items if isinstance(items, list) else [])]
         elif method == "workspace/workspaceFolders":
             result = [{"uri": file_uri(self.root), "name": self.root.name}]
         elif method not in {"client/registerCapability", "client/unregisterCapability",
@@ -362,7 +369,7 @@ class LanguageServer:
                 self.notify("$/cancelRequest", {"id": request_id})
             except LspError:
                 pass
-            raise LspError(f"no reply to {method} within {timeout:g}s (lsp.timeout_s)")
+            raise LspError(f"no reply to {method} within {timeout:g}s (LSP_TIMEOUT)")
         error = response.get("error")
         if isinstance(error, dict):
             raise LspError(f"{method} failed: {error.get('message', error)}")
@@ -560,10 +567,10 @@ def shutdown_servers() -> None:
 
 def _server_env(context: ToolContext) -> dict[str, str]:
     """The environment a server starts with: js's own, or under `js -C` only
-    the names `limits.shell_env_allow` lists."""
-    if _jail.active() is None:
+    the names `SHELL_ENV_KEEP` lists."""
+    if _jail.active() is None and context.lsp_environment_inherit:
         return dict(os.environ)
-    allow = tuple(getattr(context, "shell_env_allow", ()) or ())
+    allow = tuple(context.shell_env_allow or ())
     return {key: os.environ[key] for key in allow if key in os.environ}
 
 
@@ -572,8 +579,12 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
     """The running server for ``spec`` at ``root``, started and initialized
     when there is none. Raises LspError when it cannot start."""
     jail = _jail.active()
-    key = (spec, str(root), None if jail is None else str(jail.root),
-           tuple(context.jail_bind) if jail is not None else ())
+    env = _server_env(context)
+    configuration = context.lsp_configuration
+    key = (spec, executable, str(root), tuple(sorted(env.items())),
+           None if jail is None else str(jail.root),
+           tuple(context.jail_bind) if jail is not None else (),
+           tuple(context.jail_hide) if jail is not None else (), id(configuration))
     with _SERVERS_LOCK:
         server = _SERVERS.get(key)
         if server is not None and server.alive:
@@ -581,7 +592,6 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
         if server is not None:
             del _SERVERS[key]
             server.shutdown()
-        env = _server_env(context)
         # In the jail the command's directory is bound back, and so is every
         # symlink on the way to the file it resolves to.
         command = Path(executable)
@@ -594,13 +604,14 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
             )
         except OSError as exc:
             raise LspError(f"could not start {executable}: {exc}") from exc
-        server = LanguageServer(spec=spec, root=root, process=process)
+        server = LanguageServer(spec=spec, root=root, process=process,
+                                configuration=configuration)
         server.start_threads()
         try:
             server.initialize(timeout)
         except LspError as exc:
             server.shutdown()
-            hint = " Under -C it runs in the jail; jail.bind adds paths it needs." if jail is not None else ""
+            hint = ' Under -C it runs in the jail; JAIL_BIND adds paths it needs.' if jail is not None else ""
             raise LspError(f"did not start: {exc}.{hint}") from exc
         _SERVERS[key] = server
         return server
@@ -743,7 +754,7 @@ def lsp(
     try:
         size = target.stat().st_size
         if size > context.max_file_bytes:
-            return (f"ERROR: file size ({size} bytes) exceeds limits.max_file_bytes "
+            return (f"ERROR: file size ({size} bytes) exceeds FILE_BYTES_MAX "
                     f"({context.max_file_bytes}) for a language server")
         text = target.read_bytes().decode("utf-8")
     except OSError as exc:
@@ -771,8 +782,7 @@ def lsp(
             if items is None:
                 items = server.wait_diagnostics(uri, version, before, timeout)
             if items is None:
-                return (f"{display}: {spec.name} published no diagnostics within {timeout:g}s "
-                        "(lsp.timeout_s); it may still be loading the workspace. Call again.")
+                return (f'{display}: {spec.name} published no diagnostics within {timeout:g}s (LSP_TIMEOUT); it may still be loading the workspace. Call again.')
             return _format_diagnostics(items, lines, display, spec.name)
         position = _position(lines, line, character, symbol)
         if isinstance(position, str):
@@ -802,11 +812,11 @@ def tools() -> tuple[Tool, ...]:
             lsp,
             {
                 "operation": {"type": "string", "enum": list(OPERATIONS),
-                              "description": "diagnostics for the file, or definition, references or hover at a position."},
-                "file_path": {"type": "string", "description": "Absolute, relative, or ~ path to a source file."},
-                "line": {"type": "integer", "description": "1-based line of the position. Not used by diagnostics."},
-                "character": {"type": "integer", "description": "1-based column on that line."},
-                "symbol": {"type": "string", "description": "Text on that line to put the position on, instead of character."},
+                              "description": load_parameter_description('lsp', 'operation')},
+                "file_path": {"type": "string", "description": load_parameter_description('lsp', 'file_path')},
+                "line": {"type": "integer", "description": load_parameter_description('lsp', 'line')},
+                "character": {"type": "integer", "description": load_parameter_description('lsp', 'character')},
+                "symbol": {"type": "string", "description": load_parameter_description('lsp', 'symbol')},
             },
             required=("operation", "file_path"),
             read_only=True,

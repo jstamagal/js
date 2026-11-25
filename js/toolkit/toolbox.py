@@ -20,7 +20,7 @@ ISOLATION. Every tool file is exec'd on its own inside the kernel with its own
 try/except. A toolbox an agent writes to unsupervised will contain a broken file
 eventually; that must cost one tool, not the whole box.
 
-This module sits ON TOP of `kernel`. It imports the kernel to reach the live
+This module sits ON TOP of `python_kernel`. It imports it to reach the live
 session; the kernel never imports this. Remove `toolbox` from an agent's surface
 and the kernel is unaffected.
 """
@@ -36,11 +36,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .. import messages as msgs
-from .. import paths as _paths
-from . import kernel as _kernel
+from .. import messages as msgs, paths as _paths
+from . import python_kernel
 from .core import Tool, ToolContext
 from .descriptions import load_description
+from .presentation import Presentation
 from .sanitize import int_or_default, text_or_default
 
 _HEADER = re.compile(r"^#\s*js-toolbox:\s*(\{.*?\})\s*$", re.MULTILINE)
@@ -89,7 +89,8 @@ def __js_src(target_name):
                 for node in tree.body:
                     kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
                     if isinstance(node, kinds) and node.name == target_name:
-                        return ast.get_source_segment(cell, node)
+                        start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+                        return ''.join(cell.splitlines(keepends=True)[start - 1:node.end_lineno])
         return ''
 
     def _free(src):
@@ -171,7 +172,7 @@ del __js_load
 
 def toolbox_dirs(cwd: Path) -> tuple[Path, Path]:
     """(global, project). Project wins on a name clash, mirroring agent precedence."""
-    return _paths.global_toolbox_dir(), Path(cwd) / ".js" / "toolbox"
+    return _paths.global_toolbox_dir(), _paths.project_home(Path(cwd)) / "toolbox"
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
@@ -202,6 +203,11 @@ def seed_examples() -> list[str]:
     return seeded
 
 
+def _history_model(entry: dict) -> str:
+    model = entry.get("model")
+    return model if isinstance(model, str) and model else "unknown"
+
+
 @dataclass
 class ToolRecord:
     name: str
@@ -215,7 +221,7 @@ class ToolRecord:
     def authors(self) -> list[str]:
         seen: list[str] = []
         for entry in self.history:
-            who = entry.get("model") or "unknown"
+            who = _history_model(entry)
             if who not in seen:
                 seen.append(who)
         return seen
@@ -254,14 +260,17 @@ def discover(cwd: Path) -> dict[str, ToolRecord]:
             record = ToolRecord(name=name, path=path, scope=scope)
             try:
                 text = path.read_text(encoding="utf-8")
-            except OSError as exc:
+            except (OSError, UnicodeDecodeError) as exc:
                 record.error = f"unreadable: {exc}"
                 found[name] = record
                 continue
             meta = _parse_header(text)
             record.revision = int_or_default(meta.get("revision"), 1, minimum=1)
             raw_history = meta.get("history")
-            record.history = raw_history if isinstance(raw_history, list) else []
+            record.history = (
+                [entry for entry in raw_history if isinstance(entry, dict)]
+                if isinstance(raw_history, list) else []
+            )
             try:
                 ast.parse(text, filename=str(path))
             except SyntaxError as exc:
@@ -307,9 +316,12 @@ def write_revision(
     if not body:
         return f"ERROR: no source for {name!r}"
     try:
-        ast.parse(body)
+        tree = ast.parse(body)
     except SyntaxError as exc:
         return f"ERROR: {name!r} does not parse: line {exc.lineno}: {exc.msg}"
+    definitions = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    if not any(isinstance(node, definitions) and node.name == name for node in tree.body):
+        return f"ERROR: source must define a top-level function or class named {name!r}"
 
     global_dir, project_dir = toolbox_dirs(cwd)
     directory = project_dir if scope == "project" else global_dir
@@ -324,7 +336,8 @@ def write_revision(
     # copy exists used to return the project record, fail the path comparison, skip
     # the archive, and truncate the global file with a fresh r1 header -- the exact
     # promote-a-local-fix-back-to-global workflow this tool exists for.
-    revision = 1
+    archived = _archived_revisions(ToolRecord(name, target, scope))
+    revision = max(archived, default=0) + 1
     history: list[dict] = []
     previous = ""
     if target.is_file():
@@ -336,12 +349,16 @@ def write_revision(
         prior_meta = _parse_header(previous)
         prior = int_or_default(prior_meta.get("revision"), 1, minimum=1)
         raw_history = prior_meta.get("history")
-        revision = prior + 1
-        history = list(raw_history) if isinstance(raw_history, list) else []
+        revision = max(revision, prior + 1)
+        history = (
+            [entry for entry in raw_history if isinstance(entry, dict)]
+            if isinstance(raw_history, list) else []
+        )
         archive = directory / ".history" / f"{name}.r{prior}.py"
         try:
             archive.parent.mkdir(parents=True, exist_ok=True)
-            archive.write_text(previous, encoding="utf-8")
+            with archive.open("x", encoding="utf-8") as saved:
+                saved.write(previous)
         except OSError as exc:
             return f"ERROR: could not archive revision {prior}: {exc}"
 
@@ -355,7 +372,7 @@ def write_revision(
         return f"ERROR: could not write {target}: {exc}"
 
     verb = "saved" if revision == 1 else "refined"
-    chain = " -> ".join(entry.get("model", "?") for entry in history)
+    chain = " -> ".join(_history_model(entry) for entry in history)
     return f"{verb} {name} r{revision} [{scope}] {target}\nauthors: {chain}"
 
 
@@ -452,7 +469,7 @@ def unbound_names(source: str) -> list[str]:
 
 def source_from_kernel(session: Any, name: str) -> Extracted:
     probe = _SOURCE_PROBE % {"name": name}
-    result = _kernel.run_cell(session, probe, timeout=30,
+    result = python_kernel.run_cell(session, probe, timeout=30,
                               store_history=False, marker="__JS_SRC__")
     if not result.marker:
         return Extracted()
@@ -483,7 +500,7 @@ def load_into_kernel(session: Any, cwd: Path) -> tuple[list[str], list[str]]:
     if not payload:
         return [], problems
     probe = _LOAD_PROBE % {"payload": json.dumps(payload)}
-    result = _kernel.run_cell(session, probe, timeout=120,
+    result = python_kernel.run_cell(session, probe, timeout=120,
                               store_history=False, marker="__JS_LOAD__")
     if not result.marker:
         detail = (result.error or result.stderr).strip() or "no report from the kernel"
@@ -515,29 +532,29 @@ def toolbox(
     verb = text_or_default(action, "list").strip().lower()
     name = text_or_default(name).strip()
     scope = "project" if text_or_default(scope, "global").strip().lower() == "project" else "global"
-    level = _kernel.resolve_verbosity(context, verbosity)
+    level = python_kernel.resolve_verbosity(context, verbosity)
     cwd = Path(context.cwd)
-    model = str(getattr(context, "model", "") or "unknown")
+    model = context.model or "unknown"
 
     if verb not in ACTIONS:
         return f"ERROR: action must be one of {', '.join(ACTIONS)}"
 
     # Both actions that show the box seed it first, so a fresh install lists the
     # shipped example instead of nothing.
-    if verb in ("list", "load"):
+    if context.toolbox_seed_examples and verb in ("list", "load"):
         seed_examples()
 
     if verb == "list":
         listing = describe(cwd)
-        _kernel.render_event(context, level, listing)
-        return _kernel.cap_for_model(listing, context)
+        python_kernel.render_event(context, level, listing)
+        return python_kernel.cap_for_model(listing, context)
 
     if verb == "history":
         if not name:
             return "ERROR: history needs a tool name"
         report = history_of(cwd, name)
-        _kernel.render_event(context, level, report)
-        return _kernel.cap_for_model(report, context)
+        python_kernel.render_event(context, level, report)
+        return python_kernel.cap_for_model(report, context)
 
     if verb == "restore":
         if not name:
@@ -546,9 +563,9 @@ def toolbox(
         if target == 0:
             return "ERROR: restore needs revision=<n>; call history first to see what exists"
         report = restore(cwd, name, target, model=model)
-        _kernel.render_event(context, level, report,
-                             style="bold red" if report.startswith("ERROR") else "green")
-        return _kernel.cap_for_model(report, context)
+        python_kernel.render_event(context, level, report,
+                             style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
+        return python_kernel.cap_for_model(report, context)
 
     if verb == "save":
         if not name:
@@ -556,49 +573,45 @@ def toolbox(
         body = text_or_default(source)
         warnings: list[str] = []
         if not body.strip():
-            session, problem, _started = _kernel.get_session(context)
+            session, problem, _started = python_kernel.get_session(context)
             if session is None:
-                return (f"{problem}\nWithout a kernel, save needs the definition passed "
-                        "explicitly in `source`.")
+                return (f'{problem}\nWithout a kernel, save needs the definition passed explicitly in `source`.')
             extracted = source_from_kernel(session, name)
             body = extracted.body()
             if extracted.imports:
-                warnings.append("hoisted into the file: " + "; ".join(extracted.imports))
+                warnings.append('hoisted into the file: ' + "; ".join(extracted.imports))
         if not body.strip():
-            return (f"ERROR: no source found for {name!r}. Define it in the kernel first, "
-                    "or pass the definition in `source`.")
+            return (f'ERROR: no source found for {name!r}. Define it in the kernel first, or pass the definition in `source`.')
         # A saved sibling is carried: load execs every tool file into one
         # namespace and retries a file whose module level needs one not yet
         # loaded, so a call to another tool resolves there.
         siblings = set(discover(cwd)) - {name}
         missing = [free for free in unbound_names(body) if free not in siblings]
-        if missing:
+        if missing and context.toolbox_require_bound_names:
             message = (
-                f"ERROR: {name!r} uses " + ", ".join(missing)
-                + ", which the file would not carry: a later session that loads it would "
-                "NameError. Save them as their own tools, inline them into this "
-                "definition, or pass the whole definition in `source`."
+                f'ERROR: {name!r} uses ' + ", ".join(missing)
+                + ', which the file would not carry: a later session that loads it would NameError. Save them as their own tools, inline them into this definition, or pass the whole definition in `source`.'
             )
-            _kernel.render_event(context, level, message, style="bold red")
-            return _kernel.cap_for_model(message, context)
+            python_kernel.render_event(context, level, message, style="COLOR_ERROR")
+            return python_kernel.cap_for_model(message, context)
         report = "\n".join([write_revision(cwd, name, body, model=model,
                                            note=text_or_default(note), scope=scope),
                             *warnings])
-        _kernel.render_event(context, level, report,
-                             style="bold red" if report.startswith("ERROR") else "green")
-        return _kernel.cap_for_model(report, context)
+        python_kernel.render_event(context, level, report,
+                             style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
+        return python_kernel.cap_for_model(report, context)
 
     # load
-    session, problem, started_now = _kernel.get_session(context)
+    session, problem, started_now = python_kernel.get_session(context)
     if session is None:
-        _kernel.render_event(context, level, problem, style="bold red")
+        python_kernel.render_event(context, level, problem, style="COLOR_ERROR")
         return problem
     if started_now:
-        _kernel.render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd),
+        python_kernel.render_entry(context, level, msgs.KERNEL_STARTED.body_runs(cwd=session.cwd),
                              verbose_only=True)
     loaded, problems = load_into_kernel(session, cwd)
     if loaded:
-        _kernel.refresh_namespace(session)
+        python_kernel.refresh_namespace(session)
     records = discover(cwd)
     lines: list[str] = []
     if loaded:
@@ -612,9 +625,9 @@ def toolbox(
     if session.namespace:
         lines.append("NAMESPACE " + ", ".join(sorted(session.namespace)))
     for line in lines:
-        _kernel.render_event(context, level, line,
-                             style="red" if "BROKEN" in line else "green")
-    return _kernel.cap_for_model("\n".join(lines), context)
+        python_kernel.render_event(context, level, line,
+                             style="COLOR_ERROR" if "BROKEN" in line else "COLOR_OK")
+    return python_kernel.cap_for_model("\n".join(lines), context)
 
 
 def tools() -> tuple[Tool, ...]:
@@ -630,8 +643,9 @@ def tools() -> tuple[Tool, ...]:
                 "scope": {"type": "string", "enum": ["global", "project"]},
                 "revision": {"type": "integer"},
                 "source": {"type": "string"},
-                "verbosity": {"type": "string", "enum": list(_kernel.VERBOSITY_LEVELS)},
+                "verbosity": {"type": "string", "enum": list(python_kernel.VERBOSITY_LEVELS)},
             },
             required=("action",),
+            presentation=Presentation(key=("source",), body="source", lexer="python", kind="command"),
         ),
     )

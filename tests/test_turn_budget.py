@@ -11,19 +11,27 @@ from types import SimpleNamespace
 
 import ai
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, context_budget, model_client, runtime
-from js import messages as msgs
+from js import (
+    compaction,
+    compaction_settings,
+    context_budget,
+    context_window,
+    messages as msgs,
+    microcompact,
+    model_client,
+    runtime,
+)
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
 from js.toolkit.registry import build_default_registry
 from js.turn_budget import TurnBudget, TurnConvo
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -65,8 +73,8 @@ def test_overflow_cleared_resends_the_rebuilt_conversation_from_the_top(monkeypa
         tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
     ))
     assert len(calls) == 2
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE not in str(calls[0]["messages"])
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(calls[1]["messages"])
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE not in str(calls[0]["messages"])
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(calls[1]["messages"])
     assert calls[1]["trace_request_from"] == 0
     assert calls[1]["trace_request_schemas"] is True
     assert messages[-1]["content"] == "ok"
@@ -99,15 +107,25 @@ def test_a_rebuild_replaces_the_list_and_restarts_the_trace():
     assert (convo.sent, convo.schemas) == (0, True)
 
 
-def test_added_records_extend_the_convo_without_a_system_message():
+def test_appended_records_extend_the_history_and_the_convo_without_a_system_message():
     messages = [{"role": "user", "content": "hi"}]
     convo = _convo(messages)
     convo.traced()
     nudge = {"role": "user", "content": "go on"}
-    messages.append(nudge)
-    convo.add([nudge])
+    convo.append(nudge)
+    assert messages[-1] is nudge
     assert [m.role for m in convo.ai] == ["system", "user", "user"]
     assert (convo.sent, convo.schemas) == (2, False)
+
+
+def test_a_record_appended_with_its_message_keeps_that_message():
+    messages = [{"role": "user", "content": "hi"}]
+    convo = _convo(messages)
+    record = {"role": "assistant", "content": "hello"}
+    live = ai.assistant_message("hello")
+    convo.append(record, message=live)
+    assert messages[-1] is record
+    assert convo.ai[-1] is live
 
 
 # --------------------------------------------------------------------------
@@ -118,8 +136,8 @@ class _Setup:
     """A TurnBudget over ``messages`` with a known window, and what it did."""
 
     def __init__(self, tmp_path, messages, *, window=8000, warm=False, compact=None):
-        settings = {"flight_log_dir": str(tmp_path / "flights"), **(compact or {})}
-        self.cfg = _cfg(tmp_path, {"compact": settings})
+        settings = {"COMPACTION_LOG_DIR": str(tmp_path / "flights"), **(compact or {})}
+        self.cfg = _cfg(tmp_path, settings)
         self.messages = messages
         self.convo = TurnConvo("SYSTEM", messages, provider_id=None, model="offline-test")
         self.tokens = context_budget.TokenState(chars_per_token=4.0)
@@ -188,7 +206,7 @@ def test_a_request_under_budget_is_left_alone(tmp_path, monkeypatch):
 
 def test_auto_off_skips_the_check_unless_forced(tmp_path, monkeypatch):
     _summaries(monkeypatch)
-    setup = _Setup(tmp_path, _tool_history(22), compact={"auto": False})
+    setup = _Setup(tmp_path, _tool_history(22), compact={"COMPACTION_AUTO": False})
     assert setup.fit(phase="preflight") is False
     assert setup.events == []
 
@@ -201,7 +219,7 @@ def test_a_cold_cache_clears_old_tool_results_first(tmp_path, monkeypatch):
     assert "context_results_cleared" in setup.kinds()
     assert calls == []
     assert setup.convo.ai is not before
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
     assert setup.context.compacted_during_turn is True
     assert setup.context.cache_read_baseline is None
 
@@ -227,18 +245,7 @@ def test_a_turn_over_budget_on_its_own_summarizes_itself_keeping_a_tail(tmp_path
     assert kinds.index("context_clearing_deferred") < kinds.index("context_results_cleared")
     assert len(calls) == 1
     assert calls[0]["preserve_from"] is None
-    assert calls[0]["tail_tokens"] == compaction.get_int(setup.cfg, "tail_tokens")
-
-
-@pytest.mark.parametrize("overflow_round", [1, 2, 3])
-def test_a_forced_fit_keeps_half_as_much_tail_each_round(tmp_path, monkeypatch, overflow_round):
-    calls = _summaries(monkeypatch)
-    setup = _Setup(tmp_path, [{"role": "user", "content": "go " * 40000}, *_tool_history(4)[:-1]],
-                   window=1_000_000)
-    history_tokens = int(compaction.history_chars(setup.messages) / 4.0)
-    setup.fit(phase="overflow_recovery", force=True, overflow_round=overflow_round)
-    tail = min(compaction.get_int(setup.cfg, "tail_tokens"), history_tokens)
-    assert [call["tail_tokens"] for call in calls] == [tail // 2 ** overflow_round]
+    assert calls[0]["tail_tokens"] == compaction_settings.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS")
 
 
 def test_a_failed_summary_is_not_retried_in_the_same_check(tmp_path, monkeypatch):
@@ -257,7 +264,7 @@ def test_overflow_recovery_clears_and_rebuilds_the_convo(tmp_path, monkeypatch):
     changed = asyncio.run(setup.budget.recover_overflow(_overflow(), overflow_round=1, tools=[], specs=[]))
     assert changed is True
     assert calls == []
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
     assert (setup.convo.sent, setup.convo.schemas) == (0, True)
     assert setup.context.compacted_during_turn is True
     assert setup.context.cache_read_baseline is None
@@ -272,9 +279,21 @@ def test_overflow_recovery_with_nothing_to_clear_summarizes(tmp_path, monkeypatc
     assert [call["preserve_from"] for call in calls] == [2]
 
 
-@pytest.mark.parametrize(("resolved", "configured", "expected"), [
-    (1000, 0, 1000), (1000, 5000, 5000), (None, 0, None), (None, 700, 700),
-])
-def test_the_provider_window_is_the_larger_known_window(tmp_path, resolved, configured, expected):
-    setup = _Setup(tmp_path, [], window=resolved, compact={"context_window": configured})
-    assert setup.budget.provider_window() == expected
+def test_a_failed_clear_is_a_skipped_step_not_a_dead_turn(tmp_path, monkeypatch):
+    """Disk full / read-only while clearing used to raise out of fit() and kill
+    the turn. Now: history restored,
+    warning, and the turn goes on."""
+    _summaries(monkeypatch)
+    setup = _Setup(tmp_path, _prefix_then_turn(0, 22))
+    real_clear = microcompact.microcompact
+
+    def clear_then_fail(messages, **kwargs):
+        real_clear(messages, **kwargs)  # edits in place, as the real one does
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(microcompact, "microcompact", clear_then_fail)
+    setup.fit(phase="preflight")  # must not raise
+    assert "context_clear_failed" in setup.kinds()
+    # The half-done clear was undone: no tool result carries the cleared
+    # marker, whatever later steps did to the rest of the history.
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE not in str(setup.messages)

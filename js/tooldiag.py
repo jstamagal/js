@@ -14,11 +14,10 @@ each description carries before conditional sections resolve.
 """
 from __future__ import annotations
 
-
 from . import messages as msgs
-
 from .toolkit.core import compact_json
 from .toolkit.descriptions import render_tool_name_sections
+from .toolkit.policy import ToolPolicyError
 from .toolkit.registry import ToolRegistry, build_default_registry
 
 
@@ -57,24 +56,39 @@ def render_table(registry: ToolRegistry, surface: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _entry(name: str) -> str:
+    """A `--surface` name as a policy entry: `shell` becomes `shell:eager`;
+    `shell:lazy` (the noun:modifier form js uses everywhere) is kept as typed."""
+    return name if ":" in name else f"{name}:eager"
+
+
 def _registry(names: list[str]) -> ToolRegistry | None:
     registry = build_default_registry()
     if names:
-        registry = registry.select([f"{name}:eager" for name in names])
+        registry = registry.select([_entry(name) for name in names])
         if not registry.tools:
             return None
     return registry
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.text())
+    parser = msgs.ArgumentParser(prog="js.tooldiag", description=msgs.TOOLDIAG_DESCRIPTION.words())
     parser.add_argument(
         "--surface",
-        default="",
-        help=msgs.OPT_TOOLDIAG_SURFACE.text(),
+        default=None,
+        help=msgs.OPT_TOOLDIAG_SURFACE.words(),
     )
     args = parser.parse_args(argv)
-    registry = _registry(parse_surface(args.surface))
+    names = parse_surface(args.surface or "")
+    if args.surface is not None and not names:
+        # `--surface ,` named nothing; the full table would answer another question.
+        msgs.warn(msgs.TOOLDIAG_NO_TOOLS)
+        return 1
+    try:
+        registry = _registry(names)
+    except ToolPolicyError as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
     if registry is None:
         msgs.warn(msgs.TOOLDIAG_NO_TOOLS)
         return 1

@@ -1,0 +1,5 @@
+tools:
+  - read:eager
+  - write:eager
+  - patch:eager
+  - shell:eager

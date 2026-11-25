@@ -1,0 +1,9 @@
+{"kind":"message","message":{"role":"user","content":"one"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"two"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"user","content":"three"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"assistant","content":"four"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S1\",\"keep_from\":2,\"forced\":false,\"rehydrated\":{\"role\":\"user\",\"content\":\"<post-compaction-files>\\nfile.py\\n</post-compaction-files>\"}}","ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"user","content":"five"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"message","message":{"role":"assistant","content":"six"},"ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S2\",\"keep_from\":3,\"forced\":false}","ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"message","message":{"role":"user","content":"seven"},"ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}

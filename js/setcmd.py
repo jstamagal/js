@@ -1,7 +1,7 @@
-"""Settings verbs for the command table in ``js.cli``.
+"""Settings verbs for the command table in ``js.repl_commands``.
 
 `set`, `show` and `on` operate on a settings dict and an event-hook table,
-using the registry in `js.settings`. The REPL's command table calls these;
+using the registry in `js.settings`; `fset` on the entries `js.fset` holds. The REPL's command table calls these;
 config loading (jsrc, before the REPL exists) calls `apply_config_line`.
 
 Callers own all I/O: every function returns a `CommandResult`; the REPL prints
@@ -11,14 +11,22 @@ its `lines`, config loading collects its `error`s as boot warnings.
 from __future__ import annotations
 
 import copy
+import fnmatch
+import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import events as _events
-from . import messages as msgs
-from . import settings as _s
+from . import (
+    events as _events,
+    fset as _fset,
+    jsrc_line,
+    messages as msgs,
+    paranoid,
+    setting_values,
+    settings as _s,
+)
 
 
 @dataclass
@@ -36,20 +44,44 @@ class CommandResult:
 
 def _empty_display(spec: _s.SettingSpec) -> str:
     if spec.empty == _s.EMPTY_OFF:
-        return "off"
+        return msgs.SETTING_VALUE_OFF.words()
     if spec.empty == _s.EMPTY_UNSET:
-        return "<unset>"
-    return "<none>"
+        return msgs.SETTING_VALUE_UNSET.words()
+    return msgs.SETTING_VALUE_NONE.words()
 
 
-def render_value(spec: _s.SettingSpec, value) -> str:
-    """Render a knob's current value with honest empty states."""
+def masks_secrets(settings: dict | None) -> bool:
+    """True when ``settings``' PARANOID_MODE hides secret values."""
+
+    # The store alone: `js/jsrc` itself is applied through `apply_set`.
+    return paranoid.masks(paranoid.read(_s.get_dotted(settings or {}, ("PARANOID_MODE",))))
+
+
+def masked_store(settings: dict, *, masked: bool) -> dict:
+    """A copy of ``settings`` for printing or a snapshot: each secret
+    setting's value rendered as `render_value` shows it when ``masked``."""
+    out = copy.deepcopy(settings)
+    if not masked:
+        return out
+    for spec in _s.REGISTRY:
+        if not spec.secret:
+            continue
+        missing = object()
+        value = _s.get_dotted(out, spec.path, missing)
+        if value is not missing:
+            _s.set_dotted(out, spec.path, render_value(spec, value, masked=True))
+    return out
+
+
+def render_value(spec: _s.SettingSpec, value, *, masked: bool = True) -> str:
+    """Render a setting's current value with honest empty states. A secret
+    shows as <set> when ``masked``."""
     if value is None:
         return _empty_display(spec)
     if spec.type == "bool":
-        return "on" if value else "off"
-    if spec.secret:
-        return "<set>" if value else _empty_display(spec)
+        return msgs.SETTING_VALUE_ON.words() if value else msgs.SETTING_VALUE_OFF.words()
+    if spec.secret and masked:
+        return msgs.SETTING_VALUE_SECRET.words() if value else _empty_display(spec)
     if isinstance(value, dict):
         if not value:
             return _empty_display(spec)
@@ -62,131 +94,170 @@ def render_value(spec: _s.SettingSpec, value) -> str:
     return str(value)
 
 
-def show_lines(settings: dict, key: str | None = None) -> CommandResult:
-    """`show [key]` — every knob and its current value, or just one. A knob
-    the store does not hold shows its js/jsrc value, the value that runs."""
-    if key is not None:
-        spec = _s.spec_for(key)
-        if spec is None:
-            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-        value = _s.knob(settings, spec.key)
-        return CommandResult(
-            handled=True,
-            lines=[
-                f"{spec.key} = {render_value(spec, value)}",
-                f"  {spec.doc}",
-            ],
-        )
+def _set_specs() -> list[_s.SettingSpec]:
+    """Every setting `set` owns."""
+    return list(_s.REGISTRY)
 
-    lines: list[str] = []
-    current_section: str | None = None
-    for spec in _s.REGISTRY:
-        if spec.section != current_section:
-            if current_section is not None:
-                lines.append("")
-            lines.append(f"[{spec.section}]")
-            current_section = spec.section
-        value = _s.knob(settings, spec.key)
-        lines.append(f"  {spec.key} = {render_value(spec, value)}")
-    return CommandResult(handled=True, lines=lines)
+
+def select(name: str | None) -> tuple[list[_s.SettingSpec], bool] | None:
+    """The settings `set NAME` shows, and whether NAME named one setting.
+    NAME is a setting (any case), a group (`/set compaction`), or a
+    wildcard over the names (`/set *_FILE`). No NAME is every setting.
+    None when NAME matches nothing. A group or a wildcard lists only the
+    settings `set` owns."""
+    if name is None:
+        return _set_specs(), False
+    spec = _s.spec_for(name)
+    if spec is not None:
+        return [spec], True
+    if any(char in name for char in "*?["):
+        pattern = name.upper()
+        found = [spec for spec in _set_specs() if fnmatch.fnmatchcase(spec.key.upper(), pattern)]
+    else:
+        found = [spec for spec in _set_specs() if spec.section.lower() == name.lower()]
+    return (found, False) if found else None
+
+
+def show_lines(settings: dict, key: str | None = None, *, columns: int | None = None) -> CommandResult:
+    """`set [NAME]`: the settings NAME selects (`select`) and their values. A
+    setting the store does not hold shows its js/jsrc value, the value that runs."""
+    return show_lines_effective(settings, None, key, columns=columns)
 
 
 # ---------------------------------------------------------------------------
 # Effective ("live") view
 #
 # `show_lines` renders the settings STORE — the values in the jsrc-derived dict.
-# But a flag (`--model`), a saved login, and env-read sampling (JS_TEMP ...) feed
+# But a flag (`--model`), a saved login, and env-read sampling (JS_TEMPERATURE ...) feed
 # the next turn WITHOUT ever landing in the store, so the store lies about what
-# runs. The REPL overlays those live sources onto the display via a per-knob
-# ``LiveValue`` map computed at the call site (cli.py), keeping `show_lines`
+# runs. The REPL overlays those live sources onto the display via a per-setting
+# ``LiveValue`` map computed at the call site (repl_settings_commands.py), keeping `show_lines`
 # itself pure for config-file processing.
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class LiveValue:
-    """One knob's effective value plus where it actually comes from."""
+    """One setting's effective value plus where it actually comes from."""
 
-    display: str   # already rendered + masked (secrets stay <set>)
-    source: str    # e.g. "--model flag", "login testes", "env JS_TEMP"
+    display: str   # already rendered; a secret masked per PARANOID_MODE
+    source: str    # e.g. "--model flag", "login testes", "env JS_TEMPERATURE"
 
 
 def _annotate(line: str, live: LiveValue | None) -> str:
-    return line if live is None else msgs.SETTING_LIVE.text(line=line, source=live.source)
+    return line if live is None else msgs.line_for(msgs.SETTING_LIVE, line=line, source=live.source)
+
+
+def _setting_lines(message: msgs.Message, key: str, value: str, *,
+                   live: LiveValue | None = None, columns: int | None = None) -> list[str]:
+    if columns is None:
+        return [_annotate(msgs.line_for(message, key=key, value=value), live)]
+    def said(text: str) -> msgs.Said:
+        line = message.said(key=key, value=text)
+        return line if live is None else msgs.SETTING_LIVE.said(line=line, source=live.source)
+
+    marker = "\x00"
+    marked = said(marker)
+    plain = marked.message.plain(**marked.fields)
+    # Here, not at the top: text_layout needs prompt_toolkit, and js.swarm
+    # (which reaches this module) is imported by programs that have only the
+    # standard library.
+    from . import text_layout
+
+    indent = text_layout.cells(plain.partition(marker)[0]) if plain.count(marker) == 1 else 0
+    line = said(value)
+    unwrapped = line.message.plain(**line.fields)
+    if indent > columns // 2 and any(text_layout.cells(row) > columns for row in unwrapped.splitlines()):
+        value = "\n" + value
+        indent = min(4, columns // 2)
+        line = said(value)
+    return [msgs.for_stream(row) for row in text_layout.hanging_rows(
+        line.message.runs(**line.fields), columns, indent)]
 
 
 def show_lines_effective(
     settings: dict,
     overlay: Mapping[str, LiveValue] | None = None,
     key: str | None = None,
+    *,
+    columns: int | None = None,
 ) -> CommandResult:
-    """Like `show_lines`, but a knob present in ``overlay`` shows its effective
-    value and a ``(live: <source>)`` tag instead of the store value."""
+    """Like `show_lines`, but a setting present in ``overlay`` shows its
+    effective value and a ``live: <source>`` tag instead of the store value."""
     overlay = overlay or {}
-    if key is not None:
-        spec = _s.spec_for(key)
-        if spec is None:
-            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-        live = overlay.get(spec.key)
-        display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
-        return CommandResult(
-            handled=True,
-            lines=[
-                _annotate(f"{spec.key} = {display}", live),
-                f"  {spec.doc}",
-            ],
-        )
-
+    selected = select(key)
+    if selected is None:
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
+    specs, one = selected
     lines: list[str] = []
-    current_section: str | None = None
-    for spec in _s.REGISTRY:
-        if spec.section != current_section:
-            if current_section is not None:
-                lines.append("")
-            lines.append(f"[{spec.section}]")
-            current_section = spec.section
+    width = max(len(spec.key) for spec in specs)
+    masked = masks_secrets(settings)
+    for spec in specs:
         live = overlay.get(spec.key)
-        display = live.display if live is not None else render_value(spec, _s.knob(settings, spec.key))
-        lines.append(_annotate(f"  {spec.key} = {display}", live))
+        display = live.display if live is not None else render_value(
+            spec, _s.knob(settings, spec.key), masked=masked)
+        name = spec.key.upper()
+        message = msgs.SETTING_IS if one else msgs.SETTING_ROW
+        label = name if one else name.ljust(width)
+        lines.extend(_setting_lines(message, label, display, live=live, columns=columns))
     return CommandResult(handled=True, lines=lines)
+
+
+_UNSET = object()
 
 
 # ---------------------------------------------------------------------------
 # set
 # ---------------------------------------------------------------------------
 
-def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
+def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, columns: int | None = None) -> CommandResult:
     """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
+    if any(not part for part in key.split(".")):
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     spec = _s.spec_for(key)
     if spec is not None:
-        value, error = _s.coerce_value(spec, raw)
+        value, error = setting_values.coerce_value(spec, raw)
         if error is not None:
-            return CommandResult(handled=True, error=f"{spec.key}: {error}")
+            return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=spec.key, error=error))
+        if _events.current_call() is not None and _s.get_dotted(settings, spec.path, _UNSET) == value:
+            # An `on` handler that sets what is already set says nothing.
+            return CommandResult(handled=True)
         _s.set_dotted(settings, spec.path, value)
+        if spec.key == "BANNER":
+            # The confirmation already speaks under the new banner.
+            (msgs.set_banner if banner_changed is None else banner_changed)(str(value))
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[f"{spec.key} = {render_value(spec, value)}"],
+            lines=_setting_lines(msgs.SETTING_CHANGED, spec.key.upper(),
+                                 render_value(spec, value, masked=masks_secrets(settings))
+                                 if spec.secret else raw.strip(), columns=columns),
             changed_keys=[spec.key],
         )
 
-    # sub-keys of a map knob (wiki.aliases.creative) or other keys within a known
-    # section — stored with loose scalar coercion. Children of registered
-    # non-map knobs are rejected so structured settings keep their validated shape.
-    path = tuple(p for p in key.split(".") if p)
+    # A sub-key of a map setting (EXTRA_PARAMS.organization) is stored with
+    # loose scalar coercion, or as the string a JSON string literal spells. Any other name that is not a setting is refused,
+    # children of registered non-map settings included.
+    key = _s.child_key(key)
+    path = tuple(key.split("."))
     prefix_spec = _s.parent_spec(key)
-    if prefix_spec is not None and prefix_spec.type != "map":
-        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-    if prefix_spec is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
-        value = _s.coerce_extra_value(raw)
+    if prefix_spec is not None and prefix_spec.type == "map":
+        # A JSON string literal is the string it spells, as for any string
+        # setting (`from_line_literal`); anything else is read loosely.
+        text = raw.strip()
+        decoded = jsrc_line.from_line_literal(text)
+        value = decoded if decoded != text else setting_values.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[f"{key} = {value}"],
+            lines=_setting_lines(
+                msgs.SETTING_CHANGED, key,
+                msgs.SETTING_VALUE_SECRET.words() if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
+                else raw.strip(), columns=columns),
             changed_keys=[key],
         )
 
-    return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
+    return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
 
 
 def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
@@ -203,18 +274,24 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> CommandResult:
-    """`set -<key>` — clear a knob. With ``baseline`` (the layers below this
-    one), the knob takes the baseline's value; a knob the baseline does not
+def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banner_changed=None, columns: int | None = None) -> CommandResult:
+    """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
+    one), the setting takes the baseline's value; a setting the baseline does not
     hold is removed from ``settings``."""
+    if any(not part for part in key.split(".")):
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     spec = _s.spec_for(key)
-    path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
+    if spec is None:
+        key = _s.child_key(key)
+    path = spec.path if spec is not None else tuple(key.split("."))
     if not path:
-        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     if spec is None:
         prefix_spec = _s.parent_spec(key)
-        if prefix_spec is None and not (path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
-            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
+        if prefix_spec is None or prefix_spec.type != "map":
+            # Only a sub-key of a map setting is an unset target besides a
+            # setting (apply_set refuses the rest for the same reason).
+            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     missing = object()
     before = _s.get_dotted(settings, path, missing)
     restored = _s.get_dotted(baseline, path, missing) if baseline is not None else missing
@@ -222,34 +299,87 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
     if restored is not missing:
         _s.set_dotted(settings, path, copy.deepcopy(restored))
     after = _s.get_dotted(settings, path, missing)
+    if spec is not None and spec.key == "BANNER":
+        (msgs.set_banner if banner_changed is None else banner_changed)(str(_s.knob(settings, "BANNER")))
     changed = before is not after and before != after
     if spec is not None:
         key = spec.key
-        display = render_value(spec, None if after is missing else after)
+        display = render_value(spec, None if after is missing else after, masked=masks_secrets(settings))
+        name = key.upper()
     else:
-        display = "<unset>" if after is missing else str(after)
-    entry = msgs.SETTING_ALREADY_UNSET if before is missing else msgs.SETTING_VALUE
+        prefix_spec = _s.parent_spec(key)
+        secret = prefix_spec is not None and prefix_spec.secret
+        if after is missing:
+            display = msgs.SETTING_VALUE_UNSET.words()
+        elif secret and masks_secrets(settings):
+            display = msgs.SETTING_VALUE_SECRET.words()
+        else:
+            display = str(after)
+        name = key
+    entry = msgs.SETTING_CHANGED if changed else msgs.SETTING_IS
     return CommandResult(
         handled=True,
         changed=changed,
-        lines=[entry.text(key=key, value=display)],
+        lines=_setting_lines(entry, name, display, columns=columns),
         changed_keys=[key] if changed else [],
     )
 
 
-def set_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
-    """`set` shows every value, `set key` shows one, `set -key` clears one
-    (back to its ``baseline`` value, see `apply_unset`), `set key value` sets
-    one."""
-    parts = arg.split(maxsplit=1)
-    if not parts:
-        return show_lines(settings)
-    key = parts[0]
+def set_command(settings: dict, arg: str, baseline: dict | None = None, *, banner_changed=None, columns: int | None = None) -> CommandResult:
+    """`set` shows every value, `set NAME` shows what NAME selects
+    (`select`), `set -NAME` clears one (back to its ``baseline`` value, see
+    `apply_unset`), `set NAME value` sets one."""
+    key, value = jsrc_line.first_word(arg)
+    if not key:
+        return show_lines(settings, columns=columns)
     if key.startswith("-") and len(key) > 1:
-        return apply_unset(settings, key[1:], baseline)
-    if len(parts) == 1:
-        return show_lines(settings, key)
-    return apply_set(settings, key, parts[1])
+        return apply_unset(settings, key[1:], baseline, banner_changed=banner_changed, columns=columns)
+    if not value:
+        return show_lines(settings, key, columns=columns)
+    return apply_set(settings, key, value, banner_changed=banner_changed, columns=columns)
+
+
+# ---------------------------------------------------------------------------
+# fset
+# ---------------------------------------------------------------------------
+
+def fset_rows(settings: dict, pattern: str | None = None) -> list[str]:
+    """`NAME value` for every /fset entry, or those ``pattern`` matches
+    (`*` and `?` wildcards; a bare name matches itself)."""
+    rows: list[str] = []
+    for name in _fset.names():
+        if pattern is None or fnmatch.fnmatchcase(name, pattern):
+            value = _fset.lookup(name)
+            if value is None and name in msgs.ENTRIES:
+                value = msgs.ENTRIES[name].format()
+            rows.append(msgs.line_for(msgs.FSET_VALUE, name=name, value=value) if value
+                        else msgs.line_for(msgs.FSET_EMPTY, name=name))
+    return rows
+
+
+def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
+    """`fset` lists every entry, `fset NAME` (or a `*` pattern) shows them,
+    `fset -NAME` clears one, `fset NAME value` sets one."""
+    name, value = jsrc_line.first_word(arg)
+    name = name.upper()
+    if not name:
+        return CommandResult(handled=True, lines=fset_rows(settings))
+    if name.startswith("-") and len(name) > 1:
+        if not _fset.is_name(name[1:]):
+            return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name[1:]))
+        changed = _fset.unset_entry(name[1:])
+        return CommandResult(handled=True, changed=changed, lines=fset_rows(settings, name[1:]))
+    if not value:
+        rows = fset_rows(settings, name)
+        if not rows:
+            return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name))
+        return CommandResult(handled=True, lines=rows)
+    if not _fset.is_name(name):
+        return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name))
+    error = _fset.set_entry(name, jsrc_line.from_line_literal(value))
+    if error is not None:
+        return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=name, error=error))
+    return CommandResult(handled=True, changed=True, lines=fset_rows(settings, name))
 
 
 # ---------------------------------------------------------------------------
@@ -269,20 +399,19 @@ def event_lines(hooks: _events.EventHooks) -> list[str]:
 
 def on_command(hooks: _events.EventHooks, arg: str) -> CommandResult:
     """`on` lists handlers; `on [^]event handler` registers one."""
-    parts = arg.split(maxsplit=1)
-    if not parts:
-        return CommandResult(handled=True, lines=event_lines(hooks) or [msgs.NO_EVENT_HANDLERS.text()])
-    if len(parts) < 2:
-        return CommandResult(handled=True, error=msgs.ON_NEEDS_TWO.text())
-    handler = parts[1].strip()
+    event, handler = jsrc_line.first_word(arg)
+    if not event:
+        return CommandResult(handled=True, lines=event_lines(hooks) or [msgs.line_for(msgs.NO_EVENT_HANDLERS)])
+    if not handler:
+        return CommandResult(handled=True, error=msgs.ON_NEEDS_TWO.said())
     if handler.startswith("="):
         handler = handler[1:].lstrip()
     try:
-        hook = hooks.add(parts[0], handler)
+        hook = hooks.add(event, handler)
     except ValueError as e:
         return CommandResult(handled=True, error=str(e))
     prefix = "^" if hook.suppress else ""
-    return CommandResult(handled=True, changed=True, lines=[f"on {prefix}{hook.event} = {hook.handler}"])
+    return CommandResult(handled=True, changed=True, lines=[msgs.EVENT_HANDLER_REGISTERED.words(prefix=prefix, event=hook.event, handler=hook.handler)])
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +470,7 @@ def load_path(arg: str, base: Path) -> tuple[Path | None, str | None]:
     except ValueError as e:
         return None, str(e)
     if len(parts) != 1:
-        return None, msgs.LOAD_NEEDS_ONE_PATH.text()
+        return None, msgs.LOAD_NEEDS_ONE_PATH.said()
     path = Path(parts[0]).expanduser()
     if not path.is_absolute():
         path = base / path
@@ -352,43 +481,78 @@ def load_path(arg: str, base: Path) -> tuple[Path | None, str | None]:
 # Line splitting and the config layer
 # ---------------------------------------------------------------------------
 
-def split_command(line: str) -> tuple[str, str] | None:
-    """``(verb, arg)`` for a command line, or None for a blank/comment line.
-    One leading ``/`` is stripped: it is required at the input line and
-    optional everywhere else."""
-    body = line.strip()
-    if body.startswith("/"):
-        body = body[1:].lstrip()
-    if not body or body.startswith("#"):
-        return None
-    verb, _, arg = body.partition(" ")
-    return verb.lower(), arg.strip()
+# Verbs whose text keeps its `$NAME`s for later: an alias or handler body is
+# expanded when it runs.
+_EXPANDED_LATER = ("alias", "on")
+
+
+_NAME = re.compile(r"\$(\$|[A-Z][A-Z0-9_]*)")
+
+
+def expand_names(text: str, settings: dict | None = None) -> str:
+    """``text`` with each `$NAME` of a setting or /fset entry replaced by its
+    value, from ``settings`` (else the live settings /fset is bound to); `$$`
+    is a `$`. One pass: a value put in is never read again. Any other `$` stays."""
+
+    def value(match: re.Match) -> str:
+        name = match.group(1)
+        if name == "$":
+            return "$"
+        spec = _s.spec_for(name)
+        if spec is not None:
+            found = _s.knob(settings, spec.key) if settings is not None else _fset.setting_value(spec.key)
+            return match.group(0) if found is None else setting_values.config_value_text(found)
+        if _fset.is_name(name):
+            found = _fset.entry_value(name)
+            return match.group(0) if found is None else found
+        return match.group(0)
+
+    return _NAME.sub(value, text)
+
+
+def expand_line(line: str, settings: dict | None = None) -> str:
+    """A script, jsrc, alias or handler line with its `$NAME`s expanded once
+    (`expand_names`). An `alias` or `on` line, and an `fset` line for
+    a format or a colour, keep theirs: they are read when the text runs or is
+    drawn (`js.fset.read_when_drawn`)."""
+    parsed = jsrc_line.split_command(line)
+    if parsed is None or parsed[0] in _EXPANDED_LATER:
+        return line
+    verb, arg = parsed
+    name = jsrc_line.first_word(arg)[0].lstrip("-").upper()
+    if verb == "fset" and _fset.read_when_drawn(name):
+        return line
+    return expand_names(line, settings)
 
 
 def config_owns(verb: str) -> bool:
-    """Verbs the settings layer applies while config loads: `set`, and a
-    setting's short name (`model X` is `set model X`). Every other verb in a
-    jsrc runs through the command table when the REPL starts."""
-    return verb == "set" or verb in _s.SPEC_BY_ALIAS
+    """Verbs the settings layer applies while config loads: `set`, `fset`,
+    and a setting's short name (`model X` is `set model X`). Every other verb
+    in a jsrc runs through the command table when the REPL starts."""
+    return verb in ("set", "fset") or verb in _s.SPEC_BY_ALIAS
 
 
 def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -> CommandResult:
     """Apply one jsrc line to ``settings`` at config load. Comments/blanks are
     no-ops; a verb the settings layer does not own returns ``handled=False``.
-    `set -key` puts that knob back to its ``baseline`` value (see
+    `set -key` puts that setting back to its ``baseline`` value (see
     `apply_unset`). A bad `set` returns an ``error`` so the loader can surface
     it without aborting."""
-    parsed = split_command(line)
+    parsed = jsrc_line.split_command(line)
     if parsed is None:
         return CommandResult(handled=True)
     verb, arg = parsed
     if not config_owns(verb):
         return CommandResult(handled=False)
+    if verb == "fset":
+        if not jsrc_line.first_word(arg)[1] and not arg.startswith("-"):
+            return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.said(line=line.strip()))
+        return fset_command(settings, arg, baseline)
     if verb != "set":
         arg = f"{verb} {arg}"
-    parts = arg.split(maxsplit=1)
-    if len(parts) == 1 and parts[0].startswith("-") and len(parts[0]) > 1:
-        return apply_unset(settings, parts[0][1:], baseline)
-    if len(parts) < 2:
-        return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.text(line=line.strip()))
-    return apply_set(settings, parts[0], parts[1])
+    key, value = jsrc_line.first_word(arg)
+    if not value and key.startswith("-") and len(key) > 1:
+        return apply_unset(settings, key[1:], baseline)
+    if not value:
+        return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.said(line=line.strip()))
+    return apply_set(settings, key, value)

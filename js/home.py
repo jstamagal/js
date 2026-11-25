@@ -53,12 +53,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
-from . import agent_migration
-from . import messages as msgs
-from . import paths
-from . import session_catalog
-from . import session_store
-from . import session_text
+from . import (
+    agent_migration,
+    messages as msgs,
+    paths,
+    session_catalog,
+    session_store,
+    session_text,
+    settings as _settings,
+)
 
 # The entries of the old config and data directories js reads, each with the
 # place it reads it from now. Every other entry is left where it is.
@@ -86,7 +89,7 @@ _DATA_ENTRIES = {
 }
 
 # `~/.js/tmp` entries untouched for this long are removed at startup.
-TMP_MAX_AGE_SECONDS = 24 * 60 * 60
+TMP_MAX_AGE_SECONDS = _settings.default_value("TMP_AGE_MAX")
 
 
 @dataclass(frozen=True)
@@ -443,9 +446,13 @@ def _read_old_session(folder: Path, path: Path) -> _OldSession:
             continue
         if message.get("role") == "user" and session.first_user is None:
             session.first_user = str(message.get("content") or "").strip()
-        for call in message.get("tool_calls") or ():
-            if isinstance(call, dict):
-                for text in _task_texts((call.get("function") or {}).get("arguments")):
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict):
+                for text in _task_texts(function.get("arguments")):
                     session.tasks.append((ts or 0.0, text))
     return session
 
@@ -500,8 +507,9 @@ def _liveness_files(path: Path) -> tuple[Path, Path]:
 
 
 def _in_use(path: Path) -> bool:
-    state, _ = _liveness_files(path)
-    return state.exists() and session_catalog.session_in_flight(path)
+    # Unknown liveness (unreadable state, a permission) refuses the move: a
+    # live journal moved under its writer loses records.
+    return session_catalog.session_in_flight(path) is not False
 
 
 def _old_session_folders(apply: bool) -> list[Path]:
@@ -538,13 +546,13 @@ def _file_latest(folder: Path, targets: dict[Path, Path]) -> None:
     old = payload.get("session_file") if isinstance(payload, dict) else None
     old_parts = Path(old).parts if isinstance(old, str) else ()
     moved = next((new for path, new in targets.items()
-                  if path.is_relative_to(folder) and new.is_file()
+                  if path.is_relative_to(folder) and not path.exists() and new.is_file()
                   and old_parts[-len(path.relative_to(folder).parts) - 1:]
                   == (folder.name, *path.relative_to(folder).parts)), None)
     if moved is not None:
         session_store.write_latest(paths.state_root() / folder.name, moved)
-    with contextlib.suppress(OSError):
-        latest.unlink()
+        with contextlib.suppress(OSError):
+            latest.unlink()
 
 
 def refile_sessions(*, apply: bool) -> Iterator[Step]:
@@ -625,10 +633,12 @@ def _locked_home() -> Iterator[None]:
         os.close(fd)
 
 
-def migrate_once(out: TextIO | None = None) -> list[Step]:
+def migrate_once(out: TextIO | None = None, *, on_step=None) -> list[Step]:
     """The startup migration: runs when an old location exists and the marker
     does not, then writes the marker. With nothing to move it touches nothing.
     Each step is printed as it is done."""
+    if paths.custom_home():
+        return []
     marker = paths.home_migration_marker()
     if marker.exists() or not any(os.path.lexists(path) for path in paths.legacy_homes().values()):
         return []
@@ -640,7 +650,10 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
                 return []
             for step in steps(apply=True):
                 done.append(step)
-                msgs.say_said(describe(step, apply=True), file=stream)
+                if on_step is None:
+                    msgs.say_said(describe(step, apply=True), file=stream)
+                else:
+                    on_step(step)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n", encoding="utf-8")
     except OSError as exc:
@@ -648,10 +661,10 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
     return done
 
 
-def sweep_tmp(now: float | None = None) -> list[Path]:
-    """Remove top-level `~/.js/tmp` entries not modified for TMP_MAX_AGE_SECONDS."""
+def sweep_tmp(now: float | None = None, *, settings: dict | None = None) -> list[Path]:
+    """Remove top-level `~/.js/tmp` entries not modified for TMP_AGE_MAX seconds."""
     root = paths.home() / "tmp"
-    cutoff = (time.time() if now is None else now) - TMP_MAX_AGE_SECONDS
+    cutoff = (time.time() if now is None else now) - float(_settings.live_value("TMP_AGE_MAX", settings))
     removed: list[Path] = []
     try:
         entries = list(os.scandir(root))

@@ -1,0 +1,15 @@
+# paper: Light: bitchtea's paper palette.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
+
+fset PALETTE_00 #24332b
+fset PALETTE_02 #dce5dd
+fset PALETTE_03 #356859
+fset PALETTE_04 #a13d36
+fset PALETTE_06 #76517a
+fset PALETTE_07 #8a6116
+fset PALETTE_10 #28677a
+fset PALETTE_12 #176b63
+fset PALETTE_13 #76517a
+fset PALETTE_14 #74766f
+fset PALETTE_93 #c8c3b8
+fset PALETTE_94 #74766f

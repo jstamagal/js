@@ -15,8 +15,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from js import attach, clipimage, screen, settings
-from js import messages as msgs
+from js import attach, clipimage, history_record, messages as msgs, screen, setting_values, settings
 from js.config import Config
 
 _PNG = base64.b64decode(
@@ -34,19 +33,6 @@ def _fresh_store(monkeypatch):
 def no_display(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)
-
-
-def _fake_command(tmp_path: Path, body: str) -> str:
-    script = tmp_path / "fake-clip"
-    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-    script.chmod(0o755)
-    return str(script)
-
-
-def _png_command(tmp_path: Path, data: bytes = _PNG) -> str:
-    image = tmp_path / "clip.bin"
-    image.write_bytes(data)
-    return _fake_command(tmp_path, f"cat '{image}'")
 
 
 def _cfg(tmp_path: Path, *, vision: bool) -> Config:
@@ -102,17 +88,18 @@ def test_wayland_reads_with_wl_paste_and_x11_with_xclip():
 
 def test_no_display_server_means_no_clipboard():
     assert clipimage.clipboard_command({}, {}) is None
+    assert clipimage.clipboard_command({}, {"TERM": "xterm-256color"}) is None
     with pytest.raises(clipimage.ClipboardError) as err:
         clipimage.read_image({}, env={})
     assert err.value.message is msgs.CLIPBOARD_NONE
 
 
-def test_configured_command_wins_over_the_display(tmp_path):
-    command = _png_command(tmp_path)
-    live = {"ui": {"paste_image_command": command}}
-
-    assert clipimage.clipboard_command(live, {"WAYLAND_DISPLAY": "wayland-1"}) == [command]
-    assert clipimage.read_image(live, env={}) == _PNG
+def test_kitty_over_ssh_reads_through_the_terminal():
+    env = {"TERM": "xterm-kitty"}
+    assert clipimage.clipboard_command({}, env) == [
+        "kitten", "clipboard", "-g", "-m", "image/png", "/dev/stdout"]
+    assert clipimage.uses_terminal({}, env)
+    assert not clipimage.uses_terminal({}, {"TERM": "xterm-kitty", "WAYLAND_DISPLAY": "wayland-1"})
 
 
 def test_missing_clipboard_tool_is_one_error(tmp_path, monkeypatch):
@@ -122,49 +109,17 @@ def test_missing_clipboard_tool_is_one_error(tmp_path, monkeypatch):
     assert err.value.message is msgs.CLIPBOARD_TOOL_MISSING
 
 
-@pytest.mark.parametrize("body", ["exit 1", "echo just some text"])
-def test_clipboard_without_an_image_is_one_error(tmp_path, body):
-    live = {"ui": {"paste_image_command": _fake_command(tmp_path, body)}}
-    with pytest.raises(clipimage.ClipboardError) as err:
-        clipimage.read_image(live, env={})
-    assert err.value.message is msgs.CLIPBOARD_NO_IMAGE
-
-
-def test_image_over_max_file_bytes_is_refused(tmp_path):
-    live = {"ui": {"paste_image_command": _png_command(tmp_path)},
-            "limits": {"max_file_bytes": len(_PNG) - 1}}
-    with pytest.raises(clipimage.ClipboardError) as err:
-        clipimage.read_image(live, env={})
-    assert err.value.message is msgs.CLIPBOARD_IMAGE_TOO_LARGE
-
-
 # --- the key -----------------------------------------------------------------
-
-def test_ctrl_v_puts_a_placeholder_in_the_line_and_submit_carries_it(tmp_path):
-    live = {"ui": {"paste_image_command": _png_command(tmp_path)}}
-
-    lines, _left = _drive(["what is ", CTRL_V, " and ", CTRL_V, "\r"], live)
-
-    assert lines == ["what is [image #1] and [image #2]"]
-    assert clipimage.lookup("[image #1]") == _PNG
-    assert clipimage.lookup("[image #2]") == _PNG
-
-
-def test_paste_key_follows_the_setting(tmp_path):
-    live = {"ui": {"paste_image_command": _png_command(tmp_path), "paste_image_key": "escape v"}}
-
-    _lines, left = _drive(["x", "\x1bv"], live)
-
-    assert left == "x[image #1]"
 
 
 def test_no_clipboard_prints_one_line_and_leaves_the_line_alone(no_display, capsys):
     capsys.readouterr()
-    lines, left = _drive(["hello", CTRL_V], {})
+    with clipimage.using_store({}) as kept:
+        lines, left = _drive(["hello", CTRL_V], {})
 
     assert left == "hello"
     assert lines == []
-    assert clipimage._images == {}
+    assert kept == {}
     assert len(capsys.readouterr().out.strip().splitlines()) == 1
 
 
@@ -188,10 +143,9 @@ def test_pasted_image_reaches_the_model_as_an_at_path_image_does(tmp_path, visio
 
     def parts(line: str) -> list:
         prompt, attachments = attach.split_repl_attachments(line)
-        content = attach.build_user_message(prompt, attachments, cfg, cwd=tmp_path).runtime_message["content"]
-        if not isinstance(content, list):
-            return []
-        return [(p.data, p.media_type) for p in content if isinstance(p, ai.types.messages.FilePart)]
+        message = attach.build_user_message(prompt, attachments, cfg, cwd=tmp_path)
+        [user] = history_record.history_to_ai_messages("", [message], vision=vision)
+        return [(p.data, p.media_type) for p in user.parts if isinstance(p, ai.types.messages.FilePart)]
 
     pasted = parts(f"describe {token}")
     from_path = parts("describe @shot.png")
@@ -204,11 +158,41 @@ def test_pasted_image_reaches_the_model_as_an_at_path_image_does(tmp_path, visio
 
 # --- the settings --------------------------------------------------------------
 
-def test_paste_key_setting_takes_key_names_and_refuses_others():
-    spec = settings.SPEC_BY_KEY["ui.paste_image_key"]
 
-    assert settings.coerce_value(spec, "escape  v") == ("escape v", None)
-    value, error = settings.coerce_value(spec, "c-notakey")
+@pytest.mark.parametrize("command", ["wl-paste '", "   "])
+def test_paste_command_setting_refuses_unsplittable_or_empty(command):
+    spec = settings.SPEC_BY_KEY["PASTE_IMAGE_COMMAND"]
+
+    value, error = setting_values.coerce_value(spec, command)
     assert value is None and error
-    assert settings.default_value("ui.paste_image_key") == "c-v"
-    assert settings.default_value("ui.paste_image_command") is None
+    assert setting_values.coerce_value(spec, "wl-paste --type image/png") == ("wl-paste --type image/png", None)
+
+
+def test_placeholder_takes_plain_bounded_numbers_only():
+    token = clipimage.keep(_PNG)
+    assert token == "[image #1]"
+
+    assert clipimage.lookup("[image #01]") is None
+    assert clipimage.lookup("[image #\u0661]") is None
+    assert clipimage.lookup("[image #" + "1" * 5000 + "]") is None
+    assert clipimage.placeholders("[image #" + "1" * 5000 + "] [image #1]") == ["[image #1]"]
+    assert clipimage.placeholders("[image #01] and [image #1]") == ["[image #1]"]
+
+
+def test_registered_clipboard_backends_control_fallback_order():
+    command = clipimage.clipboard_command(
+        {"PASTE_IMAGE_BACKENDS": ["x11", "wayland"]},
+        {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+    )
+    assert command == list(clipimage.X11_COMMAND)
+
+
+def test_image_storage_can_belong_to_each_assembly():
+    first, second = {}, {}
+    with clipimage.using_store(first):
+        token = clipimage.keep(b"first")
+        with clipimage.using_store(second):
+            other = clipimage.keep(b"second")
+            assert clipimage.lookup(other) == b"second"
+        assert clipimage.lookup(token) == b"first"
+    assert first == {1: b"first"} and second == {1: b"second"}

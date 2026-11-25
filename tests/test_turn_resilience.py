@@ -7,32 +7,44 @@ import asyncio
 import json
 import time
 from dataclasses import replace
-from email.utils import format_datetime
 from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import ai
 import httpx
 import pytest
+from test_lazy_tool_discovery import _cfg
 
-from js import compaction, model_client, retry, runtime, settings, turn_call
+from js import (
+    compaction_summary,
+    context_window,
+    history_record,
+    microcompact,
+    model_client,
+    provider_errors,
+    retry,
+    runtime,
+    screen_scrollback,
+    snippets,
+    turn_call,
+)
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg
 
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
-    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n, _budget: 0)
 
 
 def _config(tmp_path, runtime_settings: dict | None = None, *, window: int = 1_000_000, **fields):
     # A window set for the budget keeps the compaction triggers out of these turns.
-    settings = {"compact": {"context_window": window}}
+    settings = {"CONTEXT_SIZE": window}
     if runtime_settings:
-        settings["runtime"] = runtime_settings
+        settings.update(runtime_settings)
     return replace(_cfg(tmp_path, settings), **fields)
 
 
@@ -161,17 +173,6 @@ def _dropped(text: str):
     return step
 
 
-def _silent(*, after_headers: bool):
-    async def step(reader, writer):
-        if after_headers:
-            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
-            writer.write(_chunk(b": opening\n\n"))
-            await writer.drain()
-        await reader.read()  # until the client gives up and closes
-        return False
-    return step
-
-
 def _served_turn(tmp_path, script, runtime_settings=None):
     """Run one turn against a scripted server. Returns (server, messages, error)."""
     messages = [{"role": "user", "content": "go"}]
@@ -208,26 +209,6 @@ def test_429_waits_what_retry_after_asks_then_retries(tmp_path, header, value, w
     assert server.arrivals[1] - server.arrivals[0] >= wait * 0.9
 
 
-def test_retry_budget_is_the_setting_and_the_sdk_adds_no_retries(tmp_path):
-    server, messages, error = _served_turn(
-        tmp_path, [_status(429, {"retry-after": "0"})], {"retry_attempts": 3})
-
-    assert isinstance(error, ai.ProviderAPIError)
-    assert len(server.arrivals) == 4  # the first request and three retries
-    assert messages[-1]["role"] == "user"
-
-
-def test_retry_after_longer_than_the_limit_fails_without_waiting(tmp_path):
-    started = time.monotonic()
-    server, _messages, error = _served_turn(
-        tmp_path, [_status(429, {"retry-after": "60"}), _answer("late")],
-        {"retry_max_wait_seconds": 5})
-
-    assert isinstance(error, ai.ProviderAPIError)
-    assert len(server.arrivals) == 1
-    assert time.monotonic() - started < 10
-
-
 def _rate_limited(headers: dict[str, str]) -> ai.ProviderAPIError:
     response = httpx.Response(429, headers=headers)
     return ai.ProviderRateLimitError(
@@ -249,45 +230,59 @@ def test_retry_after_reads_seconds_milliseconds_and_http_dates():
 # Stream idle watchdog
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("after_headers", [False, True])
-def test_a_silent_stream_is_aborted_and_retried(tmp_path, after_headers):
-    server, messages, error = _served_turn(
-        tmp_path, [_silent(after_headers=after_headers), _answer("recovered")],
-        {"stream_idle_seconds": 0.5})
+
+def _closed():
+    """Reads the request and closes the connection without a header."""
+    async def step(reader, writer):
+        return False
+    return step
+
+
+def _after(seconds: float, step):
+    """`step`, after `seconds` of silence."""
+    async def delayed(reader, writer):
+        await asyncio.sleep(seconds)
+        return await step(reader, writer)
+    return delayed
+
+
+def _stalled(text: str, seconds: float):
+    """Streams one chunk carrying `text`, then is silent for `seconds`."""
+    async def step(reader, writer):
+        first = {"id": "r", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
+                              "finish_reason": None}]}
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+        writer.write(_chunk(b"data: " + json.dumps(first).encode() + b"\n\n"))
+        await writer.drain()
+        await asyncio.sleep(seconds)
+        return False
+    return step
+
+
+@pytest.mark.parametrize("code", [429, 502, 503, 504, 529])
+def test_a_rate_limit_or_gateway_status_is_retried(tmp_path, code):
+    server, messages, error = _served_turn(tmp_path, [_status(code, {}), _answer("recovered")])
 
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "recovered"}
     assert len(server.arrivals) == 2
 
 
-def test_keep_alive_bytes_hold_off_the_idle_watchdog(tmp_path):
-    # 1.2s of keep-alive comments, each 0.15s apart, against a 0.5s limit.
-    server, messages, error = _served_turn(
-        tmp_path, [_answer("slow but alive", keepalive=8, interval=0.15)],
-        {"stream_idle_seconds": 0.5})
+@pytest.mark.parametrize("code", [500, 400, 404, 408, 409, 422])
+def test_a_500_or_other_4xx_fails_at_once(tmp_path, code):
+    server, _messages, error = _served_turn(tmp_path, [_status(code, {}), _answer("never")])
 
-    assert error is None
-    assert messages[-1] == {"role": "assistant", "content": "slow but alive"}
+    assert isinstance(error, ai.ProviderAPIError) and not error.is_retryable
     assert len(server.arrivals) == 1
 
 
-def test_building_the_sdk_client_does_not_count_as_silence(tmp_path, monkeypatch):
-    # The first client in a process imports the provider SDK; stand in for
-    # that with a build slower than the idle limit.
-    from ai.providers.openai.provider import OpenAICompatibleProvider
-    build = OpenAICompatibleProvider._make_sdk_client
-
-    def slow_build(self, **kwargs):
-        time.sleep(0.6)
-        return build(self, **kwargs)
-
-    monkeypatch.setattr(OpenAICompatibleProvider, "_make_sdk_client", slow_build)
-    server, messages, error = _served_turn(
-        tmp_path, [_answer("first try")], {"stream_idle_seconds": 0.3})
+def test_a_connection_closed_before_any_header_is_retried(tmp_path):
+    server, messages, error = _served_turn(tmp_path, [_closed(), _answer("recovered")])
 
     assert error is None
-    assert messages[-1] == {"role": "assistant", "content": "first try"}
-    assert len(server.arrivals) == 1
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+    assert len(server.arrivals) == 2
 
 
 def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
@@ -298,12 +293,42 @@ def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
     assert len(server.arrivals) == 2
 
 
-def test_a_connection_that_keeps_dropping_gives_up_after_the_budget(tmp_path):
-    server, _messages, error = _served_turn(tmp_path, [_dropped("Green")], {"retry_attempts": 2})
+def test_a_long_prefill_is_not_idle(tmp_path):
+    """Silence before the first byte is the prefill: STREAM_IDLE_TIMEOUT
+    starts only at the first byte."""
+    server, messages, error = _served_turn(
+        tmp_path, [_after(1.0, _answer("prefilled"))], {"STREAM_IDLE_TIMEOUT": 0.3})
 
-    assert isinstance(error, ai.ProviderConnectionError)
-    assert error.is_retryable
-    assert len(server.arrivals) == 3
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "prefilled"}
+    assert len(server.arrivals) == 1
+
+
+def test_a_prefill_past_first_byte_timeout_fails_once_naming_it(tmp_path):
+    server, _messages, error = _served_turn(
+        tmp_path, [_after(2.0, _answer("late"))], {"FIRST_BYTE_TIMEOUT": 0.3})
+
+    assert isinstance(error, provider_errors.FirstByteTimeoutError) and not error.is_retryable
+    assert "FIRST_BYTE_TIMEOUT" in str(error)
+    assert len(server.arrivals) == 1
+
+
+def test_a_stream_idle_after_its_first_byte_is_retried(tmp_path):
+    server, messages, error = _served_turn(
+        tmp_path, [_stalled("Gr", 2.0), _answer("recovered")], {"STREAM_IDLE_TIMEOUT": 0.3})
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+    assert len(server.arrivals) == 2
+
+
+def test_keepalives_keep_a_stream_alive(tmp_path):
+    server, messages, error = _served_turn(
+        tmp_path, [_answer("kept", keepalive=4, interval=0.2)], {"STREAM_IDLE_TIMEOUT": 0.5})
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "kept"}
+    assert len(server.arrivals) == 1
 
 
 class _ScrollbackLive:
@@ -323,7 +348,7 @@ class _ScrollbackLive:
 
 
 def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeypatch):
-    from js import display, screen
+    from js import display
 
     def stream(**kwargs):
         if not replies:
@@ -335,7 +360,7 @@ def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeyp
 
     replies: list[str] = []
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     telemetry = runtime.Telemetry(None)
     telemetry.display_factory = lambda _markdown: display.Display(
         scrollback.append, live=_ScrollbackLive(scrollback), flush=scrollback.flush)
@@ -354,15 +379,6 @@ def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeyp
     text = scrollback.buffer.text
     assert "Green" in text and "Next" in text
     assert text.index("Green") < text.index("Next")
-
-
-def test_a_stream_that_stays_silent_gives_up_after_the_budget(tmp_path):
-    server, _messages, error = _served_turn(
-        tmp_path, [_silent(after_headers=True)],
-        {"stream_idle_seconds": 0.3, "retry_attempts": 1})
-
-    assert isinstance(error, model_client.StreamIdleError)
-    assert len(server.arrivals) == 2
 
 
 # --------------------------------------------------------------------------
@@ -439,7 +455,7 @@ def test_still_cut_off_after_escalation_gets_three_resume_nudges(monkeypatch, tm
     # One escalated resend, then three nudges at the configured cap, then the turn ends.
     assert [c["max_output_tokens"] for c in calls] == [1000, 64000, 1000, 1000, 1000]
     for call in calls[2:]:
-        assert _last_user_text(call) == runtime.MAX_OUTPUT_RESUME_NUDGE
+        assert _last_user_text(call) == snippets.render("output-limit-resume")
     assert [m["role"] for m in messages] == ["user"] + ["assistant", "user"] * 3 + ["assistant"]
     kept = [m for m in messages if m["role"] == "assistant"]
     assert [m["content"] for m in kept] == ["part 2", "part 3", "part 4", "part 5"]
@@ -449,16 +465,16 @@ def test_still_cut_off_after_escalation_gets_three_resume_nudges(monkeypatch, tm
 
 
 def test_resume_nudge_that_finishes_ends_the_turn_normally(monkeypatch, tmp_path):
-    # The cap is already the model's limit, so there is no larger cap to try.
+    # The cap set is already the model's limit, so there is no larger cap to try.
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     calls = _scripted_model(monkeypatch, [_cut("first half"), _done("second half")])
     messages = [{"role": "user", "content": "go"}]
 
-    asyncio.run(_run(_config(tmp_path), messages))
+    asyncio.run(_run(_config(tmp_path, max_output_tokens=4096), messages))
 
     assert [c["max_output_tokens"] for c in calls] == [4096, 4096]
     assert [m["content"] for m in messages] == [
-        "go", "first half", runtime.MAX_OUTPUT_RESUME_NUDGE, "second half"]
+        "go", "first half", snippets.render("output-limit-resume"), "second half"]
 
 
 def test_rejected_escalation_falls_back_to_resume_nudges(monkeypatch, tmp_path):
@@ -470,7 +486,7 @@ def test_rejected_escalation_falls_back_to_resume_nudges(monkeypatch, tmp_path):
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 64000, 1000, 1000]
     assert [m["content"] for m in messages] == [
-        "go", "half again", runtime.MAX_OUTPUT_RESUME_NUDGE, "rest"]
+        "go", "half again", snippets.render("output-limit-resume"), "rest"]
 
 
 def test_cut_off_tool_call_is_dropped_and_the_model_resumes(monkeypatch, tmp_path):
@@ -479,20 +495,37 @@ def test_cut_off_tool_call_is_dropped_and_the_model_resumes(monkeypatch, tmp_pat
     calls = _scripted_model(monkeypatch, [_cut("", dangling), _done("smaller pieces")])
     messages = [{"role": "user", "content": "go"}]
 
-    asyncio.run(_run(_config(tmp_path), messages))
+    asyncio.run(_run(_config(tmp_path, max_output_tokens=4096), messages))
 
     assert len(calls) == 2
     assert "tool_calls" not in messages[1]
-    assert messages[2]["content"] == runtime.MAX_OUTPUT_RESUME_NUDGE
+    assert messages[2]["content"] == snippets.render("output-limit-resume")
     assert messages[-1] == {"role": "assistant", "content": "smaller pieces"}
     assert not (tmp_path / "a.txt").exists()
+
+
+def test_a_cut_off_tool_call_keeps_no_thinking_blocks(monkeypatch, tmp_path):
+    # The rewritten reply drops its signed reasoning; the blocks go with it.
+    monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
+    blocks = [{"type": "thinking", "thinking": "plan", "signature": "sig"}]
+    dangling = [ModelToolCall(id="c1", name="write", arguments='{"file_path": "a.txt", "content": "unfin')]
+    cut = _cut("", dangling)
+    cut = replace(cut, reasoning_blocks=blocks,
+                  assistant_message=history_record.with_reasoning_blocks(cut.assistant_message, blocks))
+    _scripted_model(monkeypatch, [cut, _done("smaller pieces")])
+    messages = [{"role": "user", "content": "go"}]
+
+    asyncio.run(_run(_config(tmp_path), messages))
+
+    assert "reasoning_blocks" not in messages[1]
+    assert "reasoning_from" not in messages[1]
 
 
 def test_resume_nudges_are_a_setting(monkeypatch, tmp_path):
     calls = _scripted_model(monkeypatch, [_cut("half")])
     messages = [{"role": "user", "content": "go"}]
 
-    asyncio.run(_run(_config(tmp_path, {"max_output_escalation": 0, "max_output_resumes": 1},
+    asyncio.run(_run(_config(tmp_path, {"OUTPUT_TOKENS_RETRY_MAX": 0, "OUTPUT_RESUMES_MAX": 1},
                              max_output_tokens=1000), messages))
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
@@ -548,7 +581,7 @@ def _history_with_old_results() -> list[dict]:
 
 
 def test_a_stop_whose_input_exceeds_the_window_is_treated_as_overflow(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     # The SDK counts cache reads inside input_tokens: 24k with 20k of them cached.
     calls = _scripted_model(monkeypatch, [
         _answer_with_usage("answer from a cut input", 24_000, cache_read=20_000),
@@ -561,12 +594,12 @@ def test_a_stop_whose_input_exceeds_the_window_is_treated_as_overflow(monkeypatc
 
     assert len(calls) == 2
     assert messages[-1] == {"role": "assistant", "content": "real answer"}
-    assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
+    assert any(m["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
     assert events.named("context_overflow_silent")[0]["prompt_tokens"] == 24_000
 
 
 def test_a_stop_inside_the_window_is_kept(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     calls = _scripted_model(monkeypatch, [_answer_with_usage("fits", 19_000, cache_read=15_000)])
     messages = _history_with_old_results()
 
@@ -600,7 +633,7 @@ def test_escalation_rejected_for_context_length_falls_back_without_shedding_hist
 
 
 def test_escalation_is_held_to_the_room_the_window_leaves(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     cut = replace(_cut("half"), usage=ai.types.usage.Usage(input_tokens=15_000, output_tokens=1000))
     calls = _scripted_model(monkeypatch, [cut, _done("whole")])
 
@@ -613,7 +646,7 @@ def test_escalation_is_held_to_the_room_the_window_leaves(monkeypatch, tmp_path)
 def test_a_window_with_no_room_left_skips_escalation(monkeypatch, tmp_path):
     # Anthropic's model_context_window_exceeded arrives as a 'length' finish:
     # prompt plus output filled the window before the cap did.
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     cut = replace(_cut("half"), usage=ai.types.usage.Usage(input_tokens=19_400, output_tokens=600))
     calls = _scripted_model(monkeypatch, [cut, _done("rest")])
     messages = [{"role": "user", "content": "go"}]
@@ -621,12 +654,7 @@ def test_a_window_with_no_room_left_skips_escalation(monkeypatch, tmp_path):
     asyncio.run(_run(_config(tmp_path, window=20_000, max_output_tokens=1000), messages))
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
-    assert messages[2]["content"] == runtime.MAX_OUTPUT_RESUME_NUDGE
-
-
-def test_codex_requests_carry_no_output_cap_to_escalate():
-    assert model_client.sends_max_output("openai")
-    assert not model_client.sends_max_output("openai-codex")
+    assert messages[2]["content"] == snippets.render("output-limit-resume")
 
 
 def _streaming(text: str, result: ModelStreamResult):
@@ -667,11 +695,11 @@ def test_a_cut_reply_already_printed_is_resumed_not_printed_twice(monkeypatch, t
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
     assert capsys.readouterr().out.count("PARTIAL-") == 1
-    assert [m["content"] for m in messages] == ["go", "PARTIAL-", runtime.MAX_OUTPUT_RESUME_NUDGE, "REST"]
+    assert [m["content"] for m in messages] == ["go", "PARTIAL-", snippets.render("output-limit-resume"), "REST"]
 
 
 def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     calls = _scripted_streaming_model(monkeypatch, [
         _streaming("SHOWN", _answer_with_usage("SHOWN", 24_000)),
     ])
@@ -682,12 +710,12 @@ def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkey
     assert len(calls) == 1
     assert capsys.readouterr().out.count("SHOWN") == 1
     assert messages[-1]["content"] == "SHOWN"
-    assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
+    assert any(m["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
 
 
 def test_a_cap_stop_with_no_output_and_a_full_window_is_overflow(monkeypatch, tmp_path):
     # A server that cuts the input to its window leaves no room to answer.
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     filled = replace(_cut(""), usage=ai.types.usage.Usage(input_tokens=19_900, output_tokens=0))
     calls = _scripted_model(monkeypatch, [filled, _answer_with_usage("real answer", 12_000)])
     events = _Events()
@@ -701,7 +729,7 @@ def test_a_cap_stop_with_no_output_and_a_full_window_is_overflow(monkeypatch, tm
 
 
 def test_a_compact_window_above_the_catalog_is_the_window_silent_overflow_uses(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     calls = _scripted_model(monkeypatch, [_answer_with_usage("fits the real window", 24_000)])
     messages = _history_with_old_results()
 
@@ -721,7 +749,7 @@ def _served_summary(tmp_path, script, runtime_settings=None):
             cfg = _config(tmp_path, runtime_settings, provider_id="openai",
                           provider_api_key="k", provider_base_url=server.url)
             summary = await asyncio.wait_for(
-                compaction.summarize(cfg, "m", [{"role": "user", "content": "hi"}], "", ""), 30)
+                compaction_summary.summarize(cfg, "m", [{"role": "user", "content": "hi"}], "", ""), 30)
             return server, summary
 
     return asyncio.run(drive())
@@ -741,20 +769,17 @@ def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
     assert len(server.arrivals) == 2
 
 
-def test_a_compaction_summary_on_a_silent_stream_is_retried(tmp_path):
-    server, summary = _served_summary(
-        tmp_path, [_silent(after_headers=True), _answer("the summary")], {"stream_idle_seconds": 0.3})
+# --- an endless Retry-After -------------------------------
 
-    assert summary == "the summary"
-    assert len(server.arrivals) == 2
+from js import retry as _retry  # noqa: E402
 
 
-@pytest.mark.parametrize("key", [
-    "runtime.retry_attempts", "runtime.retry_max_wait_seconds", "runtime.stream_idle_seconds",
-    "runtime.max_output_escalation", "runtime.max_output_resumes",
-])
-def test_resilience_knobs_refuse_negative_values(key):
-    spec = settings.spec_for(key)
-    value, error = settings.coerce_value(spec, "-1")
-    assert value is None and error
-    assert settings.coerce_value(spec, "0") == (0, None)
+@pytest.mark.parametrize("wait", [float("inf"), float("nan")])
+def test_an_endless_retry_after_is_too_long_even_with_no_limit(wait):
+    assert _retry.Budget(attempts=3, max_wait=0).too_long(wait)
+    assert _retry.Budget(attempts=3, max_wait=120).too_long(wait)
+
+
+def test_a_finite_wait_is_still_honoured_with_no_limit():
+    assert not _retry.Budget(attempts=3, max_wait=0).too_long(3600.0)
+    assert not _retry.Budget(attempts=3, max_wait=0).too_long(None)

@@ -4,21 +4,24 @@ Regression for: `js -p "foo"` printing
 
     js: tool selector 'reviewer' matched no tool; ignoring
 
-for every agent under ~/.config/js/agents. cli._registry_for returned a module-level
+for every agent under ~/.config/js/agents. The run's registry was a module-level
 registry built with NO prompt roots, so only the js repo's own prompts/ dir was ever
 scanned; cfg.prompt_roots reached the builder solely on the lock_subagent_model branch.
 
-These tests go through cli._registry_for rather than calling build_default_registry with
+These tests go through run_assembly.registry_for rather than calling build_default_registry with
 an explicit path — a test that passes the path directly cannot catch this bug, because
 the bug was that the path was never passed.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
-from js import cli
+import pytest
+
+from js import run_assembly
 from js.toolkit.registry import registry_for_roots
 
 
@@ -37,7 +40,7 @@ def test_agent_in_a_config_root_becomes_a_selectable_tool(tmp_path):
     root = tmp_path / "agents"
     _agent_dir(root, "reviewer")
 
-    registry = cli._registry_for(_cfg((root,)))
+    registry = run_assembly.registry_for(_cfg((root,)))
 
     assert registry.resolve("reviewer") is not None
     assert "reviewer" in registry.select(["reviewer:lazy"]).by_name
@@ -47,7 +50,7 @@ def test_selector_for_a_config_agent_does_not_warn(tmp_path, capsys):
     root = tmp_path / "agents"
     _agent_dir(root, "triage")
 
-    cli._registry_for(_cfg((root,))).select(["triage:lazy"])
+    run_assembly.registry_for(_cfg((root,))).select(["triage:lazy"])
 
     assert capsys.readouterr().err == ""
 
@@ -57,7 +60,7 @@ def test_locked_subagent_model_still_sees_config_agents(tmp_path):
     root = tmp_path / "agents"
     _agent_dir(root, "coder")
 
-    registry = cli._registry_for(_cfg((root,), lock=True))
+    registry = run_assembly.registry_for(_cfg((root,), lock=True))
 
     assert registry.resolve("coder") is not None
     assert "model" not in registry.resolve("task").params
@@ -68,7 +71,7 @@ def test_later_roots_shadow_earlier_ones(tmp_path):
     _agent_dir(early, "research")
     _agent_dir(late, "research")
 
-    registry = cli._registry_for(_cfg((early, late)))
+    registry = run_assembly.registry_for(_cfg((early, late)))
 
     assert len([t for t in registry.tools if t.name == "research"]) == 1
 
@@ -119,16 +122,20 @@ def test_agent_shadowing_a_builtin_tool_name_warns(tmp_path, capsys):
     assert "read" in warning and str(root) in warning
 
 
-def test_directory_without_markdown_or_agent_yaml_is_not_an_agent(tmp_path):
+def test_every_directory_in_a_root_is_an_agent(tmp_path):
     root = tmp_path / "agents"
-    (root / "notanagent").mkdir(parents=True)
-    (root / "notanagent" / "notes.txt").write_text("not a prompt\n", encoding="utf-8")
+    (root / "notesonly").mkdir(parents=True)
+    (root / "notesonly" / "notes.txt").write_text("not a prompt\n", encoding="utf-8")
     (root / "manifestonly").mkdir(parents=True)
     (root / "manifestonly" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+    (root / "empty").mkdir(parents=True)
+    (root / "plainfile").write_text("not a directory\n", encoding="utf-8")
 
     registry = registry_for_roots((root,))
-    assert registry.resolve("notanagent") is None
+    assert registry.resolve("notesonly") is not None
     assert registry.resolve("manifestonly") is not None
+    assert registry.resolve("empty") is not None
+    assert registry.resolve("plainfile") is None
 
 
 def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):
@@ -152,7 +159,7 @@ def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsy
 
     monkeypatch.setattr(Path, "is_dir", is_dir)
 
-    registry = cli._registry_for(_cfg((root,)))
+    registry = run_assembly.registry_for(_cfg((root,)))
 
     assert registry.resolve("alive") is not None
     assert registry.resolve("asleep") is None
@@ -192,37 +199,15 @@ def test_symlinked_agent_is_a_tool_without_following_the_link(tmp_path, monkeypa
     assert capsys.readouterr().err == ""
 
 
-def test_task_child_on_unreachable_agent_is_an_error_result_not_a_crash(tmp_path, monkeypatch):
-    """The task worker's own dir lookup: ENODEV must become ValueError, which the
+def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monkeypatch):
+    """Skipping is only for the startup scan. `js -a asleep` and a task child
+    on `asleep` must stop, cleanly: ENODEV becomes a ValueError, which the task
     worker returns as `ERROR could not load agent ...` to the calling agent."""
     import errno
 
     import pytest
 
-    from js.toolkit.meta import _select_agent_prompt_dir
-
-    root = tmp_path / "agents"
-    dead = _agent_dir(root, "research")
-    real_is_dir = Path.is_dir
-
-    def is_dir(self, *args, **kwargs):
-        if self == dead:
-            raise OSError(errno.ENODEV, "No such device", str(self))
-        return real_is_dir(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "is_dir", is_dir)
-
-    with pytest.raises(ValueError, match="research.*No such device"):
-        _select_agent_prompt_dir("research", (root,))
-
-
-def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monkeypatch):
-    """Skipping is only for the startup scan. `js -a asleep` must stop, cleanly."""
-    import errno
-
-    import pytest
-
-    from js.config import _select_prompt_dir
+    from js import paths
 
     root = tmp_path / "agents"
     dead = _agent_dir(root, "asleep")
@@ -236,4 +221,25 @@ def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monke
     monkeypatch.setattr(Path, "is_dir", is_dir)
 
     with pytest.raises(ValueError, match="asleep.*No such device"):
-        _select_prompt_dir("asleep", tmp_path / "repo", root, tmp_path / "project")
+        paths.agent_dirs("asleep", (tmp_path / "repo", root, tmp_path / "project"))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")
+def test_an_unlistable_project_agent_does_not_fall_back(tmp_path):
+    """A project agent whose directory cannot be listed must not become the
+    global agent of the same name, which would run a different agent silently."""
+    from js import paths
+
+    repo_root = tmp_path / "repo" / "prompts"
+    global_root = tmp_path / "global" / "agents"
+    project_root = tmp_path / "project" / ".js" / "agents"
+    _agent_dir(repo_root, "worker")
+    _agent_dir(global_root, "worker")
+    project_agent = _agent_dir(project_root, "worker")
+
+    project_agent.chmod(0)
+    try:
+        with pytest.raises(ValueError, match="worker.*Permission denied"):
+            paths.agent_dirs("worker", (repo_root, global_root, project_root))
+    finally:
+        project_agent.chmod(0o700)

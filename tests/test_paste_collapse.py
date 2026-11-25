@@ -11,8 +11,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from js import pastes, screen, settings
-from js import prompt_history as ph
+from js import pastes, prompt_history as ph, screen, settings
 
 START, END = "\x1b[200~", "\x1b[201~"
 
@@ -78,13 +77,13 @@ def test_a_small_paste_goes_in_as_typed():
 
 def test_limits_come_from_the_settings():
     live = settings.seed_defaults()
-    settings.set_dotted(live, ("ui", "paste_collapse_lines"), 2)
+    settings.set_dotted(live, ("PASTE_COLLAPSE_LINES",), 2)
     lines, shown = _paste_then_enter("a\nb\nc", live)
     assert lines == ["see a\nb\nc"]
     assert "+3 lines]" in shown
 
-    settings.set_dotted(live, ("ui", "paste_collapse_lines"), 0)
-    settings.set_dotted(live, ("ui", "paste_collapse_chars"), 0)
+    settings.set_dotted(live, ("PASTE_COLLAPSE_LINES",), 0)
+    settings.set_dotted(live, ("PASTE_COLLAPSE_CHARS",), 0)
     text = "\n".join(str(i) for i in range(50))
     _lines, shown = _paste_then_enter(text, live)
     assert "[paste #" not in shown
@@ -154,3 +153,16 @@ def test_only_the_input_line_collapses_a_paste():
         pastes.insert(buffer, text, None)
         assert (buffer.text != text) == collapsed, name
         assert pastes.expand(buffer.text) == text
+
+
+def test_paste_storage_can_belong_to_each_assembly():
+    from js import pastes
+
+    first, second = {}, {}
+    with pastes.using_store(first):
+        token = pastes.keep("first", 0)
+        with pastes.using_store(second):
+            other = pastes.keep("second", 0)
+            assert pastes.expand(other) == "second"
+        assert pastes.expand(token) == "first"
+    assert first == {1: "first"} and second == {1: "second"}

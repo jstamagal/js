@@ -1,0 +1,564 @@
+"""The shell tool."""
+
+from __future__ import annotations
+
+import atexit
+import contextlib
+import json
+import os
+import re
+import secrets
+import shlex
+import shutil
+import threading
+from pathlib import Path
+from typing import Any
+
+from .. import jail, paths, settings as _settings
+from ..capped_process import (
+    CappedProcess,
+    CappedProcessResult,
+    start_capped,
+)
+from ..control_sequences import StreamCleaner
+from ..tool_binaries import TOOLS_DIR
+from .core import Tool, ToolContext, ToolOutput, view as _view
+from .descriptions import load_description, load_parameter_description
+from .presentation import Presentation, looks_around
+from .sanitize import int_or_default, text_or_default
+
+# The js/jsrc SHELL_ENV_KEEP, for a context whose own value is not a list.
+_ENV_ALLOW = tuple(_settings.default_value("SHELL_ENV_KEEP"))
+# Where rustup's cargo and rustc on PATH find their toolchains; a command
+# inherits them with PATH, since without them those binaries do not run.
+_TOOLCHAIN_ENV = ("RUSTUP_HOME", "CARGO_HOME")
+
+
+# Shells whose `-o pipefail` makes a pipeline fail when any stage fails, so
+# `false | cat` reports exit 1. Other shells run the command as given.
+_PIPEFAIL_SHELLS = frozenset({"bash", "zsh"})
+# `$NAME` and `${NAME...}` references in a command's text.
+_VAR_REF_RE = re.compile(r"\$\{?[#!]?([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _resolve_shell(program: str) -> str | None:
+    """The executable the shell tool runs: `SHELL_PROGRAM` looked up on PATH
+    (or taken as given when it is a path)."""
+    return shutil.which(program)
+
+
+def _shell_argv(shell_path: str, command: str, pipefail: bool | None = None) -> list[str]:
+    if pipefail is None:
+        pipefail = _settings.default_value("SHELL_PIPEFAIL")
+    flags = ["-o", "pipefail"] if pipefail and Path(shell_path).name in _PIPEFAIL_SHELLS else []
+    return [shell_path, *flags, "-c", command]
+
+
+# Names the shell sets for itself at startup, whatever its environment holds;
+# keeping them out of the command's environment does not unset them.
+_SHELL_OWN_NAMES = frozenset({
+    "SHLVL", "PWD", "OLDPWD", "_", "PPID", "UID", "EUID", "RANDOM", "LINENO",
+    "SECONDS", "HOSTNAME", "HOST", "BASHPID",
+})
+
+
+def _filtered_references(command: str, allowed: set[str]) -> list[str]:
+    """Names the command references that are set in js's environment but kept
+    out of the command's, and that the shell does not set on its own."""
+    names = set(_VAR_REF_RE.findall(command))
+    return sorted(
+        name for name in names
+        if name in os.environ and name not in allowed and name not in _SHELL_OWN_NAMES
+    )
+
+
+# Commands the shell tool started that had not exited when their call returned.
+# Keyed by handle id; one table per process, shared across turns so a poll in a
+# later turn finds the job a previous turn started.
+_JOBS: dict[str, _ShellJob] = {}
+_JOB_SEQ = 0
+_JOBS_LOCK = threading.Lock()
+KEEP_FINISHED_JOBS = 5
+# Handles of finished jobs dropped from _JOBS, and the owner that ran each, so a
+# later poll on one is told it ended instead of that it never existed.
+_DROPPED: dict[str, str] = {}
+# Jobs a shell call is blocked waiting on right now, keyed by id() of the
+# ToolContext that made the call. A cancelled turn kills these (see
+# interrupt_inflight); a job whose call already returned a handle is not here.
+_BLOCKING: dict[int, list[tuple[str, CappedProcess]]] = {}
+
+
+class _ShellJob:
+    def __init__(self, job_id: str, command: str, process: CappedProcess,
+                 shell_path: str, keep_ansi: bool, cap: int, owner: str) -> None:
+        self.id = job_id
+        self.owner = owner
+        self.command = command
+        self.process = process
+        self.shell_path = shell_path
+        self.keep_ansi = keep_ansi
+        self.cap = cap
+        self.delivered = (0, 0)     # bytes of (stdout, stderr) already handed to the model
+
+    def running(self) -> bool:
+        return self.process.running()
+
+
+def _register_job(job: _ShellJob) -> None:
+    with _JOBS_LOCK:
+        _JOBS[job.id] = job
+        finished = [j for j in _JOBS.values() if not j.running()]
+        for stale in finished[:-KEEP_FINISHED_JOBS] if len(finished) > KEEP_FINISHED_JOBS else []:
+            _JOBS.pop(stale.id, None)
+            _DROPPED[stale.id] = stale.owner
+
+
+def _spill_prefix(job_id: str) -> Path:
+    """Where a job's streams go whole once they pass the cap. Job ids restart
+    at 1 in every js process, so the name carries a random part too."""
+    return paths.tool_results_dir() / f"shell-{job_id}-{secrets.token_hex(4)}"
+
+
+def _next_job_id() -> str:
+    global _JOB_SEQ
+    with _JOBS_LOCK:
+        _JOB_SEQ += 1
+        return str(_JOB_SEQ)
+
+
+def _find_job(handle: str | None, owner: str) -> _ShellJob | None:
+    with _JOBS_LOCK:
+        mine = [job for job in _JOBS.values() if job.owner == owner]
+        if handle:
+            return next((job for job in mine if job.id == str(handle)), None)
+        running = [j for j in mine if j.running()]
+        if running:
+            return running[-1]
+        return mine[-1] if mine else None
+
+
+@contextlib.contextmanager
+def blocking_command(context: ToolContext | None, command: str, process: CappedProcess):
+    job = (command, process)
+    key = id(context)
+    with _JOBS_LOCK:
+        _BLOCKING.setdefault(key, []).append(job)
+    try:
+        yield
+    finally:
+        with _JOBS_LOCK:
+            jobs = _BLOCKING.get(key, [])
+            if job in jobs:
+                jobs.remove(job)
+            if not jobs:
+                _BLOCKING.pop(key, None)
+
+
+def live_tail(context: Any, command: Any, lines: int) -> tuple[list[str], float] | None:
+    """The last ``lines`` lines a shell call on ``context`` has printed so far
+    and how long it has run; None when no call running ``command`` is blocked
+    there or it has printed nothing."""
+    with _JOBS_LOCK:
+        jobs = [process for cmd, process in _BLOCKING.get(id(context), ()) if cmd == command]
+    if not jobs:
+        return None
+    process = jobs[-1]
+    text = b"".join(process.stream(name).snapshot()[0][-8192:] for name in ("stdout", "stderr"))
+    shown = [line for line in text.decode("utf-8", errors="replace").splitlines() if line.strip()]
+    return (shown[-lines:], process.elapsed()) if shown else None
+
+
+def interrupt_inflight(context: Any) -> int:
+    """Kill the commands a shell call on ``context`` is blocked waiting on.
+
+    The runtime calls this on the event loop when the turn running that call
+    is cancelled. The worker thread cannot be cancelled; killing the process
+    tree makes its wait return, so the turn ends now instead of at the call's
+    wait deadline. It only signals: the worker collects the output.
+    Returns how many jobs were signalled.
+    """
+    with _JOBS_LOCK:
+        jobs = list(_BLOCKING.get(id(context), ()))
+    for _, process in jobs:
+        process.send_kill()
+    return len(jobs)
+
+
+@atexit.register
+def _kill_live_jobs() -> None:
+    for job in list(_JOBS.values()):
+        if job.running():
+            job.process.kill()
+
+
+def _clean(raw: bytes, keep_ansi: bool) -> str:
+    text = raw.decode("utf-8", errors="replace")
+    if keep_ansi:
+        return text
+
+    cleaner = StreamCleaner(controls=True)
+    return cleaner.feed(text) + cleaner.flush()
+
+
+# Bytes held back from the inline limit for the stream labels and the HANDLE
+# line around the rendered output.
+_FRAME_BYTES = 128
+
+
+def _output_room(context: Any, header: str) -> int | None:
+    """Bytes the rendered stdout and stderr together may take so the whole
+    result fits TOOL_RESULT_INLINE_MAX, or None without that
+    limit. Past it the runtime would spill the result again, and the preview
+    would lose the tail."""
+    inline = int(getattr(context, "max_tool_result_inline_bytes", 0) or 0)
+    if inline <= 0:
+        return None
+    return max(0, inline - len(header.encode("utf-8")) - _FRAME_BYTES)
+
+
+def _split_budget(sizes: tuple[int, int], budget: int) -> tuple[int, int]:
+    """Share ``budget`` between two streams: a stream under half keeps all of
+    it and the other gets the rest."""
+    out, err = sizes
+    if out + err <= budget:
+        return out, err
+    half = budget // 2
+    if out <= half:
+        return out, budget - out
+    if err <= half:
+        return budget - err, err
+    return half, budget - half
+
+
+def _render_stream(name: str, excerpt, keep_ansi: bool, knob: str) -> str:
+    if excerpt.omitted is None:
+        return _clean(excerpt.head, keep_ansi)
+    first, stop = excerpt.omitted
+    where = (f"the whole {name} is at {excerpt.path} — read it on with range "
+             f"{json.dumps({'start_byte': first})}" if excerpt.path is not None
+             else f"the whole {name} could not be saved")
+    marker = (f"[truncated: {knob} reached; {name} bytes {first}-{stop} of {excerpt.total} "
+              f"({stop - first} bytes) are not shown; {where}]")
+    head = _clean(excerpt.head, keep_ansi)
+    tail = _clean(excerpt.tail, keep_ansi)
+    head = f"{head}\n" if head and not head.endswith("\n") else head
+    return f"{head}{marker}\n{tail}" if tail else f"{head}{marker}"
+
+
+def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool
+                ) -> tuple[tuple[str, str], tuple[str, str] | None]:
+    """stdout and stderr to report to the model, from the last reported byte
+    when ``since_last``, else from the start. Past the budget each shows its
+    head and tail with a marker naming the bytes between them and the file
+    holding the whole stream. With them, when either was cut, both whole, read
+    back from memory or the spill file, for the operator; else None."""
+    streams = (job.process.stream("stdout"), job.process.stream("stderr"))
+    totals = tuple(stream.total for stream in streams)
+    starts = job.delivered if since_last else (0, 0)
+    job.delivered = totals
+    sizes = (totals[0] - starts[0], totals[1] - starts[1])
+    budget, knob = job.cap, f"SHELL_OUTPUT_MAX ({job.cap})"
+    room = _output_room(context, header)
+    if room is not None and room < budget:
+        budget = room
+        knob = f"TOOL_RESULT_INLINE_MAX ({context.max_tool_result_inline_bytes})"
+
+    def render(budget: int) -> tuple[str, str]:
+        shares = _split_budget(sizes, budget)
+        return tuple(  # type: ignore[return-value]
+            _render_stream(name, stream.excerpt(start, share, end=total), job.keep_ansi, knob)
+            for name, stream, start, share, total in zip(("stdout", "stderr"), streams, starts, shares, totals)
+        )
+
+    # The budget counts raw bytes. Rendered text can be larger (each invalid
+    # UTF-8 byte becomes a 3-byte U+FFFD, and the markers add their own), so
+    # the budget shrinks until the rendered text fits the room.
+    rendered = render(budget)
+    while room is not None and budget > 0:
+        used = sum(len(text.encode("utf-8")) for text in rendered)
+        if used <= room:
+            break
+        if knob.startswith("SHELL_OUTPUT_MAX"):
+            knob = f"TOOL_RESULT_INLINE_MAX ({context.max_tool_result_inline_bytes})"
+        budget = max(0, min(budget - 1, budget * room // used - 64))
+        rendered = render(budget)
+    whole = tuple(_clean(stream.read(start, total), job.keep_ansi)
+                  for stream, start, total in zip(streams, starts, totals))
+    return rendered, (whole if whole != rendered else None)  # type: ignore[return-value]
+
+
+# Words that end one pipeline stage and start the next command.
+_STAGE_SEPARATORS = frozenset({"|", "|&", "||", "&&", ";", "&"})
+_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_GREPS = frozenset({"grep", "egrep", "fgrep", "rg"})
+# grep and rg short options that take a value, so the rest of a cluster
+# (`-e…`) is that value, not more options.
+_GREP_VALUE_OPTIONS = frozenset("efABCdDgtTMjrE")
+# A sed script whose last command is `q`/`Q` (`q`, `5q`, `/x/q`, `1,5p;5q`).
+_SED_QUIT_RE = re.compile(r"(?:^|[;{}\s/\d$])[qQ]\d*\s*\}?\s*$")
+
+
+def _last_stage(command: str) -> list[str]:
+    """The words of the last pipeline stage on the command's last line, after
+    any leading NAME=value assignments; [] when it does not split."""
+    lines = [line for line in command.replace("\\\n", " ").splitlines() if line.strip()]
+    if not lines:
+        return []
+    lexer = shlex.shlex(lines[-1], posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return []
+    for index in range(len(words) - 1, -1, -1):
+        if words[index] in _STAGE_SEPARATORS:
+            words = words[index + 1:]
+            break
+    while words and _ASSIGNMENT_RE.match(words[0]):
+        words = words[1:]
+    return words
+
+
+def _grep_stops_early(options: list[str]) -> bool:
+    """True when grep/rg ``options`` hold -q, --quiet, --silent or -m/--max-count."""
+    for word in options:
+        if word == "--":
+            return False
+        if word in ("--quiet", "--silent") or word.startswith("--max-count"):
+            return True
+        if word.startswith("-") and not word.startswith("--"):
+            for flag in word[1:]:
+                if flag in "qm":
+                    return True
+                if flag in _GREP_VALUE_OPTIONS:
+                    break
+    return False
+
+
+def _sed_quits(options: list[str]) -> bool:
+    """True when the sed script in ``options`` ends on a `q`/`Q` command."""
+    scripts: list[str] = []
+    words = iter(options)
+    for word in words:
+        if word in ("-e", "--expression"):
+            scripts.append(next(words, ""))
+        elif word.startswith("--expression="):
+            scripts.append(word.partition("=")[2])
+        elif word in ("-f", "--file"):
+            next(words, None)
+    if not scripts:
+        scripts = [next((word for word in options if not word.startswith("-")), "")]
+    return any(_SED_QUIT_RE.search(script) for script in scripts if script)
+
+
+def _exit_note(command: str, returncode: int, output_bytes: int) -> str:
+    """A line explaining an exit status that is not a failure: 141 (SIGPIPE)
+    when the last stage is a reader that stops early, 1 from grep/rg with no
+    output. "" for any other exit."""
+    if returncode not in (1, 141):
+        return ""
+    words = _last_stage(command)
+    if not words:
+        return ""
+    program, options = Path(words[0]).name, words[1:]
+    if returncode == 141:
+        if (program in ("head", "tail")
+                or (program in _GREPS and _grep_stops_early(options))
+                or (program == "sed" and _sed_quits(options))):
+            return f'note=the output is complete: exit 141 is SIGPIPE, which an earlier stage got when {program} stopped reading early'
+        return ""
+    if program in _GREPS and output_bytes == 0:
+        return f'note=no matches: {program} exits 1 when nothing matched'
+    return ""
+
+
+def _render_finished(job: _ShellJob, result: CappedProcessResult, description: str | None,
+                     allowed: set[str], safe_env: dict[str, str], context: Any, *,
+                     since_last: bool, preface: str = "") -> str | ToolOutput:
+    parts = [preface] if preface else []
+    parts += [f'shell={job.shell_path}', f'exit={result.returncode}']
+    note = _exit_note(job.command, result.returncode,
+                      sum(job.process.stream(name).total for name in ("stdout", "stderr")))
+    if note:
+        parts.append(note)
+    if description:
+        parts.append(f'description={description}')
+    # JS_HOME and the toolchain names reach the command without being allowed.
+    filtered = _filtered_references(job.command, allowed | set(safe_env))
+    if filtered:
+        allowed_names = ",".join(sorted(allowed)) or '<none>'
+        present_names = ",".join(sorted(safe_env)) or '<none>'
+        parts.append(
+            'environment=filtered unset={join_filtered} allowed={allowed_names} present={present_names}; names not allowed by SHELL_ENV_KEEP or the env parameter are unset'.format(join_filtered=','.join(filtered), allowed_names=allowed_names, present_names=present_names)
+        )
+    (stdout, stderr), whole = _job_output(job, context, "\n".join(parts), since_last=since_last)
+    _view(command=job.command, handle=job.id, running=False, exit_code=result.returncode,
+         stdout=(whole or (stdout, stderr))[0], stderr=(whole or (stdout, stderr))[1])
+
+    def text(stdout: str, stderr: str) -> str:
+        rows = list(parts)
+        if stdout:
+            rows.append(f'--- stdout ---\n{stdout}')
+        if stderr:
+            rows.append(f'--- stderr ---\n{stderr}')
+        if not stdout and not stderr:
+            rows.append('(no output)')
+        return "\n".join(rows)
+
+    return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
+
+
+def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOutput:
+    head = (
+        f'command still running after {waited:.0f}s (handle {job.id}, pid {job.process.pid}). It keeps running. Poll it with action="poll", handle="{job.id}" for new output, action="wait", handle="{job.id}", timeout=N to block for it, or action="kill", handle="{job.id}" to stop it.'
+    )
+    (stdout, stderr), whole = _job_output(job, context, head, since_last=True)
+    _view(command=job.command, handle=job.id, running=True, exit_code=None,
+         stdout=(whole or (stdout, stderr))[0], stderr=(whole or (stdout, stderr))[1])
+
+    def text(stdout: str, stderr: str) -> str:
+        parts = [head]
+        if stdout:
+            parts.append(f'--- stdout so far ---\n{stdout}')
+        if stderr:
+            parts.append(f'--- stderr so far ---\n{stderr}')
+        parts.append(f"HANDLE {job.id} RUNNING")
+        return "\n".join(parts)
+
+    return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
+
+
+def shell_environment(context: ToolContext, env: list[str] | None = None) -> tuple[set[str], dict[str, str]]:
+    """Build the command environment shared by shell tools."""
+    configured_allow = context.shell_env_allow
+    if not isinstance(configured_allow, (list, tuple, set, frozenset)):
+        configured_allow = _ENV_ALLOW
+    allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
+    safe_env = {key: os.environ[key] for key in (*allowed, *_TOOLCHAIN_ENV) if key in os.environ}
+    safe_env["JS_HOME"] = str(paths.home())
+    # The managed binaries are downloaded for a command to call by name, so the
+    # directory holding them leads PATH. Without this fd, bat and fzf are
+    # installed and unreachable.
+    if context.shell_managed_path and "PATH" in allowed:
+        managed_bin = str(TOOLS_DIR)
+        inherited = safe_env.get("PATH", "")
+        safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
+    return allowed, safe_env
+
+
+def shell(
+    command: str = "",
+    cwd: str | None = None,
+    timeout: int | None = None,
+    keep_ansi: bool = False,
+    env: list[str] | None = None,
+    description: str | None = None,
+    action: str = "run",
+    handle: str | None = None,
+    context: ToolContext | None = None,
+) -> str:
+    assert context is not None
+    action = (text_or_default(action, "run") or "run").strip().lower()
+    if action in ("poll", "wait", "kill"):
+        return _shell_job_action(action, handle, timeout, description, context)
+    if action != "run":
+        return f"ERROR: unknown action {action!r}; expected run, poll, wait, or kill"
+    command = text_or_default(command)
+    if not command.strip():
+        return "ERROR: command is required for action=\"run\""
+    wait_s = int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
+    workdir = context.resolve_path(cwd) if cwd else context.cwd
+    allowed, safe_env = shell_environment(context, env)
+    program = str(getattr(context, "shell_program", "") or _settings.default_value("SHELL_PROGRAM"))
+    shell_path = _resolve_shell(program)
+    if shell_path is None:
+        return f"ERROR: SHELL_PROGRAM {program!r} is not an executable on PATH"
+    cap = int(context.max_bash_output_bytes)
+    # A command can create/edit/delete anything, so memoized fs_search results are
+    # no longer trustworthy once one has run.
+    context.invalidate_search_cache()
+    job_id = _next_job_id()
+    try:
+        argv = jail.wrap(_shell_argv(shell_path, command, context.shell_pipefail), context, cwd=workdir,
+                         env=safe_env, extra_ro=(Path(shell_path),))
+        process = start_capped(
+            argv,
+            cwd=str(workdir),
+            env=safe_env,
+            cap=cap,
+            spill_prefix=_spill_prefix(job_id),
+        )
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap, context.task_owner)
+    job.allowed, job.safe_env = allowed, safe_env
+    _register_job(job)
+    with blocking_command(context, job.command, job.process):
+        result = process.wait(wait_s)
+    if result is None and context.shell_kill_unfinished:
+        result = process.kill()
+    if result is None:
+        # The command outlived the window. It is NOT killed: a long build or
+        # test run finishing on its own beats one killed at an arbitrary
+        # deadline, and the model gets a handle to come back to it instead of
+        # the operator sitting through the wait.
+        return _render_running(job, process.elapsed(), context)
+    return _render_finished(job, result, description, allowed, safe_env, context, since_last=False)
+
+
+def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None,
+                      context: ToolContext | None = None) -> str:
+    assert context is not None
+    job = _find_job(handle, context.task_owner)
+    if job is None:
+        with _JOBS_LOCK:
+            dropped = handle is not None and _DROPPED.get(str(handle)) == context.task_owner
+        if dropped:
+            return f"ERROR: shell job {handle} already finished and its result was returned; nothing left to {action}"
+        return f"ERROR: no shell job{' ' + str(handle) if handle else ''} to {action}"
+    if action == "kill":
+        was_running = job.running()
+        result = job.process.kill()
+        preface = (f"killed handle {job.id} after {job.process.elapsed():.0f}s" if was_running
+                   else f"handle {job.id} had already exited")
+        return _render_finished(job, result, description, job.allowed, job.safe_env, context,
+                                since_last=True, preface=preface)
+    wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
+    with blocking_command(context, job.command, job.process):
+        result = job.process.wait(wait_s)
+    if result is None and action == "wait" and context.shell_kill_unfinished:
+        result = job.process.kill()
+    if result is None:
+        return _render_running(job, job.process.elapsed(), context)
+    return _render_finished(job, result, description, job.allowed, job.safe_env, context, since_last=True)
+
+
+def tools() -> tuple[Tool, ...]:
+    return (
+        Tool(
+            "shell",
+            load_description("shell"),
+            shell,
+            {
+                "command": {"type": "string"},
+                "cwd": {"type": "string"},
+                "timeout": {
+                    "type": "integer",
+                    "description": load_parameter_description('shell', 'timeout'),
+                },
+                "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run"},
+                "handle": {"type": "string", "description": load_parameter_description('shell', 'handle')},
+                "keep_ansi": {"type": "boolean", "default": False},
+                "env": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": load_parameter_description('shell', 'env'),
+                },
+                "description": {"type": "string"},
+            },
+            required=(),
+            presentation=Presentation(key=("command",), body="command", lexer="bash", unlisted=("description",),
+                                      kind="command", quiet_when=looks_around, result="command",
+                                      fold_noun="look", fold_by_program=True, live=True),
+        ),
+    )

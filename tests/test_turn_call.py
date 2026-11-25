@@ -1,5 +1,6 @@
 """One model call of a turn, driven without a turn: retries, overflow
-recovery, the escalated resend and the resend without signed reasoning."""
+recovery, the escalated resend, the resend without signed reasoning and the
+resend without images a text-only route refused."""
 
 from __future__ import annotations
 
@@ -11,7 +12,16 @@ import ai.types.usage
 import httpx
 import pytest
 
-from js import compaction, model_client, retry, turn_call
+from js import (
+    config,
+    media,
+    messages as msgs,
+    microcompact,
+    model_client,
+    provider_errors,
+    retry,
+    turn_call,
+)
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
@@ -22,7 +32,7 @@ from js.turn_stream import StreamSink, TurnEvents
 
 @pytest.fixture(autouse=True)
 def no_waiting(monkeypatch):
-    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n, _budget: 0)
     monkeypatch.setattr(turn_call.model_metadata, "resolve_max_output", lambda *a, **k: None)
 
 
@@ -34,10 +44,10 @@ def _done(text: str = "done", *, input_tokens: int = 10, output_tokens: int = 5)
     )
 
 
-def _cut(text: str, calls: list[ModelToolCall] | None = None) -> ModelStreamResult:
+def _cut(text: str, calls: list[ModelToolCall] | None = None, *, input_tokens: int = 10) -> ModelStreamResult:
     return ModelStreamResult(
         text=text, tool_calls=calls or [], reasoning="",
-        usage=ai.types.usage.Usage(input_tokens=10, output_tokens=1000),
+        usage=ai.types.usage.Usage(input_tokens=input_tokens, output_tokens=1000),
         finish_reason="length", assistant_message=ai.assistant_message(text),
         incomplete_reason="max_output_tokens",
     )
@@ -58,6 +68,12 @@ def _overflow() -> ai.ProviderAPIError:
 
 def _fatal() -> ai.ProviderAPIError:
     return ai.ProviderStatusError("HTTP 401", provider="openai", code="401", is_retryable=False)
+
+
+def _images_refused() -> ai.ProviderAPIError:
+    return ai.ProviderBadRequestError(
+        "[400]: Message 2 of 2 in this request (role user) carries an image, and the selected model route "
+        "accepts text only.", provider="openai")
 
 
 def _signature_refused() -> ai.ProviderAPIError:
@@ -91,7 +107,7 @@ class _Turn:
 
     def __init__(self, tmp_path, monkeypatch, replies, *, budget=None, attempts=2, max_wait=0.0,
                  escalation=64000, max_out=1000, provider_id="openai",
-                 messages=None):
+                 messages=None, vision=False, limits=None):
         self.calls: list[dict] = []
 
         def stream(**kwargs):
@@ -111,15 +127,16 @@ class _Turn:
         events = TurnEvents(None, lambda event, payload: self.raised.append(event), self.telemetry,
                             model="m", provider_id=provider_id)
         self.messages = messages if messages is not None else [{"role": "user", "content": "go"}]
-        self.convo = TurnConvo("SYSTEM", self.messages, provider_id=provider_id, model="m")
-        self.context = ToolContext(cwd=tmp_path)
+        self.convo = TurnConvo("SYSTEM", self.messages, provider_id=provider_id, model="m", vision=vision)
+        self.context = ToolContext(cwd=tmp_path, vision_enabled=vision)
         self.budget = budget or _Budget()
         status = TurnStatus()
         self.caller = ModelCaller(
             ModelRequest(model="m", provider_id=provider_id, base_url=None, api_key=None,
                          effort=None, max_out=max_out),
-            CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait), stream_idle=None,
-                       max_output_escalation=escalation, max_output_resumes=0),
+            limits or CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait),
+                                 stream=retry.StreamLimits(), max_output_escalation=escalation,
+                                 max_output_resumes=0),
             convo=self.convo, budget=self.budget,
             sink=StreamSink(self.telemetry, status, events, settings={}, suppress_output=True),
             events=events, telemetry=self.telemetry, context=self.context, turn_status=status,
@@ -192,12 +209,12 @@ def test_an_overflow_is_recovered_and_the_request_sent_again(tmp_path, monkeypat
 
 
 def test_overflow_rounds_are_counted_across_the_turns_calls(tmp_path, monkeypatch):
-    replies = [_overflow()] * compaction.MAX_OVERFLOW_ROUNDS + [_done(), _overflow()]
+    replies = [_overflow()] * microcompact.MAX_OVERFLOW_ROUNDS + [_done(), _overflow()]
     turn = _Turn(tmp_path, monkeypatch, replies)
     turn.call()
     with pytest.raises(ai.ProviderAPIError):
         turn.call()
-    assert len(turn.budget.recoveries) == compaction.MAX_OVERFLOW_ROUNDS
+    assert len(turn.budget.recoveries) == microcompact.MAX_OVERFLOW_ROUNDS
 
 
 def test_an_overflow_nothing_can_shed_ends_the_turn(tmp_path, monkeypatch):
@@ -211,7 +228,7 @@ def test_a_silent_overflow_is_shed_and_asked_again(tmp_path, monkeypatch):
     turn = _Turn(tmp_path, monkeypatch, [_done("cut input", input_tokens=5000), _done("whole")],
                  budget=_Budget(window=4000))
     assert turn.call().result.text == "whole"
-    assert turn.budget.recoveries == [(compaction.SilentOverflowError, 1)]
+    assert turn.budget.recoveries == [(provider_errors.SilentOverflowError, 1)]
     assert "context_overflow_silent" in turn.kinds()
 
 
@@ -223,6 +240,13 @@ def test_a_cut_off_reply_is_resent_once_with_a_larger_cap(tmp_path, monkeypatch)
     assert reply.incomplete_reason == "max_output_tokens"
     turn.call()
     assert [c["max_output_tokens"] for c in turn.calls] == [1000, 8000, 1000]
+
+
+def test_an_escalated_cap_is_said_without_a_screen(tmp_path, monkeypatch, capsys):
+    """js -p has no network channel; a change to the session still shows."""
+    turn = _Turn(tmp_path, monkeypatch, [_cut("half"), _done()], escalation=8000)
+    turn.call()
+    assert "8000" in capsys.readouterr().err
 
 
 def test_a_refused_escalated_cap_falls_back_to_the_configured_cap(tmp_path, monkeypatch):
@@ -239,7 +263,7 @@ def test_a_cut_off_tool_call_with_whole_arguments_is_not_resent(tmp_path, monkey
     assert len(turn.calls) == 1
 
 
-def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, monkeypatch):
+def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, monkeypatch, capsys):
     messages = [
         {"role": "user", "content": "go"},
         {"role": "assistant", "content": "ok", "reasoning_content": "thought",
@@ -256,11 +280,102 @@ def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, 
     assert turn.kinds().count("signed_reasoning_dropped") == 1
     assert "reasoning_parts" not in messages[1]
     assert turn.convo.ai is not first
+    assert msgs.SIGNED_REASONING_DROPPED.words(messages=1) in capsys.readouterr().err
+
+
+def _images(messages) -> int:
+    return sum(isinstance(part, ai.types.messages.FilePart) for m in messages for part in m.parts)
+
+
+def test_a_refused_image_is_dropped_and_the_request_sent_again(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "_TEXT_ONLY_MODELS", set())
+    messages = [{"role": "user", "content": "look", media.MEDIA_KEY: [media.store(b"png", "image/png")]}]
+    turn = _Turn(tmp_path, monkeypatch, [_images_refused(), _done()], messages=messages, vision=True)
+    assert turn.call().result.text == "done"
+    assert [_images(c["messages"]) for c in turn.calls] == [1, 0]
+    sent = turn.calls[1]["messages"][-1].parts[0].text
+    assert sent.startswith("look\n") and "accepts text only" in sent
+    assert turn.kinds().count("images_refused") == 1
+    assert turn.context.vision_enabled is False
+    assert config.vision_enabled_for_model("m", {}) is False
+    assert config.vision_enabled_for_model("m", {"VISION": True}) is True
+    assert msgs.IMAGES_REFUSED.words(model="m") in capsys.readouterr().err
+
+
+def test_an_image_refusal_without_images_to_drop_ends_the_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_TEXT_ONLY_MODELS", set())
+    turn = _Turn(tmp_path, monkeypatch, [_images_refused(), _done()], vision=False)
+    with pytest.raises(ai.ProviderAPIError):
+        turn.call()
+    assert len(turn.calls) == 1
+
+
+@pytest.mark.parametrize("text", [
+    "the selected model route accepts text only",
+    "Invalid content type. image_url is only supported by certain models.",
+    "Failed to deserialize the JSON body: unknown variant `image_url`, expected `text`",
+    "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj",
+])
+def test_image_rejections_are_recognised(text):
+    assert provider_errors.is_image_rejection(ai.ProviderBadRequestError(text, provider="openai"))
+
+
+def test_an_image_refusal_inside_the_stream_is_recognised():
+    error = ai.ProviderAPIError("[400]: Message 5 of 5 carries an image, and the selected model route "
+                                "accepts text only.", provider="openai")
+    assert provider_errors.is_image_rejection(error)
+
+
+def test_other_bad_requests_are_not_image_rejections():
+    assert not provider_errors.is_image_rejection(ai.ProviderBadRequestError("max_tokens too large", provider="openai"))
+    assert not provider_errors.is_image_rejection(_retryable())
 
 
 def test_call_limits_read_the_resilience_settings():
-    limits = CallLimits.from_settings({"runtime": {
-        "retry_attempts": 4, "retry_max_wait_seconds": 60, "stream_idle_seconds": 0,
-        "max_output_escalation": 32000, "max_output_resumes": 2}})
-    assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream_idle=None,
+    limits = CallLimits.from_settings({"RETRY_COUNT_MAX": 4, "RETRY_WAIT_MAX": 60, "STREAM_IDLE_TIMEOUT": 0, "CONNECT_TIMEOUT": 30, "FIRST_BYTE_TIMEOUT": 600, "OUTPUT_TOKENS_RETRY_MAX": 32000, "OUTPUT_RESUMES_MAX": 2})
+    assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream=retry.StreamLimits(connect=30.0, first_byte=600.0),
                                 max_output_escalation=32000, max_output_resumes=2)
+
+
+@pytest.mark.parametrize(("window", "escalated"), [
+    # window 9000, prompt unknown -> room = 9000, escalation 8000 fits under it
+    (9000, 8000),
+    # window smaller than the escalation: room binds it
+    (5000, 5000),
+])
+def test_escalation_respects_window_when_usage_has_no_prompt_tokens(tmp_path, monkeypatch, window, escalated):
+    """Room must come from the window even when the usage carries no prompt
+    count."""
+    turn = _Turn(tmp_path, monkeypatch, [_cut("half", input_tokens=0), _done()], escalation=8000,
+                 budget=_Budget(window=window))
+
+    turn.call()
+
+    assert [c["max_output_tokens"] for c in turn.calls] == [1000, escalated]
+
+
+def test_silent_overflow_recovery_can_be_disabled(tmp_path, monkeypatch):
+    turn = _Turn(tmp_path, monkeypatch, [_done("kept", input_tokens=5000), _done("resent")],
+                 budget=_Budget(window=4000),
+                 limits=CallLimits.from_settings({"SILENT_OVERFLOW_RECOVERY": False}))
+    assert turn.call().result.text == "kept"
+    assert turn.budget.recoveries == []
+
+
+def test_overflow_recovery_uses_registered_round_limit(tmp_path, monkeypatch):
+    turn = _Turn(tmp_path, monkeypatch, [_overflow(), _overflow(), _done()],
+                 limits=CallLimits.from_settings({"COMPACTION_OVERFLOW_ROUNDS_MAX": 1}))
+    with pytest.raises(ai.ProviderAPIError):
+        turn.call()
+    assert len(turn.budget.recoveries) == 1
+
+
+def test_call_statistics_reach_the_sink_when_console_stats_are_hidden(tmp_path, monkeypatch, capsys):
+    turn = _Turn(tmp_path, monkeypatch, [_done()])
+    emitted = []
+    turn.telemetry.sink = SimpleNamespace(emit=emitted.append)
+    turn.call()
+    stats = [dict(event.fields) for event in emitted if event.name == "call_stats"]
+    assert len(stats) == 1
+    assert stats[0]["tokens"] == 5
+    assert capsys.readouterr() == ("", "")

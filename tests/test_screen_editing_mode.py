@@ -13,7 +13,7 @@ from prompt_toolkit.output import DummyOutput
 from js import exline, screen
 
 
-def _drive(keys: list[str], mode: str, ex_runner=None) -> tuple[list[str], list[tuple[str, str]]]:
+def _drive(keys: list[str], mode: str, ex_runner=None, completer=None) -> tuple[list[str], list[tuple[str, str]]]:
     """Type ``keys`` (one chunk per write) into a real app, then quit it."""
     lines: list[str] = []
     ex: list[tuple[str, str]] = []
@@ -29,7 +29,7 @@ def _drive(keys: list[str], mode: str, ex_runner=None) -> tuple[list[str], list[
     async def main() -> None:
         with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
             app, _scrollback = screen.build_app(
-                prompt="> ", history=InMemoryHistory(), completer=None,
+                prompt="> ", history=InMemoryHistory(), completer=completer,
                 on_line=on_line, on_interrupt=lambda: None, on_eof=lambda: None,
                 editing_mode=lambda: mode, on_ex=on_ex,
             )

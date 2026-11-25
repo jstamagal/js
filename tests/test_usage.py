@@ -1,5 +1,5 @@
 """Session usage: tokens and cost per model call, totals that survive resume,
-/cost, and the status bar's session figure (js-1g1.19)."""
+/cost, and the status bar's session figure."""
 
 from __future__ import annotations
 
@@ -12,12 +12,19 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import run_async
+from test_lazy_tool_discovery import _cfg
 
-from js import cli, compaction, runtime, screen, usage
+from js import (
+    compaction,
+    compaction_summary,
+    runtime,
+    status_bar,
+    usage,
+)
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit.core import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg
 
 
 @pytest.fixture(autouse=True)
@@ -75,15 +82,22 @@ def test_anthropic_cache_writes_count_as_input_and_cost_the_write_rate():
     # The SDK's Anthropic usage leaves cache writes out of input_tokens.
     raw = {"input_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 2000}
     call = usage.call_usage(_usage(1000, 0, cache_read=0, cache_write=2000, raw=raw),
-                            model="claude-sonnet-4-5", provider_id="anthropic")
+                            model="claude-sonnet-5", provider_id="anthropic")
 
     assert call.input_tokens == 3000
     assert call.cache_write_tokens == 2000
-    assert call.cost == pytest.approx((1000 * 3.0 + 2000 * 3.75) / 1_000_000)
+    assert call.cost == pytest.approx((1000 * 2.0 + 2000 * 2.5) / 1_000_000)
 
 
 def test_a_model_the_catalog_does_not_price_counts_tokens_only():
     call = usage.call_usage(_usage(500, 20), model="qwen3:32b", provider_id="ollama")
+
+    assert (call.input_tokens, call.output_tokens) == (500, 20)
+    assert call.cost is None
+
+
+def test_local_model_named_like_an_api_model_is_not_charged_the_api_price():
+    call = usage.call_usage(_usage(500, 20), model="gpt-5", provider_id="llama.cpp")
 
     assert (call.input_tokens, call.output_tokens) == (500, 20)
     assert call.cost is None
@@ -173,19 +187,34 @@ def test_compaction_summary_calls_are_charged_to_the_session(tmp_path, monkeypat
         return _reply(text="## Goal\nsummary", use=_usage(5000, 300))
 
     monkeypatch.setattr(compaction.model_client, "stream_model_async", summary)
-    asyncio.run(compaction.summarize(cfg, "gpt-5", [{"role": "user", "content": "x"}], "", ""))
+    asyncio.run(compaction_summary.summarize(cfg, "gpt-5", [{"role": "user", "content": "x"}], "", ""))
 
     assert usage.totals(cfg.session_file).input_tokens == 5000
 
 
 # --- /cost and the status bar -------------------------------------------------------
 
+def _repl(cfg, monkeypatch, lines, **kwargs) -> None:
+    """Run the REPL on ``cfg`` over ``lines``."""
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    run_async(monkeypatch, cfg, lines, **kwargs)
+
+
+def _status_bar(cfg, monkeypatch, width: int) -> str:
+    """The REPL's status bar at ``width`` for a session on ``cfg``."""
+    built: dict = {}
+    _repl(cfg, monkeypatch, [], screen_parts=built)
+    return built["status"](width)
+
+
 def test_cost_command_prints_the_totals(tmp_path, monkeypatch, capsys):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(12_345, 678, cache_read=2_000, cache_write=0))])
     live = usage.totals(cfg.session_file)
 
-    cli._cmd_cost("", {}, cfg)
+    capsys.readouterr()
+    _repl(cfg, monkeypatch, ["/cost"])
 
     out = capsys.readouterr().out
     for figure in ("12,345", "678", "2,000", usage.format_dollars(live.cost), "gpt-5"):
@@ -197,7 +226,8 @@ def test_cost_command_shows_tokens_only_for_an_unpriced_model(tmp_path, monkeypa
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(4_321, 99))])
 
-    cli._cmd_cost("", {}, cfg)
+    capsys.readouterr()
+    _repl(cfg, monkeypatch, ["/cost"])
 
     out = capsys.readouterr().out
     assert "4,321" in out and "99" in out
@@ -208,7 +238,7 @@ def test_status_bar_shows_the_session_cost(tmp_path, monkeypatch):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(1_000_000, 0))])
 
-    line = cli._status_bar_line(cfg, {"settings": {}}, False, 120)
+    line = _status_bar(cfg, monkeypatch, 120)
 
     assert usage.format_dollars(1.25) in line
 
@@ -218,7 +248,7 @@ def test_status_bar_shows_tokens_when_no_call_was_priced(tmp_path, monkeypatch):
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(40_000, 2_000))])
 
-    line = cli._status_bar_line(cfg, {"settings": {}}, False, 120)
+    line = _status_bar(cfg, monkeypatch, 120)
 
     assert "$" not in line
     assert usage.format_tokens(42_000) in line
@@ -229,8 +259,8 @@ def test_status_line_gives_way_with_the_cost_after_the_count():
                output_tokens=9642, throbber="*", agent_id="defaultagent", session_short="b61643c8",
                cache_pct=100, cost="$1.23")
 
-    assert "$1.23" in screen.status_line(100, **bar)
-    narrow = screen.status_line(40, **bar)
+    assert "$1.23" in status_bar.status_line(100, **bar)
+    narrow = status_bar.status_line(40, **bar)
     assert "$1.23" not in narrow
     assert "b61643c8" in narrow
     assert "9,600" not in narrow
@@ -244,7 +274,7 @@ def test_wipe_starts_the_totals_again(tmp_path, monkeypatch, capsys):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(100, 10))])
 
-    cli._cmd_wipe("", {"messages": []}, cfg)
+    _repl(cfg, monkeypatch, ["/wipe"])
 
     assert usage.totals(Path(cfg.session_file)).calls == 0
 
@@ -262,3 +292,59 @@ def test_concurrent_charges_leave_the_file_with_the_final_totals(tmp_path):
 
     assert usage.totals(session_file).input_tokens == 200
     assert usage.load(session_file).input_tokens == 200
+
+
+def test_sibling_task_workers_of_an_unsaved_session_do_not_see_each_other(tmp_path, monkeypatch):
+    """Unsaved sessions all map to /dev/null; two `task` workers of an unsaved
+    parent must each see only their own call, while the parent is charged
+    for both."""
+    import os
+
+    cfg = replace(_priced_cfg(tmp_path), session_file=Path(os.devnull))
+    usage.forget(cfg.session_file)
+    parent = ToolContext(cwd=tmp_path)
+    seen: list[int] = []
+    for _ in range(2):
+        worker = ToolContext(cwd=tmp_path, usage_chain=(usage.session_key(cfg.session_file, parent),))
+        worker.task_depth = 1
+        _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(100, 10))], context=worker)
+        seen.append(usage.totals(usage.session_key(cfg.session_file, worker)).input_tokens)
+    assert seen == [100, 100]
+    assert usage.totals(cfg.session_file).input_tokens == 200
+
+
+def test_one_session_named_twice_is_charged_once(tmp_path):
+    session = tmp_path / "s.jsonl"
+    session.touch()
+    (tmp_path / "link").symlink_to(tmp_path)
+    rel = tmp_path / "link" / "s.jsonl"  # the same file through a symlink
+    token = usage.start(usage.Meter((session, rel)))
+    try:
+        usage.record(_usage(100, 10), model="gpt-5", provider_id="openai")
+    finally:
+        usage.stop(token)
+    assert usage.totals(session).calls == 1
+
+
+def test_the_running_session_stays_first_when_an_ancestor_repeats(tmp_path):
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    seen = []
+    token = usage.start(usage.Meter((a, b, a), on_call=lambda call, totals: seen.append(totals)))
+    try:
+        usage.record(_usage(100, 10), model="gpt-5", provider_id="openai")
+    finally:
+        usage.stop(token)
+    assert seen == [usage.totals(a)]
+    assert usage.totals(a).calls == 1 and usage.totals(b).calls == 1
+
+
+def test_a_real_file_named_like_an_unsaved_key_is_still_a_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    real = tmp_path / "unsaved:x.jsonl"
+    call = usage.CallUsage(model="m", provider=None, cost=None, input_tokens=1)
+
+    usage.charge(real, call)
+    usage.charge(usage.UnsavedKey("unsaved:x"), call)
+
+    assert usage.load(real).input_tokens == 1
+    assert not (tmp_path / "unsaved:x").exists()

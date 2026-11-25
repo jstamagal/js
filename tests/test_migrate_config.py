@@ -2,36 +2,84 @@
 
 from __future__ import annotations
 
-from js import cli
+import pytest
 
-
-def test_migrate_writes_jsrc_set_lines_from_toml(tmp_path, monkeypatch):
-    legacy = tmp_path / "config.toml"
-    target = tmp_path / "jsrc"
-    legacy.write_text(
-        '[model]\nid = "deepseek/deepseek-v4-flash"\n[limits]\nmax_tool_iterations = 50\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: legacy)
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: target)
-
-    assert cli._run_migrate_config() == 0
-    text = target.read_text(encoding="utf-8")
-    assert "set model.id deepseek/deepseek-v4-flash" in text
-    assert "set limits.max_tool_iterations 50" in text
+from js import migrate_config, paths, setting_layers
 
 
 def test_migrate_no_legacy_returns_1(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: tmp_path / "missing.toml")
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: tmp_path / "jsrc")
-    assert cli._run_migrate_config() == 1
+    monkeypatch.setattr(paths, "legacy_global_config_file", lambda: tmp_path / "missing.toml")
+    monkeypatch.setattr(paths, "global_config_file", lambda: tmp_path / "jsrc")
+    assert migrate_config.run_migrate_config() == 1
 
 
-def test_migrate_refuses_when_target_exists(tmp_path, monkeypatch):
-    legacy = tmp_path / "config.toml"
-    legacy.write_text('[model]\nid = "x"\n', encoding="utf-8")
-    target = tmp_path / "jsrc"
-    target.write_text("set model.id x\n", encoding="utf-8")
-    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: legacy)
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: target)
-    assert cli._run_migrate_config() == 1
+# --- a jsrc file is rewritten ---
+
+def _jsrc(text: str):
+    from js.rename import rename_old_names
+
+    return rename_old_names(text)
+
+
+@pytest.mark.parametrize("old, new", [
+    ("SET history.cwd_first on", "SET HISTORY_ORDER cwd"),
+    ("alias hc set history.cwd_first off", "alias hc set HISTORY_ORDER last"),
+    ("set provider.extra.thinking.type enabled", "set EXTRA_PARAMS.thinking.type enabled"),
+    ("set history.cwd_first 'off'", "set HISTORY_ORDER 'last'"),
+    ("set compact.context_window_overrides.openai/gpt-6 128000", "set CONTEXT_SIZE_PER_MODEL.openai/gpt-6 128000"),
+    ("#   example:  set model.id cpa/x", "#   example:  set MODEL cpa/x"),
+])
+def test_a_jsrc_line_changes_only_its_setting_name(old, new):
+    assert _jsrc(old) == (new, [])
+
+
+@pytest.mark.parametrize("line, new", [
+    ("set history.file /tmp/history.file", "set HISTORY_FILE /tmp/history.file"),
+    ("set API_KEY sk-JS_TEMP=x", "set API_KEY sk-JS_TEMP=x"),
+    ('set provider.extra {"meta":"JS_AGENT"}', 'set EXTRA_PARAMS {"meta":"JS_AGENT"}'),
+])
+def test_a_value_holding_an_old_name_is_kept_and_reported(line, new):
+    assert _jsrc(line) == (new, [(1, "")])
+
+
+def test_a_deleted_setting_is_commented_out_and_reported():
+    assert _jsrc("set compact.context_window 4096") == ("#set compact.context_window 4096", [(1, " (setting deleted)")])
+    assert _jsrc("on turn_start set limits.max_bash_output_ceiling 9")[1] == [(1, " (setting deleted)")]
+
+
+# --- any other file is only reported on ---
+
+
+def test_no_old_env_name_is_an_env_name_js_reads_now():
+    from js import settings
+    from js.rename import RENAMED_ENV
+
+    current = {settings.canonical_env_name(spec.key) for spec in settings.REGISTRY}
+    assert sorted(current & set(RENAMED_ENV)) == []
+
+
+# ---------------------------------------------------------------------------
+# A jsrc js loads is never rewritten
+# ---------------------------------------------------------------------------
+
+def _load(path):
+    from js import settings
+
+    loaded = settings.seed_defaults()
+    return loaded, setting_layers.load_jsrc_files([path], loaded)
+
+
+def test_a_new_names_jsrc_that_mentions_an_old_name_is_left_as_it_is(tmp_path):
+    from js import settings
+
+    rc = tmp_path / "rc"
+    rc.mkdir()
+    jsrc = rc / "jsrc"
+    text = 'set SHELL_ENV_KEEP PATH,JS_TEMP\nset BANNER "was model.id"\nalias m echo agent=forge\n'
+    jsrc.write_text(text, encoding="utf-8")
+
+    loaded, _warnings = _load(jsrc)
+
+    assert jsrc.read_bytes() == text.encode("utf-8")
+    assert list(rc.iterdir()) == [jsrc]
+    assert settings.knob(loaded, "BANNER") == "was model.id"

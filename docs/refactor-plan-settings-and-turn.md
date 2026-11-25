@@ -12,7 +12,7 @@ I used the `codebase-design` vocabulary throughout: interface, depth, seam, adap
 Line numbers already moved once while I was reading. `main` went from `2193857` to `31900da` when bead/picker merged, and cli.py's `_LIVE_LIMIT_FIELDS` moved from ~448 in the review to 488 and then 490. Treat every number in this plan as an anchor to re-grep, not an address.
 
 In-flight work that collides with this plan (`bd list`):
-- **js-1g1.13 resilience** (bead/resilience): rewrites the retry loop inside `run_turn_async` and adds settings (retry budget, `runtime.stream_idle_seconds`).
+- **js-1g1.13 resilience** (bead/resilience): rewrites the retry loop inside `run_turn_async` and adds settings (retry budget, `STREAM_IDLE_TIMEOUT`).
 - **js-1g1.14 compaction** (bead/compaction): rewrites `_maybe_compact_request_for_budget` and adds a failure breaker whose state crosses turns.
 - **js-1g1.12 reasoning** (bead/reasoning): changes the reasoning stream and the shape of the assistant record.
 - **js-1g1.15 edits, 1g1.26 shell head+tail, 1g1.27–30 (LSP, notebook, keys, paste)**: each probably adds a setting, which today means touching all six places.
@@ -27,7 +27,7 @@ grep -n "_LIVE_[A-Z_]* *:\|^def _cfg_for_live_state\|^def _live_" js/cli.py
 grep -n "_int_knob(\|_jsrc_field(\|_numeric_setting(\|^class Config\|^def from_env" js/config.py
 grep -n "active_context\.[a-z_]* = getattr(cfg\|_settings.knob(live_settings" js/runtime.py
 grep -n "^class ToolContext\|= _knob(" js/toolkit/core.py
-grep -n "^_INHERITED_FIELDS\|^def _child_context" js/toolkit/meta.py
+grep -n "^_INHERITED_FIELDS\|^def _child_context" js/toolkit/subagents.py
 grep -n "^async def run_turn_async\|^def run_turn(\|^    def \|^    async def \|^        def \|^        async def \|nonlocal" js/runtime.py
 awk '/^async def run_turn_async/{s=NR} /^def run_turn\(/{print NR-s " lines"}' js/runtime.py
 grep -rn 'runtime, "_backoff"\|runtime, "_resolve_context_window"\|runtime, "_dispatch_batch"\|runtime.sys, ' tests
@@ -35,7 +35,7 @@ grep -rn 'runtime, "_backoff"\|runtime, "_resolve_context_window"\|runtime, "_di
 Inventory diff. It is read-only and prints the fields that differ between the four hand-kept lists:
 ```
 uv run python -c "
-import dataclasses, js.config as c, js.toolkit.core as k, js.toolkit.meta as m, js.cli as cli
+import dataclasses, js.config as c, js.toolkit.core as k, js.toolkit.subagents as m, js.cli as cli
 cfg={f.name for f in dataclasses.fields(c.Config)}; ctx={f.name for f in dataclasses.fields(k.ToolContext)}
 live={t[0] for t in cli._LIVE_LIMIT_FIELDS+cli._LIVE_OPTIONAL_INT_FIELDS+cli._LIVE_BOOL_FIELDS+cli._LIVE_STR_FIELDS+cli._LIVE_STR_LIST_FIELDS}
 inh=set(m._INHERITED_FIELDS)
@@ -55,14 +55,14 @@ Every setting a merged bead added shows up in this diff. Each one becomes one ro
 
 | Copy | Location | What it holds |
 |---|---|---|
-| Registry | js/settings.py:90–390 (`REGISTRY`) plus js/jsrc (one `set` line per setting) | key, type, doc, env var. This stays as the source of truth. |
+| Registry | js/settings.py:90–390 (`REGISTRY`) plus defaults/jsrc (one `set` line per setting) | key, type, doc, env var. This stays as the source of truth. |
 | Config fields | js/config.py:139–200 | 4 required int fields (`max_tool_iterations`, `max_bash_output_bytes`, `max_tool_result_bytes`, `fetch_timeout_s`:151), 22 `_jsrc_field(...)` fields, `shell_env_allow`, `*_dir` |
 | Loader | js/config.py:499–545 (`_int_knob` ×24, `bool(knob(...))` ×7, `kernel_verbosity` choice, `shell_env_allow` validation, `max(1, …)` clamp) plus ~28 matching kwargs in `Config(...)` at 571–628 | |
 | Live overlay | js/cli.py:490–534 (`_LIVE_LIMIT_FIELDS` 20 rows, `_LIVE_STR_FIELDS`, `_LIVE_STR_LIST_FIELDS`, `_LIVE_OPTIONAL_INT_FIELDS`, `_LIVE_BOOL_FIELDS`), helpers 537–586, loops in `_cfg_for_live_state` 814–842 | Re-derives the same values from the live store with the active cfg as fallback. It **does not** apply the `max(1, …)` clamp to `max_parallel_tools`, so it has already drifted from the loader. |
 | Turn copy | js/runtime.py:1362–1388 | 19 `active_context.X = getattr(cfg, "X", active_context.X)` lines and 5 `_settings.knob(live_settings, ...)` lines (user_agent, shell_program, jail_bind, terminal_cols/rows). Two sourcing rules exist: some fields come from cfg, some from the store. |
 | ToolContext fields | js/toolkit/core.py:360–391 | 26 `_knob(...)` fields |
-| Subagent inheritance | js/toolkit/meta.py:24–50 (`_INHERITED_FIELDS`, 25 names), used by `_child_context`:107 | |
-| Readers | process_net.py:826/847/907, search.py ×5, fetch.md, model_metadata.py:274 | These read `context.fetch_timeout_s` and are the real consumers. |
+| Subagent inheritance | js/toolkit/subagents.py:24–50 (`_INHERITED_FIELDS`, 25 names), used by `_child_context`:107 | |
+| Readers | js/toolkit/fetch.py, web_search.py ×5, fetch.md, model_metadata.py:274 | These read `context.fetch_timeout_s` and are the real consumers. |
 
 The interface here is shallow. To add a per-turn setting you have to know six lists and keep them in step, and nothing fails when one is missed except the behaviour.
 
@@ -82,7 +82,7 @@ KNOBS: tuple[Knob, ...]       # the one place a per-turn setting lands
 
 def project(settings: Mapping | None, fallback: object | None = None) -> dict[str, Any]
     # attr -> effective value for every knob. A missing or invalid value falls back
-    # to fallback.attr when a fallback is given, else to the js/jsrc default.
+    # to fallback.attr when a fallback is given, else to the defaults/jsrc default.
 def install(context, cfg) -> None      # copy the on_context knobs cfg -> ToolContext (getattr-tolerant for SimpleNamespace cfgs)
 def inherit(parent) -> dict[str, Any]  # on_context knobs of a parent ToolContext
 ConfigKnobs   # make_dataclass(frozen=True, kw_only=True, module=__name__), fields from KNOBS
@@ -100,7 +100,7 @@ Readers are small private functions: `integer`, `at_least_one` (for `max_paralle
 - About 27 test helpers build `Config(..., fetch_timeout_s=5, ...)` with keyword arguments, and one does `Config(**{**cfg.__dict__, ...})`.
 - Tests construct `ToolContext(cwd=..., fetch_timeout_s=…)` about 60 times and assign `context.max_read_lines = …` about 50 times.
 
-So `cfg.X` and `context.X` must remain flat, constructible, mutable-on-context attributes. Config inherits `ConfigKnobs` and ToolContext inherits `ContextKnobs`. Two bases are needed because a frozen dataclass cannot inherit from a non-frozen one, or the other way round. `kw_only` lets required Config fields (agent_id, …) follow defaulted base fields, and `ToolContext(tmp_path)` still binds `cwd` positionally. Defaults stay `default_factory` so they read js/jsrc lazily; test_package_jsrc swaps `PACKAGE_JSRC` and expects the defaults to follow.
+So `cfg.X` and `context.X` must remain flat, constructible, mutable-on-context attributes. Config inherits `ConfigKnobs` and ToolContext inherits `ContextKnobs`. Two bases are needed because a frozen dataclass cannot inherit from a non-frozen one, or the other way round. `kw_only` lets required Config fields (agent_id, …) follow defaulted base fields, and `ToolContext(tmp_path)` still binds `cwd` positionally. Defaults stay `default_factory` so they read defaults/jsrc lazily; test_package_jsrc swaps `PACKAGE_JSRC` and expects the defaults to follow.
 
 **Alternatives I rejected:**
 - (a) A nested `cfg.limits` object. This breaks the ~27 constructors and ~50 assignments above.
@@ -109,7 +109,7 @@ So `cfg.X` and `context.X` must remain flat, constructible, mutable-on-context a
 
 **Depth and locality.** The interface is one table plus three functions. Behind it sit coercion, fallback rules, the clamp, defaults, field declaration, live re-projection and subagent inheritance, all in one file. A guard test (every `limits.*` key has a row) turns a forgotten projection into a failing test. The seam is `project()`: the loader, the live overlay and tests all cross it with just a settings dict, so no Config is needed to test it.
 
-**Deletion test.** If you delete `knobs.py`, the six copies reappear across config.py, cli.py, runtime.py, core.py and meta.py. The module earns its keep.
+**Deletion test.** If you delete `knobs.py`, the six copies reappear across config.py, cli.py, runtime.py, core.py and subagents.py. The module earns its keep.
 
 ### Commits (each keeps `just test` and `just lint` green)
 
@@ -136,7 +136,7 @@ Tests:
 
 **K7: Docs.** Add one AGENTS.md sentence next to "Anything settable is a registered setting": *a setting a turn reads is also one `Knob` row in js/knobs.py*. Add a row for `js/knobs.py` to the module table in docs/technical-guide.md (~line 44). Size XS.
 
-Total: about 7 commits, roughly −290 / +330 including ~130 lines of new tests. `fetch_timeout_s` drops from 9 js files to 7 (settings.py, jsrc, knobs.py, process_net.py, search.py, fetch.md, model_metadata.py). It disappears from config.py, cli.py, runtime.py and meta.py, and core.py's fields become generated.
+Total: about 7 commits, roughly −290 / +330 including ~130 lines of new tests. `fetch_timeout_s` drops from 9 js files to 7 (settings.py, jsrc, knobs.py, fetch.py, web_search.py, fetch.md, model_metadata.py). It disappears from config.py, cli.py, runtime.py and subagents.py, and core.py's fields become generated.
 
 ### Tests that move or change
 None are edited for Part 1. The `Config(...)` and `ToolContext(...)` keyword constructors, attribute reads, and `replace()` calls all keep working through the generated kw_only bases. One new file is added: `tests/test_knobs.py`.
@@ -158,7 +158,7 @@ None are edited for Part 1. The `Config(...)` and `ToolContext(...)` keyword con
 > is a turn-scoped `ModelCaller` rather than a `call_model` function, because
 > overflow rounds and the one escalated resend are counted across the turn's
 > calls. The resilience settings are read once per turn as `CallLimits`, not
-> as `TurnSetting` rows, because `compaction.summarize` and the `/login` test
+> as `TurnSetting` rows, because `compaction_summary.summarize` and the `/login` test
 > read the same settings from the store through `js/retry.py`. The code is the
 > reference now; the text below is the plan as written.
 

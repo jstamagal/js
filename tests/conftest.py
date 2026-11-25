@@ -1,10 +1,11 @@
 """Keep offline tests and their subprocesses out of the invoking user's profile,
 and keep the models.dev catalog local."""
 
-import json
 import os
 import shutil
+import signal
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import UTC, datetime
 
@@ -15,6 +16,10 @@ from js import jail, logins, model_metadata, paths
 
 @pytest.fixture(autouse=True)
 def isolated_user_profile(monkeypatch, tmp_path):
+    # `cli.main` fills unset names from a .env into os.environ for the rest
+    # of the process, as a run should; each test ends with the environment
+    # it started with.
+    environ = dict(os.environ)
     # Clear XDG overrides rather than fixing them to this HOME: individual
     # tests deliberately replace HOME again and expect the default layout.
     # Tests of explicit XDG configuration can still set their own overrides.
@@ -49,10 +54,17 @@ def isolated_user_profile(monkeypatch, tmp_path):
     # override behind for the next test on its worker; each test starts on
     # the store under this HOME.
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", None)
+    monkeypatch.setattr(paths, "_HOME", None)
+    # A command line one test ran must not shape the next test's settings.
+    from js import config as _config
+
+    _config.set_invocation(_config.InvocationSources())
     # `js -C` puts the whole process in a jail; one test's jail must not
     # confine the next test's tools.
     yield
     jail.leave()
+    os.environ.clear()
+    os.environ.update(environ)
 
 @pytest.fixture(scope="session")
 def _worker_cache_home(tmp_path_factory):
@@ -89,7 +101,49 @@ def fresh_model_catalog(tmp_path_factory):
         )
         connection.commit()
     status = root / "status.json"
-    return db, status, model_metadata._status_from_db(db, refreshed_at=datetime.now(tz=UTC))
+    return db, status, datetime.now(tz=UTC)
+
+
+@pytest.fixture(scope="session")
+def _worker_envctx_bin(tmp_path_factory):
+    """Where one worker's envctx binary lives. Each test's fresh HOME would
+    otherwise make every prompt expansion compile envctx.c again (~0.25s)."""
+    return tmp_path_factory.mktemp("envctx") / "envctx.bin"
+
+
+@pytest.fixture(autouse=True)
+def shared_envctx_bin(monkeypatch, _worker_envctx_bin):
+    monkeypatch.setenv("ENVCTX_BIN", str(_worker_envctx_bin))
+
+
+@pytest.fixture(autouse=True)
+def stop_signals_stay_as_they_were():
+    """A test that leaves its own SIGINT or SIGTERM handler behind changes
+    how this worker stops: GNU `timeout` signals the whole process group, and
+    a handler that turns SIGTERM into ^C makes a timed-out run read as an
+    interrupt. Each test ends with the handlers it started with."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    yield
+    for sig, handler in before.items():
+        if signal.getsignal(sig) is not handler and handler is not None:
+            signal.signal(sig, handler)
+
+
+@pytest.fixture(autouse=True)
+def fresh_fset(monkeypatch):
+    """Each test starts with no /fset entry set, no live settings bound,
+    colour on whatever NO_COLOR the invoking shell has, and the banner it
+    ends with put back."""
+    from js import fset, messages
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(messages, "BANNER", messages.BANNER)
+    yield
+    fset.reset()
+    fset.bind_settings(None)
 
 
 @pytest.fixture(autouse=True)
@@ -98,12 +152,12 @@ def local_model_catalog(monkeypatch, fresh_model_catalog):
     models.dev. A refresh that reaches the download fails instead. The
     catalog path the models.dev package reads is reset per test, since
     model_metadata activates a database by writing it to the environment."""
-    db, status_path, status = fresh_model_catalog
+    db, status_path, refreshed_at = fresh_model_catalog
     monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: db)
     monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
     monkeypatch.setenv(model_metadata.modelsdotdev_data.DATABASE_PATH_ENV, str(db))
     if not status_path.exists():
-        model_metadata._write_status_file(status)
+        model_metadata.record_refreshed(db, refreshed_at=refreshed_at)
 
     def no_download(source):
         raise RuntimeError(f"offline test suite: not downloading {source}")
@@ -115,17 +169,13 @@ def local_model_catalog(monkeypatch, fresh_model_catalog):
 def home_model_catalog(fresh_model_catalog):
     """Put the session's catalog where a js process started in this test's
     HOME looks for it, so that process does not download models.dev either."""
-    db, _status_path, status = fresh_model_catalog
+    db, _status_path, refreshed_at = fresh_model_catalog
     target = paths.model_catalog_db_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.symlink_to(db)
-    paths.model_catalog_status_path().write_text(json.dumps({
-        "version": model_metadata._STATUS_VERSION,
-        "db_path": str(target),
-        "generated_at": None if status.generated_at is None else status.generated_at.isoformat(),
-        "refreshed_at": status.refreshed_at.isoformat(),
-        "source": status.source,
-        "provider_count": status.provider_count,
-        "model_count": status.model_count,
-    }), encoding="utf-8")
+    # local_model_catalog points this process's status file at the session's;
+    # the home's is the one a js process started here reads.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(model_metadata, "_status_file_path", paths.model_catalog_status_path)
+        model_metadata.record_refreshed(target, refreshed_at=refreshed_at)
     return target

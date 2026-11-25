@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
+import os
 import stat
+from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
-from js.toolkit import ToolContext, build_default_registry, call_tool
-from js.toolkit import core, fs
+from js.toolkit import ToolContext, call_tool, fs, patch, undo
+from js.toolkit.registry import build_default_registry
 
 
 def _persistent_context(tmp_path, session_name: str) -> ToolContext:
@@ -17,6 +19,38 @@ def _persistent_context(tmp_path, session_name: str) -> ToolContext:
         state_dir=tmp_path / "state",
     )
     return context
+
+
+def test_turn_persists_undo_under_supplied_state_directory(tmp_path, monkeypatch):
+    from test_lazy_tool_discovery import _cfg, _result
+
+    from js import runtime
+
+    cfg = _cfg(tmp_path)
+    state_dir = tmp_path / "assembly-state"
+    context = ToolContext(cwd=tmp_path)
+    context.configure_snapshot_store(cfg.agent_id, cfg.session_file, state_dir=state_dir)
+    target = tmp_path / "note.txt"
+    original = b"keep this in undo\n"
+    target.write_bytes(original)
+    replies = iter([
+        _result(("remove-note", "remove", '{"path":"note.txt","permanent":true}')),
+        _result(text="done"),
+    ])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: next(replies))
+
+    one_turn(
+        cfg, "system", [{"role": "user", "content": "Remove note.txt"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select(["remove:eager"]),
+        tool_context=context, state_dir=state_dir, suppress_output=True,
+    )
+
+    assert not target.exists()
+    assert context.undo.directory.is_relative_to(state_dir)
+    restarted = ToolContext(cwd=tmp_path)
+    restarted.configure_snapshot_store(cfg.agent_id, cfg.session_file, state_dir=state_dir)
+    fs.undo("note.txt", context=restarted)
+    assert target.read_bytes() == original
 
 
 @pytest.mark.parametrize("restart", [False, True])
@@ -87,7 +121,7 @@ def test_mode_restore_failure_retains_persisted_snapshot(tmp_path, monkeypatch, 
 def test_legacy_directory_snapshot_still_restores(tmp_path):
     target = tmp_path / "tree"
     context = _persistent_context(tmp_path, "legacy")
-    context.record_snapshot(target, {"kind": "directory", "entries": {"nested/": None, "nested/file": b"old"}})
+    context.undo.record(target, {"kind": "directory", "entries": {"nested/": None, "nested/file": b"old"}})
     context = _persistent_context(tmp_path, "legacy")
     assert fs.undo(str(target), context=context).startswith("restored directory")
     assert (target / "nested/file").read_bytes() == b"old"
@@ -96,7 +130,7 @@ def test_legacy_directory_snapshot_still_restores(tmp_path):
 def test_persisted_tree_rejects_writes_through_symlink(tmp_path):
     target = tmp_path / "tree"
     context = _persistent_context(tmp_path, "unsafe")
-    context.record_snapshot(target, {"kind": "directory", "entries": {
+    context.undo.record(target, {"kind": "directory", "entries": {
         "link": {"kind": "symlink", "target": str(tmp_path)}, "link/escaped": b"bad",
     }})
     context = _persistent_context(tmp_path, "unsafe")
@@ -148,14 +182,17 @@ def test_failed_undo_retains_snapshot_for_retry(tmp_path, monkeypatch, restart, 
         (target / "child").write_text("original")
     elif kind == "symlink":
         target.symlink_to("original")
-    fs._snapshot_remove_target(context, target)
-    if kind == "directory":
-        (target / "child").write_text("changed")
+    # The tool's own snapshot: removing what is there, or creating what is not.
+    if kind == "missing":
+        assert fs.write(file_path=str(target), content="changed", context=context).startswith("wrote")
     else:
-        if kind == "symlink":
-            target.unlink()
-        target.write_text("changed")
-    entries = list(context.snapshot_files[target])
+        assert fs.remove(str(target), permanent=True, context=context).startswith("removed")
+        if kind == "directory":
+            target.mkdir()
+            (target / "child").write_text("changed")
+        else:
+            target.write_text("changed")
+    entries = sorted(context.undo.directory.glob("*/*.snapshot"))
     method = {"file": "write_bytes", "directory": "write_bytes", "symlink": "symlink_to", "missing": "unlink"}[kind]
 
     def fail(*args, **kwargs):
@@ -164,8 +201,8 @@ def test_failed_undo_retains_snapshot_for_retry(tmp_path, monkeypatch, restart, 
     with monkeypatch.context() as patch:
         patch.setattr(Path, method, fail)
         assert fs.undo(str(target), context=context) == "ERROR: injected restore failure"
-    assert len(context.snapshots[target]) == 1
-    assert context.snapshot_files[target] == entries
+    assert context.undo.count(target) == 1
+    assert sorted(context.undo.directory.glob("*/*.snapshot")) == entries
     assert all(entry.is_file() for entry in entries)
     if restart:
         context = _persistent_context(tmp_path, "retry")
@@ -177,17 +214,17 @@ def test_failed_undo_retains_snapshot_for_retry(tmp_path, monkeypatch, restart, 
         assert target.readlink() == Path("original")
     else:
         assert (target / "child" if kind == "directory" else target).read_text() == "original"
-    assert not context.snapshots[target]
+    assert not context.undo.count(target)
     assert all(not entry.exists() for entry in entries)
-    assert not _persistent_context(tmp_path, "retry").snapshots.get(target)
+    assert not _persistent_context(tmp_path, "retry").undo.count(target)
 
 
 def test_undo_restores_a_patch_after_context_restart(tmp_path):
     target = tmp_path / "restart.txt"
     target.write_text("before\n", encoding="utf-8")
     first_process = _persistent_context(tmp_path, "restart")
-    fs.read("restart.txt", context=first_process)
-    patched = fs.patch(
+    fs.fs_read("restart.txt", context=first_process)
+    patched = patch.patch(
         file_path="restart.txt",
         old_string="before",
         new_string="after",
@@ -202,12 +239,25 @@ def test_undo_restores_a_patch_after_context_restart(tmp_path):
     assert target.read_text(encoding="utf-8") == "before\n"
 
 
+def test_unsaved_session_keeps_undo_between_turns(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    context.configure_snapshot_store("test-agent", Path(os.devnull), state_dir=tmp_path / "state")
+    target = tmp_path / "created"
+    fs.write(str(target), content="new file", context=context)
+
+    context.configure_snapshot_store("test-agent", Path(os.devnull), state_dir=tmp_path / "state")
+    fs.undo(str(target), context=context)
+
+    assert not target.exists()
+    assert context.undo.directory is None
+
+
 def test_snapshot_history_is_scoped_to_its_session(tmp_path):
     target = tmp_path / "isolated.txt"
     target.write_text("before\n", encoding="utf-8")
     session_a = _persistent_context(tmp_path, "session-a")
-    fs.read("isolated.txt", context=session_a)
-    fs.patch(
+    fs.fs_read("isolated.txt", context=session_a)
+    patch.patch(
         file_path="isolated.txt",
         old_string="before",
         new_string="after",
@@ -225,10 +275,10 @@ def test_corrupt_persisted_snapshot_costs_one_undo_entry(tmp_path):
     target = tmp_path / "corrupt.txt"
     target.write_text("zero\n", encoding="utf-8")
     first_process = _persistent_context(tmp_path, "corrupt")
-    fs.read("corrupt.txt", context=first_process)
-    fs.patch(file_path="corrupt.txt", old_string="zero", new_string="one", context=first_process)
-    fs.patch(file_path="corrupt.txt", old_string="one", new_string="two", context=first_process)
-    snapshot_files = sorted(first_process.snapshot_store.glob("*/*.snapshot"))
+    fs.fs_read("corrupt.txt", context=first_process)
+    patch.patch(file_path="corrupt.txt", old_string="zero", new_string="one", context=first_process)
+    patch.patch(file_path="corrupt.txt", old_string="one", new_string="two", context=first_process)
+    snapshot_files = sorted(first_process.undo.directory.glob("*/*.snapshot"))
     snapshot_files[-1].write_bytes(b"broken snapshot")
 
     second_process = _persistent_context(tmp_path, "corrupt")
@@ -241,14 +291,14 @@ def test_corrupt_persisted_snapshot_costs_one_undo_entry(tmp_path):
 
 
 def test_snapshot_store_evicts_oldest_entry_at_count_cap(tmp_path, monkeypatch):
-    monkeypatch.setattr(core, "_SNAPSHOT_MAX_ENTRIES", 2)
+    monkeypatch.setattr(undo, "_SNAPSHOT_MAX_ENTRIES", 2)
     target = tmp_path / "bounded.txt"
     context = _persistent_context(tmp_path, "bounded")
     for body in ("zero\n", "one\n", "two\n"):
         target.write_text(body, encoding="utf-8")
         context.snapshot(target)
 
-    persisted = sorted(context.snapshot_store.glob("*/*.snapshot"))
+    persisted = sorted(context.undo.directory.glob("*/*.snapshot"))
     restarted = _persistent_context(tmp_path, "bounded")
     target.write_text("three\n", encoding="utf-8")
     latest = fs.undo("bounded.txt", context=restarted)
@@ -261,7 +311,7 @@ def test_snapshot_store_evicts_oldest_entry_at_count_cap(tmp_path, monkeypatch):
 
 
 def test_oversized_snapshot_stays_bounded_and_warns_that_restart_undo_is_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr(core, "_SNAPSHOT_MAX_DISK_BYTES", 1024 * 1024)
+    monkeypatch.setattr(undo, "_SNAPSHOT_MAX_DISK_BYTES", 1024 * 1024)
     target = tmp_path / "oversized.txt"
     original = "x" * (1024 * 1024 + 1)
     target.write_text(original, encoding="utf-8")
@@ -275,7 +325,7 @@ def test_oversized_snapshot_stays_bounded_and_warns_that_restart_undo_is_unavail
         tmp_path / "sessions" / "oversized.jsonl",
         state_dir=tmp_path / "state",
     )
-    fs.read("oversized.txt", show_line_numbers=False, context=first_process)
+    fs.fs_read("oversized.txt", show_line_numbers=False, context=first_process)
     patch_tool = build_default_registry().resolve("patch")
 
     result = call_tool(
@@ -283,7 +333,7 @@ def test_oversized_snapshot_stays_bounded_and_warns_that_restart_undo_is_unavail
         {"file_path": "oversized.txt", "old_string": original, "new_string": "changed\n"},
         first_process,
     )
-    persisted = sorted(first_process.snapshot_store.glob("*/*.snapshot"))
+    persisted = sorted(first_process.undo.directory.glob("*/*.snapshot"))
     assert len(persisted) == 1
     persisted_size = persisted[0].stat().st_size
     second_process = _persistent_context(tmp_path, "oversized")

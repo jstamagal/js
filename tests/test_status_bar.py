@@ -9,9 +9,19 @@ import asyncio
 
 import ai
 import pytest
-from prompt_toolkit.output import ColorDepth
+from repl_driver import run_async
 
-from js import model_client, runtime, screen, setcmd, settings
+from js import (
+    fset,
+    jsrc_save,
+    messages as msgs,
+    model_client,
+    runtime,
+    setcmd,
+    setting_layers,
+    settings,
+    status_bar,
+)
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus
@@ -53,37 +63,8 @@ def _cfg(tmp_path, *, session_name: str = "s.jsonl", model: str = "test-model") 
     )
 
 
-def test_status_line_fills_80_columns_with_three_groups():
-    line = screen.status_line(80, **BAR)
-
-    assert len(line) == 80
-    assert line.startswith("[23:59] cpa/claude-fable-5-1 121000")
-    assert line.endswith("defaultagent/b61643c8 cache 100%")
-    centre = line[len("[23:59] cpa/claude-fable-5-1 121000"):-len("defaultagent/b61643c8 cache 100%")]
-    assert "*" in centre and "9,600" in centre
-    assert centre.startswith("  ") and centre.endswith("  ")
-
-
-def test_status_line_without_a_turn_has_no_centre_group():
-    line = screen.status_line(80, **{**BAR, "throbber": ""})
-
-    assert len(line) == 80
-    assert line.startswith("[23:59] cpa/claude-fable-5-1 121000")
-    assert line.endswith("defaultagent/b61643c8 cache 100%")
-    assert "9,600" not in line
-
-
-def test_status_line_overflow_drops_cache_before_touching_the_model():
-    wide = screen.status_line(70, **BAR)
-
-    assert len(wide) == 70
-    assert "cache" not in wide
-    assert "cpa/claude-fable-5-1" in wide
-    assert "defaultagent/b61643c8" in wide
-
-
 def test_status_line_overflow_order_at_40_columns():
-    line = screen.status_line(40, **BAR)
+    line = status_bar.status_line(40, **BAR)
 
     assert len(line) == 40
     assert "cache" not in line
@@ -100,70 +81,57 @@ def test_status_line_overflow_order_at_40_columns():
 
 def test_status_line_keeps_the_essentials_at_any_width():
     for width in range(18, 120):
-        line = screen.status_line(width, **BAR)
+        line = status_bar.status_line(width, **BAR)
         assert len(line) == width
         assert "[23:59]" in line and "*" in line and "b61643c8" in line
 
 
-def test_status_line_omits_missing_values():
-    line = screen.status_line(80, **{**BAR, "provider": None, "cache_pct": None, "agent_id": None})
-
-    assert len(line) == 80
-    assert "cache" not in line
-    assert line.startswith("[23:59] claude-fable-5-1 121000")
-    assert line.endswith("b61643c8")
-
-
 def test_format_count_is_a_heartbeat_not_an_invoice():
-    assert screen.format_count(9642) == "9,600"
-    assert screen.format_count(99) == "0"
-    assert screen.format_count(10_049) == "10.0k"
-    assert screen.format_count(123_456) == "123.5k"
+    assert status_bar.format_count(9642) == "9,600"
+    assert status_bar.format_count(99) == "0"
+    assert status_bar.format_count(10_049) == "10.0k"
+    assert status_bar.format_count(123_456) == "123.5k"
 
 
-def test_turn_centre_prefers_tool_then_compaction_then_bytes_then_tokens():
+def test_turn_centre_prefers_tool_then_compaction_then_first_byte_wait_then_tokens():
     status = TurnStatus()
-    status.call_started()
-    status.add_bytes(2345)
+    status.first_byte_wait(10.0)
 
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=True)
-    assert "2,300" in phase and count is None
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=False)
-    assert phase == "" and count is None
+    phase, count = status_bar.turn_centre(status, now=10.5)
+    assert phase == "" and count is None          # under a second: nothing yet
+    phase, count = status_bar.turn_centre(status, now=10.0 + 252)
+    assert "4m12s" in phase and count is None
 
+    status.first_byte_done()
     status.stream("x" * 400)
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=True)
+    phase, count = status_bar.turn_centre(status, now=300.0)
     assert phase == "" and count == 100
 
     status.compacting = True
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=True)
+    phase, count = status_bar.turn_centre(status, now=300.0)
     assert phase and count is None
 
     status.tool_begin(["shell", "read", "read"])
     status.tool_started = 100.0
-    phase, count = screen.turn_centre(status, now=112.4, show_bytes=True)
+    phase, count = status_bar.turn_centre(status, now=112.4)
     assert "shell" in phase and "+2" in phase and "12s" in phase and count is None
 
 
-def test_turn_status_counts_bytes_only_until_the_first_token():
-    status = TurnStatus()
-    status.call_started()
-    status.add_bytes(100)
-    status.add_bytes(200)
-    assert status.net_bytes == 300
+def test_durations_read_like_a_running_clock():
+    assert msgs.duration(7.9) == "7s"
+    assert msgs.duration(252) == "4m12s"
+    assert msgs.duration(3600 + 4 * 60 + 2) == "1h04m02s"
 
+
+def test_turn_status_estimates_tokens_until_the_provider_counts_them():
+    status = TurnStatus()
     status.stream("abcdefgh")
-    assert status.net_bytes == 0
     assert status.output_tokens == 2
-    status.add_bytes(500)
-    assert status.net_bytes == 0
 
     status.settle(40)
     assert status.output_tokens == 40
-    status.call_started()
-    status.add_bytes(7)
     status.stream("abcd")
-    assert status.net_bytes == 0 and status.output_tokens == 41
+    assert status.output_tokens == 41
     status.settle(0)                      # no usage: the estimate stands
     assert status.output_tokens == 41
 
@@ -171,61 +139,17 @@ def test_turn_status_counts_bytes_only_until_the_first_token():
     assert status == TurnStatus()
 
 
-def test_status_style_uses_the_hex_given_and_falls_back_on_garbage():
-    assert "#000000" in screen.status_style("#ffffff", "#000000")
-    assert screen.status_style("red", "blue") == screen.STATUS_STYLE
-
-
-def test_status_colour_settings_accept_only_hex():
-    live: dict = {}
-    assert setcmd.set_command(live, "ui.status_bg #000000").error is None
-    assert settings.get_dotted(live, ("ui", "status_bg"), None) == "#000000"
-    assert setcmd.set_command(live, "ui.status_fg white").error
-    assert setcmd.set_command(live, "ui.net 4").error
-    assert setcmd.set_command(live, "ui.net 3").error is None
-
-
-def test_status_bar_is_truecolor_and_repaints_on_set(monkeypatch):
-    """build_app asks for 24-bit colour even on TERM=linux, and the bar's style
-    is read on each repaint. Application is replaced by a recorder."""
-    captured: dict = {}
-
-    class Recorder:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setenv("TERM", "linux")
-    monkeypatch.setattr(screen, "Application", Recorder)
-    live: dict = {}
-    screen.build_app(
-        prompt="> ", history=None, completer=None,
-        on_line=None, on_interrupt=None, on_eof=None,
-        status=lambda width: "",
-        status_colours=lambda: screen.status_style(
-            settings.get_dotted(live, ("ui", "status_fg"), screen.STATUS_FG),
-            settings.get_dotted(live, ("ui", "status_bg"), screen.STATUS_BG),
-        ),
-    )
-
-    assert captured["color_depth"] == ColorDepth.DEPTH_24_BIT
-    style = captured["style"]
-    assert style.get_attrs_for_style_str("class:status").bgcolor == screen.STATUS_BG.lstrip("#")
-    setcmd.set_command(live, "ui.status_bg #000000")
-    style.invalidation_hash()
-    assert style.get_attrs_for_style_str("class:status").bgcolor == "000000"
-
-
 def test_session_short_is_the_hex_of_the_session_stem(tmp_path):
     path = tmp_path / "20260918T101010000000Z-b61643c8deadbeef.jsonl"
-    assert screen.session_short(path) == "b61643c8"
+    assert status_bar.session_short(path) == "b61643c8"
 
 
 def test_a_named_session_is_whole_or_elided_never_cut_mid_word(tmp_path):
-    name = screen.session_short(tmp_path / "model-swap-comparison.jsonl")
+    name = status_bar.session_short(tmp_path / "model-swap-comparison.jsonl")
     assert name == "model-swap-comparison"
 
     for width in range(12, 120):
-        line = screen.status_line(width, **{**BAR, "session_short": name, "cache_pct": None})
+        line = status_bar.status_line(width, **{**BAR, "session_short": name, "cache_pct": None})
         assert len(line) == width
         shown = line.rstrip().split()[-1].split("/")[-1]
         if shown != name:
@@ -237,15 +161,8 @@ def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path)
     context = ToolContext(cwd=tmp_path)
     seen: list[int] = []
 
-    class _FakeProvider:
-        async def aclose(self) -> None:
-            pass
-
-    class _FakeModel:
-        provider = _FakeProvider()
-
-    async def fake_stream_async(*, on_text, **_kwargs):
-        model_client._reasoning_sink.get()("thinking hard " * 10)
+    async def fake_stream_model_async(*, on_text, on_reasoning, **_kwargs):
+        on_reasoning("thinking hard " * 10)
         on_text("the answer is here")
         seen.append(context.turn_status.output_tokens)
         return ModelStreamResult(
@@ -254,8 +171,7 @@ def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path)
             finish_reason="stop", assistant_message=ai.assistant_message("the answer is here"),
         )
 
-    monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: _FakeModel())
-    monkeypatch.setattr(model_client, "_stream_async", fake_stream_async)
+    monkeypatch.setattr(model_client, "stream_model_async", fake_stream_model_async)
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "go"}]
     asyncio.run(runtime.run_turn_async(
@@ -268,21 +184,41 @@ def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("turn_active", [False, True])
-def test_status_bar_line_never_raises_on_sparse_state(tmp_path, turn_active):
-    from js import cli
+def test_status_bar_line_never_raises_on_sparse_state(tmp_path, monkeypatch, turn_active):
 
     cfg = _cfg(tmp_path, session_name="20260918T101010000000Z-0123456789abcdef.jsonl")
-    line = cli._status_bar_line(cfg, {"settings": {}}, turn_active, 60)
+    (tmp_path / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    built: dict = {}
+    lines: list[str] = []
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def turn(*args, **kwargs):
+        started.set()
+        await release.wait()
+
+    async def typing(enter):
+        if turn_active:
+            await enter("go")
+            await asyncio.wait_for(started.wait(), timeout=10)
+        lines.append(built["status"](60))
+        release.set()
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    state = run_async(monkeypatch, cfg, typing, screen_parts=built)
+
+    assert state.settings == {}
+    [line] = lines
     assert len(line) == 60
     assert "01234567" in line
 
 
 def test_status_colour_survives_save_and_load(tmp_path):
     live = settings.seed_defaults()
-    assert setcmd.set_command(live, "ui.status_bg #000000").error is None
+    assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
     path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, live)
+    jsrc_save.save_settings_to_jsrc(path, live, keys=[], fset_names=["COLOR_STATUS_BACKGROUND"])
+    fset.reset()
 
     reloaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([path], reloaded) == []
-    assert settings.get_dotted(reloaded, ("ui", "status_bg"), None) == "#000000"
+    assert setting_layers.load_jsrc_files([path], reloaded) == []
+    assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"

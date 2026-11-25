@@ -24,6 +24,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 from wcwidth import wcwidth
 
 from js import display, screen
+from js.control_sequences import SGR
 
 # The answer whose last block showed "reseat607:00scaed if width stays
 # x4.glips smack" on yoda, 2026-09-29 (session
@@ -47,7 +48,6 @@ ANSWER = """Log itself restricted (`dmesg_restrict=1`) — pulled via `journalct
 
 _CSI = re.compile(r"\x1b\[([?0-9;]*)[ -/]*([@-~])")
 _OSC = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
-_SGR = re.compile(r"\x1b\[[0-9;]*m")
 _VS16 = "\ufe0f"
 
 
@@ -206,7 +206,7 @@ def _chunks(size: int) -> list[str]:
 def test_streamed_answer_on_the_terminal_reads_as_its_source(pieces, rows, cols):
     shown, width = asyncio.run(_stream_to_terminal(pieces, rows, cols))
 
-    rendered = _SGR.sub("", display.render_markdown(ANSWER, width)).replace(_VS16, "")
+    rendered = SGR.sub("", display.render_markdown(ANSWER, width)).replace(_VS16, "")
     expected = [line.rstrip() for line in rendered.rstrip("\n").split("\n")]
     top = shown.index(expected[0])
     assert shown[top:top + len(expected)] == expected

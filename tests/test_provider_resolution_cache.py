@@ -31,7 +31,7 @@ def _count_calls(monkeypatch, module, name):
 
 
 def test_catalog_is_read_once_while_unchanged(monkeypatch):
-    monkeypatch.setattr(providers, "_dynamic", None)
+    providers.reset_catalog_cache()
     reads = _count_calls(monkeypatch, providers.modelsdotdev, "iter_providers")
     first = providers._dynamic_login_providers()
     assert providers._dynamic_login_providers() is first
@@ -40,7 +40,7 @@ def test_catalog_is_read_once_while_unchanged(monkeypatch):
 
 
 def test_catalog_is_read_again_when_its_files_change(monkeypatch):
-    monkeypatch.setattr(providers, "_dynamic", None)
+    providers.reset_catalog_cache()
     reads = _count_calls(monkeypatch, providers.modelsdotdev, "iter_providers")
     providers._dynamic_login_providers()
     status = model_metadata._status_file_path()
@@ -51,11 +51,11 @@ def test_catalog_is_read_again_when_its_files_change(monkeypatch):
 
 
 def test_catalog_is_rechecked_after_the_recheck_interval(monkeypatch):
-    monkeypatch.setattr(providers, "_dynamic", None)
+    providers.reset_catalog_cache()
     reads = _count_calls(monkeypatch, providers.modelsdotdev, "iter_providers")
     providers._dynamic_login_providers()
-    key, checked_at, rows = providers._dynamic
-    monkeypatch.setattr(providers, "_dynamic", (key, checked_at - providers._CATALOG_RECHECK_S, rows))
+    later = time.monotonic() + 3600
+    monkeypatch.setattr(providers.time, "monotonic", lambda: later)
     providers._dynamic_login_providers()
     assert len(reads) == 2
 
@@ -106,3 +106,45 @@ def test_stat_only_lookups_are_cheap(tmp_logins_dir, monkeypatch):
         providers.normalize_provider_id("mine")
         logins.load_logins()
     assert time.perf_counter() - started < 0.5
+
+
+def test_catalog_failure_degrades_to_no_dynamic_providers_and_retries(monkeypatch):
+    """Offline fresh install: no catalog and the refresh fails. Builtins and
+    unknown ids still resolve instead of raising, nothing is cached, and the
+    next lookup tries the catalog again."""
+    providers.reset_catalog_cache()
+    calls = []
+
+    def offline(*_args, **_kwargs):
+        calls.append(1)
+        raise RuntimeError("catalog refresh failed: offline")
+
+    monkeypatch.setattr(model_metadata, "ensure_fresh_catalog", offline)
+    assert providers._dynamic_login_providers() == ()
+    assert providers.normalize_provider_id("mylocal") in (None, "mylocal")
+    assert providers.get_provider("anthropic") is not None
+    providers._dynamic_login_providers()
+    assert len(calls) >= 2
+    monkeypatch.undo()
+
+
+def test_catalog_alias_rows_are_not_listed_twice(monkeypatch):
+    """models.dev `xiaomi` is the builtin mimo's alias; it must not appear as a
+    second login row that silently becomes mimo."""
+    providers.reset_catalog_cache()
+    ids = {provider.id.lower() for provider in providers._dynamic_login_providers()}
+    assert not ids & set(providers._ALIAS)
+
+
+def test_provider_definitions_can_belong_to_an_assembly():
+    from dataclasses import replace
+
+    from js import providers
+
+    before = providers.all_providers()
+    custom = replace(before[0], id="assembly", aliases=("mine",))
+    with providers.using_providers((custom,)):
+        assert providers.all_providers() == (custom,)
+        assert providers.get_provider("mine") is custom
+        assert providers.parse_model_prefix("mine/model") == ("assembly", "model")
+    assert providers.all_providers() is before

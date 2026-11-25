@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from js.mcp.client import CapabilityError, MCPClient, MCPClientError
+from js.mcp.client import CapabilityError, MCPClient, MCPClientError, TransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
 
@@ -328,6 +328,30 @@ def test_safe_operation_retries_when_transport_dies_during_request():
     asyncio.run(drive())
 
 
+def test_pagination_gives_up_when_every_restart_drops_the_connection():
+    class FailingCursorServer(SpecServer):
+        def handle(self, method, params):
+            if method != "tools/list":
+                return super().handle(method, params)
+            connection = len(self.connections) - 1
+            if "cursor" in params:
+                return {"tools": [{"name": "second"}]}
+            self.die_on = (connection, "tools/list")
+            return {"tools": [{"name": "first"}], "nextCursor": "next"}
+
+    async def drive():
+        server = FailingCursorServer()
+        client = await initialized_client(server)
+        try:
+            with pytest.raises(TransportError, match="restarts"):
+                await asyncio.wait_for(client.list_tools(), 5)
+            assert len(server.connections) <= 5
+        finally:
+            await client.close()
+
+    asyncio.run(drive())
+
+
 def test_interrupted_tool_call_is_never_replayed_and_next_operation_recovers():
     async def drive():
         server = SpecServer()
@@ -369,7 +393,10 @@ def test_reconnect_retries_factory_failures_with_bounded_backoff():
         server = SpecServer()
         delays = []
         attempts = 0
-        client = await initialized_client(server, reconnect_attempts=2)
+        client = MCPClient(
+            server.factory, reconnect_attempts=2, reconnect_backoff=0.25, reconnect_backoff_max=0.4
+        )
+        await client.initialize()
         await server.connections[0].incoming.put(None)
         await asyncio.sleep(0)
         original_factory = server.factory
@@ -385,8 +412,6 @@ def test_reconnect_retries_factory_failures_with_bounded_backoff():
             delays.append(delay)
 
         client.transport_factory = flaky_factory
-        client._reconnect_backoff = 0.25
-        client._reconnect_backoff_max = 0.4
         original_sleep = asyncio.sleep
         asyncio.sleep = record_sleep
         try:
@@ -421,7 +446,7 @@ def test_secrets_are_redacted_from_all_client_exception_paths():
     async def drive():
         secret = "environment-secret-9988"
         server = SpecServer()
-        client = await initialized_client(server, secrets=[secret])
+        client = await initialized_client(server, secrets=[secret], reconnect_attempts=3)
         server.die_on = (0, "resources/read")
         original_factory = server.factory
 
@@ -435,7 +460,7 @@ def test_secrets_are_redacted_from_all_client_exception_paths():
         client.transport_factory = failing_factory
         with pytest.raises(MCPClientError) as caught:
             await client.read_resource("file:///secret")
-        assert attempts == client._reconnect_attempts
+        assert attempts == 3
         assert secret not in str(caught.value)
         assert "[REDACTED]" in str(caught.value)
 

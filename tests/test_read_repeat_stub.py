@@ -8,11 +8,12 @@ import asyncio
 import json
 from dataclasses import replace
 
-from js import compaction, runtime
+from test_lazy_tool_discovery import _cfg, _result
+
+from js import microcompact, runtime
 from js.toolkit import ToolContext, fs
 from js.toolkit.core import call_scope
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 def _read_call(call_id: str, target, **rng) -> tuple[str, str, str]:
@@ -69,7 +70,7 @@ def test_an_unchanged_reread_of_the_same_lines_names_the_earlier_read(tmp_path, 
     assert "row 3" not in again
     assert len(again) < len(first)
     # The stub counts as reading those lines.
-    assert context.require_read(target.resolve(), "edit", line_ranges=[(3, 8)]) is None
+    assert context.reads.require(target.resolve(), "edit", line_ranges=[(3, 8)]) is None
 
 
 def test_a_whole_file_reread_is_a_stub_too(tmp_path, monkeypatch):
@@ -150,7 +151,7 @@ def test_a_cleared_earlier_result_is_not_named(tmp_path, monkeypatch):
         if n == 2:
             for i, message in enumerate(messages):
                 if message.get("tool_call_id") == "first":
-                    messages[i] = {**message, "content": compaction.MICROCOMPACT_CLEARED_MESSAGE}
+                    messages[i] = {**message, "content": microcompact.MICROCOMPACT_CLEARED_MESSAGE}
 
     messages, _ = _run(tmp_path, monkeypatch, [
         [_read_call("first", target)],
@@ -189,7 +190,7 @@ def test_a_clipped_earlier_read_is_not_named(tmp_path, monkeypatch):
     ], max_tool_result_bytes=0, max_tool_results_per_turn_bytes=8000,
         max_tool_result_inline_bytes=0, max_read_lines=5000, max_read_bytes=0)
 
-    assert "max_tool_results_per_turn_bytes" in _content(messages, "first")
+    assert "PARALLEL_RESULTS_MAX" in _content(messages, "first")
     assert "first" not in _content(messages, "again").split("\n", 1)[0]
     assert _content(messages, "again").startswith("1|L00001")
 
@@ -209,9 +210,9 @@ def test_a_read_outside_a_tool_call_never_stubs(tmp_path):
     target = _file(tmp_path)
     context = ToolContext(cwd=tmp_path)
 
-    first = fs.read(str(target), context=context)
-    context.settle_reads()
-    second = fs.read(str(target), context=context)
+    first = fs.fs_read(str(target), context=context)
+    context.reads.settle()
+    second = fs.fs_read(str(target), context=context)
 
     assert first == second
 
@@ -220,13 +221,13 @@ def test_the_ledger_forgets_a_read_whose_result_text_changed(tmp_path):
     target = _file(tmp_path)
     context = ToolContext(cwd=tmp_path)
     with call_scope("r1"):
-        shown = fs.read(str(target), context=context)
-    context.settle_reads()
-    context.keep_shown_reads({"r1": shown})
+        shown = fs.fs_read(str(target), context=context)
+    context.reads.settle()
+    context.reads.keep_shown({"r1": shown})
     with call_scope("r2"):
-        assert "r1" in fs.read(str(target), context=context)
-    context.settle_reads()
+        assert "r1" in fs.fs_read(str(target), context=context)
+    context.reads.settle()
 
-    context.keep_shown_reads({"r1": shown[:-1]})
+    context.reads.keep_shown({"r1": shown[:-1]})
     with call_scope("r3"):
-        assert fs.read(str(target), context=context) == shown
+        assert fs.fs_read(str(target), context=context) == shown

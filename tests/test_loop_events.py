@@ -1,0 +1,295 @@
+"""Parts hand structured output to a caller's sink without writing to stdio."""
+
+from types import SimpleNamespace
+
+import pytest
+
+from js import microcompact, output, setting_layers, stream_transport
+
+
+def test_network_fallback_emits_an_event_before_rendering(capsys):
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        stream_transport.say_or_print(2, "catalog")
+    assert len(events) == 1
+    assert events[0].name == "network"
+    assert dict(events[0].fields) == {"level": 2, "line": "catalog", "fallback": True}
+    assert capsys.readouterr() == ("", "")
+
+
+def test_retry_emits_its_wait_and_failure_without_rendering(capsys):
+    from js import retry
+
+    events = []
+    failure = RuntimeError("busy")
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        retry.announce(1, retry.Budget(attempts=2, max_wait=0), 12, failure)
+    assert [event.name for event in events] == ["retry_wait"]
+    fields = dict(events[0].fields)
+    assert (fields["n"], fields["attempts"], fields["delay"], fields["error"]) == (1, 2, 12, failure)
+    assert capsys.readouterr() == ("", "")
+
+
+def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, tmp_path, capsys):
+    import ai
+    from test_config_compaction_layers import _compact_test_cfg
+
+    failure = OSError("read only")
+    def unavailable(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(microcompact, "CompactionFlight", unavailable)
+    events = []
+    with pytest.raises(OSError):
+        microcompact.recover_overflow([], 1, cfg=_compact_test_cfg(tmp_path, {}), system="",
+                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={},
+                                      log_dir=None, emit=lambda name, **fields: events.append((name, fields)))
+    assert events[0][0] == "compaction_output"
+    notice = events[0][1]["output"]
+    assert dict(notice.fields)["fields"]["error"] is failure
+    assert capsys.readouterr() == ("", "")
+
+
+def test_flight_autolog_failure_goes_to_its_event_callback(tmp_path, capsys):
+    from test_config_compaction_layers import _compact_test_cfg
+
+    from js.compaction_flight import CompactionFlight
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("file")
+    cfg = _compact_test_cfg(tmp_path, {"REQUEST_LOG_DIR": str(blocked)})
+    events = []
+    flight = CompactionFlight(cfg, "system", [], trigger={}, forced=True, focus="", preserve_from=None,
+                              details={}, directory=tmp_path / "flights",
+                              emit=lambda name, **fields: events.append((name, fields)))
+    flight.close()
+    assert events[0][0] == "compaction_output"
+    assert isinstance(dict(events[0][1]["output"].fields)["fields"]["error"], OSError)
+    assert capsys.readouterr() == ("", "")
+
+
+def test_agent_registry_warning_is_an_event(tmp_path, capsys):
+    from js.toolkit.registry import _agent_tools
+
+    agent = tmp_path / "agents" / "read"
+    agent.mkdir(parents=True)
+    (agent / "prompt.md").write_text("prompt")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert _agent_tools(agent.parent, {"read"}) == ()
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["agent"] == "read"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_unmatched_policy_entry_is_an_event(capsys):
+    from js.toolkit import policy
+
+    rules = policy.expand(["absent:eager"], policy.ToolsConfig(), "test")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        policy.warn_unmatched([], rules)
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["entry"] == rules[0].label
+    assert capsys.readouterr() == ("", "")
+
+
+def test_description_warning_is_an_event(monkeypatch, capsys):
+    from js.toolkit import descriptions
+
+    descriptions.reset_warnings()
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        for _ in range(2):
+            descriptions.render_tool_name_sections("{{#if}}body{{/if}}", (), tool="fixture")
+    assert len(events) == 1
+    assert "fixture" in dict(events[0].fields)["fields"]["problem"]
+    assert capsys.readouterr() == ("", "")
+
+
+def test_fetch_fallback_warning_is_an_event(monkeypatch, tmp_path, capsys):
+    from js import tool_binaries
+    from js.toolkit import ToolContext, fetch
+
+    monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
+    monkeypatch.setattr(fetch, "resolve_binary", lambda name: None)
+    def unavailable(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", unavailable)
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        fetch.fetch("https://example.invalid/file", save="file", context=ToolContext(cwd=tmp_path))
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["purpose"] == "fetch(save=...)"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_kernel_note_is_an_event(capsys):
+    from js.toolkit import python_kernel
+
+    events = []
+    context = SimpleNamespace(kernel_render_max_lines=5)
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        python_kernel.render_event(context, "normal", "saved")
+    assert [event.name for event in events] == ["kernel_note"]
+    assert dict(events[0].fields)["content"] == "saved"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_user_echo_is_an_event(capsys):
+    from js import display
+
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        display.echo_user("hello")
+    assert [event.name for event in events] == ["user_echo"]
+    assert dict(events[0].fields)["text"] == "hello"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_ex_write_reports_through_an_event(tmp_path, capsys):
+    import asyncio
+
+    from js import exline
+
+    events = []
+    path = tmp_path / "buffer"
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        asyncio.run(exline.run_ex(f"w {path}", SimpleNamespace(text="saved"),
+                                  is_command=lambda verb: False, dispatch=None))
+    assert path.read_text() == "saved\n"
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["path"] == path
+    assert capsys.readouterr() == ("", "")
+
+
+def test_clipboard_failure_is_an_event(capsys, monkeypatch, tmp_path):
+    from test_clipimage import CTRL_V, _drive
+
+    from js import clipimage
+
+    # A display whose clipboard tool is not on PATH.
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(clipimage.ClipboardError) as error:
+        clipimage.read_image({})
+    assert error.value.fields
+    capsys.readouterr()
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        _drive([CTRL_V], {})
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"] == error.value.fields
+    assert capsys.readouterr() == ("", "")
+
+
+def test_invalid_environment_setting_emits_a_warning(capsys):
+    from js import settings
+
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert setting_layers.env_value(settings.SPEC_BY_KEY["RETRY_COUNT_MAX"],
+                                        {"JS_RETRY_COUNT_MAX": "invalid"}, warn=True) is None
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["name"] == "JS_RETRY_COUNT_MAX"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_invalid_login_section_emits_a_warning(tmp_path, capsys):
+    import tomllib
+
+    from js import logins, paths
+
+    (tmp_path / "logins.toml").write_text("broken = 1\n", encoding="utf-8")
+    logins.set_config_dir(tmp_path)
+    events = []
+    try:
+        with output.using_sink(SimpleNamespace(emit=events.append)):
+            assert logins.load_logins() == {}
+        with output.using_sink(SimpleNamespace(emit=lambda _event: None)):
+            logins.save_login(logins.Login(provider_id="mine", provider_api_key="k"))
+    finally:
+        logins.set_config_dir(paths.login_store_dir())
+    # Quarantined: a later save writes the bad section back unchanged.
+    assert tomllib.loads((tmp_path / "logins.toml").read_text(encoding="utf-8"))["broken"] == 1
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["name"] == "logins.toml [broken]"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_download_fallback_helper_emits_once(monkeypatch, capsys):
+    from js import tool_binaries
+
+    monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        tool_binaries.warn_urllib_fallback("installer")
+        tool_binaries.warn_urllib_fallback("installer")
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["purpose"] == "installer"
+    assert capsys.readouterr() == ("", "")
+
+
+def test_skipped_session_records_emit_a_warning(tmp_path, capsys):
+    import json
+
+    from js import memory
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(json.dumps({"kind": "message", "version": memory.SCHEMA_VERSION + 1,
+                               "message": {"role": "user", "content": "future"}}) + "\n")
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        assert memory.load_replay_messages(path) == []
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["path"] == path
+    assert capsys.readouterr() == ("", "")
+
+
+def test_a_bad_agent_sampling_value_is_an_error_naming_it(tmp_path):
+    from turn_driver import config
+
+    from js import persona
+
+    agent = tmp_path / "worker"
+    agent.mkdir()
+    (agent / "agent.yaml").write_text("sampling:\n  temperature: -1\ntools: []\n", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="sampling.temperature"):
+        persona.load_configured_prompt_spec(config(tmp_path, agent_id="worker", prompts_dir=agent), expand=False)
+
+
+def test_skill_discovery_warning_is_an_event(monkeypatch, tmp_path, capsys):
+    from js import skills
+
+    broken = tmp_path / "skills" / "broken" / "SKILL.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("---\nname: [broken\n---\nbody\n")
+    skills.reset_warnings()
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        for _ in range(2):
+            skills.discover_skills(tmp_path, builtin_dir=tmp_path / "none",
+                                   global_dir=tmp_path / "skills", user_dir=tmp_path / "user")
+    assert len(events) == 1
+    assert str(broken) in dict(events[0].fields)["fields"]["error"]
+    assert capsys.readouterr() == ("", "")
+
+
+def test_running_shell_follows_its_output_tail(monkeypatch):
+    from js import console
+    from js.toolkit import shell
+    asked = []
+    opened = console._OpenCall("shell", {"command": "sleep 9"})
+
+    def live_tail(context, command, rows):
+        asked.append(rows)
+        opened.done.set()
+        return None
+
+    monkeypatch.setattr(shell, "live_tail", live_tail)
+    monkeypatch.setattr(console, "_LIVE_AFTER_S", 0)
+    monkeypatch.setattr(console, "_LIVE_TICK_S", 0)
+    console.ToolTrace._follow(None, opened, None, 1)
+    assert asked and asked[0] > 0

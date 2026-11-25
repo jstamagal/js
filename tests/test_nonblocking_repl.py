@@ -5,12 +5,19 @@ is neutralized (prompt_toolkit's terminal machinery is its own concern)."""
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+from dataclasses import replace
 
-from js import cli
+import pytest
+from repl_driver import handled_while_a_turn_runs, run_async
+from test_mcp_client import SpecServer
+
+from js import cli, repl
 from js.config import from_env
+from js.mcp.client import MCPClient
+from js.mcp.host import MCPHost
+from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.memory import load_messages
-from repl_driver import run_async
 
 
 def _session_file(tmp_path):
@@ -21,7 +28,7 @@ def _session_file(tmp_path):
 
 def _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub)
@@ -70,6 +77,66 @@ def test_nonblocking_repl_skill_line_sends_user_only_skill(monkeypatch, tmp_path
     assert "user-only body" in str(reloaded[0]["content"])
 
 
+@pytest.mark.parametrize("mode", ["now", "batch"])
+@pytest.mark.parametrize("busy", [False, True])
+def test_mcp_channel_wakes_idle_repl_and_persists_literal_content(monkeypatch, tmp_path, mode, busy):
+    monkeypatch.setattr(repl, "_steer_mode", lambda _state: mode)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = SpecServer()
+    config = MCPConfiguration(
+        (MCPServer("channel", "channel", "stdio", command="unused"),), MCPPolicy()
+    )
+    host = MCPHost(
+        config,
+        client_factory=lambda _factory, **kwargs: MCPClient(server.factory, **kwargs),
+    )
+    from repl_driver import repl_state
+
+    def state_with_host(*args, **kwargs):
+        state, spec = repl_state(*args, **kwargs)
+        state.mcp_host = host
+        return state, spec
+
+    monkeypatch.setattr("repl_driver.repl_state", state_with_host)
+    received = asyncio.Event()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    content = "/exit @/not-a-local-attachment !{sh false}"
+    turns = []
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        turns.append(messages[-1]["content"])
+        if busy and len(turns) == 1:
+            started.set()
+            await release.wait()
+        messages.append({"role": "assistant", "content": "received"})
+        if len(turns) == (2 if busy else 1):
+            received.set()
+
+    async def incoming(on_line):
+        await host.discover(source="channel")
+        if busy:
+            await on_line("first turn")
+            await asyncio.wait_for(started.wait(), timeout=2)
+        await server.connections[0].notify(
+            "notifications/claude/channel",
+            {"content": content, "meta": {"chat_id": "42"}},
+        )
+        release.set()
+        await asyncio.wait_for(received.wait(), timeout=2)
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
+    run_async(monkeypatch, replace(from_env(), mcp=config), incoming)
+    assert len(turns) == (2 if busy else 1)
+    assert content in turns[-1]
+    assert "42" in turns[-1]
+    reloaded = load_messages(_session_file(tmp_path))
+    assert [m["role"] for m in reloaded] == ["user", "assistant"] * len(turns)
+    assert reloaded[-2]["content"] == turns[-1]
+    assert host.channel_sink is None
+
+
 def test_tui_flag_is_an_unknown_argument(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
@@ -77,15 +144,15 @@ def test_tui_flag_is_an_unknown_argument(monkeypatch, tmp_path):
     assert exc.value.code == 2
 
 
-def test_turn_state_commands_are_refused_while_a_turn_runs():
+def test_turn_state_commands_are_refused_while_a_turn_runs(monkeypatch, tmp_path):
     """Commands that clear/rotate/compact the live message list must be gated while a
     turn is active — running them off-loop races the turn's single-writer append."""
-    assert cli._is_turn_state_command("/reset")
-    assert cli._is_turn_state_command("/wipe")
-    assert cli._is_turn_state_command("/compact")
-    assert cli._is_turn_state_command("/compact up to here")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+    refused = ["/reset", "/wipe", "/compact", "/compact up to here"]
     # non-mutating / unrelated commands stay live
-    assert not cli._is_turn_state_command("/compact-auto on")
-    assert not cli._is_turn_state_command("/turns")
-    assert not cli._is_turn_state_command("/model gpt")
-    assert not cli._is_turn_state_command("hello there")
+    live = ["/compact-auto on", "/turns", "/model gpt", "hello there"]
+
+    assert handled_while_a_turn_runs(monkeypatch, from_env(), refused + live) == live
+

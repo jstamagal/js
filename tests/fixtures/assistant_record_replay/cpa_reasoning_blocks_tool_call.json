@@ -1,0 +1,149 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": null,
+     "text": "weigh it"
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "call_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "js": {
+     "reasoning_blocks": [
+      {
+       "signature": "S1",
+       "thinking": "weigh it",
+       "type": "thinking"
+      }
+     ]
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "completion_tokens": 5,
+     "prompt_tokens": 5,
+     "total_tokens": 10
+    },
+    "reasoning_tokens": null
+   }
+  }
+ ],
+ "live_body": [
+  {
+   "reasoning_blocks": [
+    {
+     "signature": "S1",
+     "thinking": "weigh it",
+     "type": "thinking"
+    }
+   ],
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "call_1",
+     "type": "function"
+    }
+   ]
+  }
+ ],
+ "records": [
+  {
+   "content": "",
+   "reasoning_blocks": [
+    {
+     "signature": "S1",
+     "thinking": "weigh it",
+     "type": "thinking"
+    }
+   ],
+   "reasoning_content": "weigh it",
+   "reasoning_from": {
+    "model": "claude-sonnet-5-5",
+    "provider": "cliproxyapi"
+   },
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "call_1",
+     "type": "function"
+    }
+   ]
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": null,
+     "text": "weigh it"
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "call_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "js": {
+     "reasoning_blocks": [
+      {
+       "signature": "S1",
+       "thinking": "weigh it",
+       "type": "thinking"
+      }
+     ]
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "reasoning_blocks": [
+    {
+     "signature": "S1",
+     "thinking": "weigh it",
+     "type": "thinking"
+    }
+   ],
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "call_1",
+     "type": "function"
+    }
+   ]
+  }
+ ]
+}

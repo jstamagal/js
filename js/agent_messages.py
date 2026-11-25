@@ -19,18 +19,25 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
     """
     if messages:
         return
+    # Stamp what the turn runs with: the same override-or-cfg rule as
+    # runtime._turn_request.
+    model = turn_kwargs.get("model_override") or cfg.model
+    provider_id = turn_kwargs.get("provider_id_override")
+    if provider_id is None:
+        provider_id = cfg.provider_id
     reasoning = turn_kwargs.get("reasoning_effort_override", cfg.reasoning_effort)
-    stamp = memory.stamp_for(cfg.model, cfg.provider_id, reasoning)
+    stamp = memory.stamp_for(model, provider_id, reasoning)
     sink = telemetry.transcript_log
     for exchange in spec.exchanges:
+        user_text = None
         if exchange.user is not None:
-            text = persona.expand_agent_text(exchange.user, cfg)
-            message = {"role": "user", "content": text}
+            user_text = persona.expand_agent_text(exchange.user, cfg)
+            message = {"role": "user", "content": user_text}
             messages.append(message)
             if save:
                 memory.append_message(cfg.session_file, message)
             if sink is not None:
-                sink.write_user(text)
+                sink.write_user(user_text)
         if exchange.agent is not None:
             text = persona.expand_agent_text(exchange.agent, cfg)
             message = {"role": "assistant", "content": text}
@@ -39,9 +46,9 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
                 memory.append_message(cfg.session_file, message, stamp=stamp)
             if sink is not None:
                 sink.write_assistant(text)
-        elif exchange.user is not None:
+        elif user_text is not None:
             if echo_user is not None:
-                echo_user(text)
+                echo_user(user_text)
             try:
                 await runtime.run_turn_async(
                     cfg, spec.system if system is None else system, messages, telemetry, **turn_kwargs,

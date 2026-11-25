@@ -16,14 +16,24 @@ import time
 from pathlib import Path
 
 import pytest
+from jail_probe import bwrap_starts, needs_bwrap
+from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
+from turn_driver import run as run_turn
 
-from js import cli, jail, paths, persona, runtime, settings
-from js.toolkit import ToolContext, call_tool, fs, kernel as kmod, process_net, terminal
+from js import (
+    cli,
+    jail,
+    paths,
+    persona,
+    prompt_run,
+    runtime,
+    setting_values,
+    settings,
+    tool_errors,
+)
+from js.toolkit import ToolContext, call_tool, python_kernel, shell, terminal
 from js.toolkit.registry import build_default_registry
 
-from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
-
-needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
 needs_kernel = pytest.mark.skipif(
     not all(importlib.util.find_spec(name) for name in ("jupyter_client", "ipykernel")),
     reason="jupyter_client/ipykernel not installed",
@@ -44,6 +54,8 @@ def operator_home(tmp_path):
 @pytest.fixture
 def jailed(operator_home, tmp_path, monkeypatch):
     """A jail at tmp_path/foo holding one file, and a ToolContext working there."""
+    if not bwrap_starts():
+        pytest.skip("bubblewrap cannot start a jail here")
     root = tmp_path / "foo"
     root.mkdir()
     (root / "inside.txt").write_text("inside\n")
@@ -55,7 +67,7 @@ def jailed(operator_home, tmp_path, monkeypatch):
 
 
 def run_shell(command: str, context: ToolContext) -> tuple[int, str]:
-    result = process_net.shell(command, context=context)
+    result = shell.shell(command, context=context)
     lines = result.splitlines()
     code = int(next(line for line in lines if line.startswith("exit=")).split("=", 1)[1])
     return code, result
@@ -84,6 +96,19 @@ def test_find_finds_no_zshrc_under_home(jailed):
     assert output.strip() == "END"
 
 
+def test_parent_after_a_symlink_resolves_inside_its_target(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    (root / "real" / "nested").mkdir(parents=True)
+    (root / "item").write_text("wrong file")
+    (root / "real" / "item").write_text("target file")
+    (root / "shortcut").symlink_to("real/nested")
+    current = jail.Jail(root=root, bwrap="bwrap", private=tmp_path / "private")
+    monkeypatch.setattr(jail, "ACTIVE", current)
+    context = ToolContext(cwd=root)
+
+    assert context.resolve_path("shortcut/../item").read_text() == "target file"
+
+
 def test_other_views_of_a_hidden_home_are_hidden():
     # The home is a btrfs subvolume; the whole filesystem is mounted too.
     mounts = [
@@ -93,6 +118,25 @@ def test_other_views_of_a_hidden_home_are_hidden():
     ]
 
     assert jail._other_views(Path("/home/op"), mounts) == [Path("/mnt/pool/backup/home/op")]
+
+
+def test_removing_a_parent_preserves_a_read_only_bind(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    protected = root / "parent" / "protected"
+    protected.mkdir(parents=True)
+    key = protected / "data"
+    key.write_text("keep")
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=private))
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(protected),)
+
+    result = tool("remove", context, path=str(protected.parent), permanent=True)
+
+    assert key.exists()
+    assert key.read_text() == "keep"
+    assert isinstance(result, jail.Refusal)
 
 
 @needs_bwrap
@@ -124,22 +168,18 @@ def test_fs_search_refuses_the_home(jailed):
 
 
 @needs_bwrap
-def test_parallel_read_only_calls_stay_in_the_jail(jailed):
+def test_parallel_read_only_calls_stay_in_the_jail(jailed, tmp_path, monkeypatch):
     """One batch of read-only calls runs at once; each is still confined."""
     calls = [
-        runtime._PendingToolCall("in", "read", ['{"file_path": "inside.txt"}']),
-        runtime._PendingToolCall("home", "read", ['{"file_path": "~/.zshrc"}']),
-        runtime._PendingToolCall("grep", "fs_search", ['{"pattern": "inside", "output_mode": "content"}']),
-        runtime._PendingToolCall("grep_home", "fs_search", [f'{{"pattern": "{SECRET}", "path": "~"}}']),
+        ("in", "read", '{"file_path": "inside.txt"}'),
+        ("home", "read", '{"file_path": "~/.zshrc"}'),
+        ("grep", "fs_search", '{"pattern": "inside", "output_mode": "content"}'),
+        ("grep_home", "fs_search", f'{{"pattern": "{SECRET}", "path": "~"}}'),
     ]
     jailed.max_parallel_tools = 8
 
-    records = runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
-        build_default_registry(), jailed,
-    )
+    results = run_turn(tmp_path, monkeypatch, build_default_registry(), [calls], context=jailed).results()
 
-    results = {pc.id: result for pc, _args, result in records}
     assert "inside" in results["in"] and not results["in"].startswith("ERROR")
     assert "inside" in results["grep"] and not results["grep"].startswith("ERROR")
     for refused in ("home", "grep_home"):
@@ -175,10 +215,28 @@ def test_the_host_tmp_on_path_does_not_replace_the_private_tmp(jailed):
     assert [src for src, dst in binds if dst == "/tmp"] == [str(jail.active().tmp)]
 
 
+def test_a_path_directory_inside_the_jail_dir_stays_writable(jailed, monkeypatch):
+    """DIR sits in a hidden tree (the test HOME); its own .venv/bin on PATH is
+    not bound back read-only by argv (covered by DIR's rw bind), so the file
+    tools must not call it read-only either."""
+    active = jail.active()
+    bin_dir = active.root / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "tool").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin")
+    if not any(bin_dir.resolve().is_relative_to(h) for h in jail.hidden_roots()):
+        pytest.skip("the jail dir is not inside a hidden tree here")
+
+    argv = active.argv(["true"], env_path=os.environ["PATH"])
+    ro = [argv[i + 1] for i, arg in enumerate(argv) if arg in {"--ro-bind", "--ro-bind-try"}]
+    assert str(bin_dir.resolve()) not in ro
+    assert active.confine(bin_dir / "tool", write=True) == (bin_dir / "tool").resolve()
+
+
 def test_a_path_directory_under_the_host_tmp_is_bound_back_read_only(jailed, tmp_path_factory, monkeypatch):
     # tmp_path is the test HOME, a hidden tree; the venv sits outside it.
     venv = tmp_path_factory.mktemp("venv").resolve()
-    if Path("/tmp") not in venv.parents or any(jail._under(venv, h) for h in jail.hidden_roots()):
+    if Path("/tmp") not in venv.parents or any(venv.is_relative_to(h) for h in jail.hidden_roots()):
         pytest.skip("pytest's temporary tree is not plainly under /tmp")
     bin_dir = venv / "bin"
     bin_dir.mkdir()
@@ -275,21 +333,36 @@ def test_tmp_is_private_and_shared_with_the_file_tools(jailed):
     assert "from-tool" in result
 
 
+@pytest.mark.parametrize("source", ("root", "tmp", "js_tmp"))
+@pytest.mark.parametrize("suffix", ("", "/value"))
+def test_symlinks_into_private_tmp_use_the_jail_namespace(jailed, source, suffix):
+    current = jail.active()
+    target = current.tmp / "target"
+    if suffix:
+        target.mkdir()
+        target /= "value"
+    target.write_text("private value")
+    directory = getattr(current, source)
+    (directory / "link").symlink_to("/tmp/target")
+    visible = {
+        "root": current.root / "link",
+        "tmp": Path("/tmp/link"),
+        "js_tmp": paths.user_home() / ".js" / "tmp" / "link",
+    }[source]
+    assert current.confine(Path(str(visible) + suffix)).read_text() == "private value"
+
+
 @needs_bwrap
-def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed):
+def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed, tmp_path, monkeypatch):
     """A /tmp path absent from the jail's private /tmp is outside the jail; the
     refusal names the path the model gave and carries no retry count."""
     host_dir = Path(tempfile.mkdtemp(prefix="js-jail-other-", dir="/tmp"))
     try:
         (host_dir / "x.txt").write_text("host-only\n")
-        calls = [runtime._PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
+        call = ("r", "read", f'{{"file_path": "{host_dir}/x.txt"}}')
 
-        records = runtime._dispatch_tool_calls(
-            calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
-            build_default_registry(), jailed,
-        )
+        result = run_turn(tmp_path, monkeypatch, build_default_registry(), [[call]], context=jailed).results()["r"]
 
-        result = records[0][2]
         assert result.startswith("ERROR:")
         assert "outside the jail" in result
         assert str(jail.active().private) not in result
@@ -297,7 +370,6 @@ def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(
         assert "host-only" not in result
     finally:
         shutil.rmtree(host_dir, ignore_errors=True)
-
 
 
 @needs_bwrap
@@ -308,6 +380,8 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
     name = f"js-jail-names-{os.getpid()}-{time.monotonic_ns()}"
     tmp_file = f"/tmp/{name}/a.txt"
     js_tmp_file = f"~/.js/tmp/{name}.txt"
+    # The second write is refused, so the results hold a write error too.
+    jailed.write_require_overwrite = True
     results = [
         tool("write", jailed, path=tmp_file, content="alpha\nbeta\n"),
         tool("write", jailed, path=tmp_file, content="again\n"),
@@ -316,8 +390,6 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
         tool("patch", jailed, path=tmp_file, old_string="absent", new_string="x"),
         tool("fs_search", jailed, pattern="gamma", path=f"/tmp/{name}"),
         tool("fs_search", jailed, pattern="gamma", path="/tmp", output_mode="content"),
-        tool("write", jailed, path=f"/tmp/{name}/b.py", content="f(1)\n"),
-        tool("ast_search", jailed, pattern="f($A)", path=f"/tmp/{name}", lang="python"),
         tool("write", jailed, path=js_tmp_file, content="delta\n"),
         tool("read", jailed, path=js_tmp_file),
         tool("remove", jailed, path=tmp_file, permanent=True),
@@ -330,10 +402,8 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
         assert private not in result
     assert f"/tmp/{name}/a.txt" in results[0]
     assert "gamma" in results[5] + results[6] and f"/tmp/{name}/a.txt" in results[6]
-    if fs._ast_grep_binary() is not None:
-        assert f"/tmp/{name}/b.py" in results[8]
-    assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[9]
-    for error in (results[1], results[4], results[14]):
+    assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[7]
+    for error in (results[1], results[4], results[12]):
         assert error.startswith("ERROR")
 
 
@@ -356,7 +426,7 @@ def test_an_image_read_under_the_jail_tmp_keeps_the_host_path_for_the_model_clie
 
 
 def test_a_jail_refusal_gets_no_retry_count_and_other_errors_do():
-    tracker = runtime.ToolErrorTracker()
+    tracker = tool_errors.ToolErrorTracker()
 
     refused = tracker.record("read", jail.Refusal("ERROR: /x is outside the jail"))
     failed = tracker.record("read", "ERROR: no such file: /y")
@@ -403,19 +473,34 @@ def test_spilled_tool_results_stay_readable(jailed):
     assert tool("write", jailed, path=str(spill), content="x", overwrite=True).startswith("ERROR:")
 
 
-def test_jail_bind_setting_refuses_a_relative_path():
-    spec = settings.spec_for("jail.bind")
+def test_the_host_tmp_bound_read_only_leaves_temp_files_writable(jailed):
+    with tempfile.NamedTemporaryFile("w", dir="/tmp", suffix=".txt") as note:
+        note.write("host-note\n")
+        note.flush()
+        jailed.jail_bind = ("/tmp",)
 
-    _value, error = settings.coerce_value(spec, '["relative/dir"]')
+        code, result = run_shell(f'cat {note.name}; f=$(mktemp) && echo made > "$f" && echo "$f"', jailed)
+        made = result.strip().splitlines()[-1]
+        _, again = run_shell(f"cat {made}", jailed)
+
+    assert code == 0
+    assert "host-note" in result
+    assert "made" in again
+
+
+def test_jail_bind_setting_refuses_a_relative_path():
+    spec = settings.spec_for("JAIL_BIND")
+
+    _value, error = setting_values.coerce_value(spec, '["relative/dir"]')
     assert error is not None
-    value, error = settings.coerce_value(spec, '["~/.cache/uv:rw", "/opt/data"]')
+    value, error = setting_values.coerce_value(spec, '["~/.cache/uv:rw", "/opt/data"]')
     assert error is None
     assert value == ["~/.cache/uv:rw", "/opt/data"]
 
 
 @needs_bwrap
 def test_a_subagent_is_jailed(jailed, monkeypatch, tmp_path):
-    from js.toolkit.meta import _run_one_task_async
+    from js.toolkit.subagents import _run_one_task_async
 
     prompts = prompt_dir(tmp_path, "worker")
     cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -438,7 +523,7 @@ def test_a_subagent_is_jailed(jailed, monkeypatch, tmp_path):
 
 @needs_bwrap
 def test_a_background_subagent_is_jailed(jailed, monkeypatch, tmp_path):
-    from js.toolkit import meta
+    from js.toolkit import subagents
 
     prompts = prompt_dir(tmp_path, "worker")
     jailed.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -450,9 +535,9 @@ def test_a_background_subagent_is_jailed(jailed, monkeypatch, tmp_path):
         messages.append({"role": "assistant", "content": "done"})
 
     monkeypatch.setattr(runtime, "run_turn_async", turn)
-    started = meta.task(tasks=["work"], agent_id="worker", background=True, context=jailed)
+    started = subagents.task(tasks=["work"], agent_id="worker", background=True, context=jailed)
     handle = started.rsplit("HANDLE ", 1)[1].split()[0]
-    finished = meta.task(action="wait", handle=handle, timeout=60, context=jailed)
+    finished = subagents.task(action="wait", handle=handle, timeout=60, context=jailed)
 
     assert "done" in finished
     assert ".zshrc" not in seen["ls"]
@@ -486,11 +571,11 @@ def test_kernel_runs_in_the_jail_and_survives_an_interrupt(jailed):
     jailed.kernel_verbosity = "quiet"
     jailed.kernel_wait_seconds = 0.5
     try:
-        listing = kmod.kernel(code="import os\nprint(sorted(os.listdir(os.path.expanduser('~'))))",
+        listing = python_kernel.kernel(code="import os\nprint(sorted(os.listdir(os.path.expanduser('~'))))",
                               context=jailed)
-        kmod.kernel(code="import time\ntime.sleep(60)", context=jailed)
-        stopped = kmod.kernel(action="interrupt", context=jailed)
-        after = kmod.kernel(code="print('still-here')", context=jailed)
+        python_kernel.kernel(code="import time\ntime.sleep(60)", context=jailed)
+        stopped = python_kernel.kernel(action="interrupt", context=jailed)
+        after = python_kernel.kernel(code="print('still-here')", context=jailed)
     finally:
         session = jailed.kernel_session
         if session is not None:
@@ -503,7 +588,7 @@ def test_kernel_runs_in_the_jail_and_survives_an_interrupt(jailed):
 
 @needs_bwrap
 @needs_kernel
-def test_a_kernel_cell_calls_tools_under_the_jail(jailed):
+def test_a_kernel_cell_calls_tools_under_the_jail(jailed, tmp_path, monkeypatch):
     jailed.kernel_verbosity = "quiet"
     jailed.kernel_wait_seconds = 30
     code = ("print('INSIDE', tools.read('inside.txt', show_line_numbers=False).strip())\n"
@@ -512,9 +597,8 @@ def test_a_kernel_cell_calls_tools_under_the_jail(jailed):
             "except tools.ToolError as exc:\n"
             "    print('REFUSED')\n")
     try:
-        _, result = runtime._dispatch("kernel", json.dumps({"code": code}), runtime.Telemetry(None),
-                                      cap_bytes=65536, registry=build_default_registry(),
-                                      tool_context=jailed)
+        result = run_turn(tmp_path, monkeypatch, build_default_registry(),
+                          [[("cell", "kernel", json.dumps({"code": code}))]], context=jailed).results()["cell"]
     finally:
         session = jailed.kernel_session
         if session is not None:
@@ -529,7 +613,7 @@ def test_no_bwrap_refuses_dash_C(monkeypatch, tmp_path, capsys):
     target = tmp_path / "foo"
     target.mkdir()
     monkeypatch.setattr(jail.shutil, "which", lambda name: None)
-    monkeypatch.setattr(cli, "_run_prompt", lambda *a, **k: pytest.fail("ran the prompt unjailed"))
+    monkeypatch.setattr(prompt_run, "run", lambda *a, **k: pytest.fail("ran the prompt unjailed"))
     monkeypatch.chdir(tmp_path)
 
     assert cli.main(["-C", str(target), "-p", "hi"]) == 2
@@ -571,19 +655,18 @@ def test_commit_helper_dash_C_is_not_the_jail(tmp_path):
 
 
 def test_system_prompt_commands_see_the_shell_program(tmp_path):
-    spec = persona.PromptSpec(system="shell={{JS_SHELL}}", tool_selectors=())
-    cfg = type("Cfg", (), {"settings": {"shell": {"program": "sh"}}, "allow_inline_code": False})()
+    cfg = type("Cfg", (), {"settings": {"SHELL_PROGRAM": "sh"}, "allow_inline_code": False})()
 
-    expanded = persona._expand_spec(spec, cfg)
+    expanded = persona.expand_agent_text("shell={{JS_SHELL}}", cfg)
 
-    assert expanded.system == f"shell={shutil.which('sh')}"
+    assert expanded == f"shell={shutil.which('sh')}"
 
 
 @pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")
 def test_envctx_reports_the_tool_shell_and_the_jail(tmp_path):
     envctx = Path(__file__).resolve().parent.parent / "tools" / "envctx.c"
     env = {**os.environ, "JS_SHELL": "/usr/bin/tool-shell", "SHELL": "/usr/bin/login-shell",
-           "JS_JAIL": str(tmp_path / "foo"), "JS_MODE": "repl"}
+           "JS_JAIL": str(tmp_path / "foo")}
 
     out = subprocess.run(["sh", str(envctx)], env=env, capture_output=True, text=True, timeout=60).stdout
 
@@ -592,3 +675,62 @@ def test_envctx_reports_the_tool_shell_and_the_jail(tmp_path):
     # envctx writes a path under $HOME with ~.
     assert " confined=~/foo" in user_line
     assert any(line.startswith("rule:") and "~/foo" in line for line in out.splitlines())
+
+
+def test_dash_C_starts_the_jail_with_the_configured_jail_hide(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_enter(directory, **kwargs):
+        seen.update(kwargs)
+        raise jail.JailError("stop here")
+
+    monkeypatch.setattr(jail, "enter", fake_enter)
+    monkeypatch.setenv("JS_JAIL_HIDE", "[]")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert cli.main(["-C", str(work), "-p", "hi"]) == 2
+    assert seen["hide"] == []
+
+
+def test_dash_C_refuses_a_bad_setting_without_a_traceback(monkeypatch, tmp_path):
+    entered = []
+    monkeypatch.setattr(jail, "enter", lambda *a, **k: entered.append(a))
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert cli.main(["-C", str(work), "--extra", "TOP_P=bad", "-p", "hi"]) == 2
+    assert entered == []
+
+
+def test_jail_state_can_belong_to_each_assembly():
+    from types import SimpleNamespace
+
+    before, marker = jail.ACTIVE, os.environ.get("JS_JAIL")
+    cleaned = []
+    instance = SimpleNamespace(cleanup=lambda: cleaned.append(True))
+    first = jail.JailState(instance, {"JS_JAIL": "/first"})
+    second = jail.JailState()
+    with jail.using_state(first):
+        assert jail.active() is instance
+        with jail.using_state(second):
+            assert jail.active() is None
+            jail.leave()
+        assert jail.active() is instance
+        jail.leave()
+    assert first.jail is None and first.environ == {} and cleaned == [True]
+    assert jail.ACTIVE is before and os.environ.get("JS_JAIL") == marker
+
+
+@needs_bwrap
+def test_pi_tools_respect_the_same_jail(jailed, operator_home):
+    outside = operator_home / "notes.txt"
+    for name, args in (
+        ("pi_read", {}),
+        ("pi_edit", {"edits": [{"oldText": SECRET, "newText": "changed"}]}),
+        ("pi_write", {"content": "changed"}),
+    ):
+        assert isinstance(tool(name, jailed, path=str(outside), **args), jail.Refusal)
+    result = tool("pi_bash", jailed, command='test ! -e "$HOME/notes.txt" && cat inside.txt')
+    assert not result.is_error and result.dehydrated() == "inside\n"
+    assert outside.read_text() == SECRET

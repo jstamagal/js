@@ -1,6 +1,6 @@
-"""The `agent` setting picks the agent a run uses when no flag names one.
+"""The `DEFAULT_AGENT` setting picks the agent a run uses when no flag names one.
 
-Precedence: --agent/--commit beats env JS_AGENT, which beats the jsrc layers,
+Precedence: --agent/--commit beats env JS_DEFAULT_AGENT, which beats the jsrc layers,
 which beat js/jsrc. The paths that need the agent before the Config exists
 (--last, --session-key) resolve it the same way.
 """
@@ -11,18 +11,17 @@ from pathlib import Path
 
 import ai.types.usage
 import pytest
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, runtime, settings
-from js.config import derive_session_name, from_env
-from js import session_store
-from js.session_catalog import first_metadata
+from js import cli, runtime, session_store, settings
+from js.config import InvocationSources, derive_session_name, from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import LineSession
+from js.session_catalog import first_metadata
 
 AGENTS = ("fromjsrc", "fromenv", "fromflag")
 
-# (JS_AGENT value or None, extra argv, the agent that must run)
+# (JS_DEFAULT_AGENT value or None, extra argv, the agent that must run)
 LAYERS = [
     pytest.param(None, [], "fromjsrc", id="jsrc"),
     pytest.param("fromenv", [], "fromenv", id="env-over-jsrc"),
@@ -38,7 +37,7 @@ def fresh_tool_context(monkeypatch, tmp_path):
 
 
 def _home(monkeypatch, tmp_path: Path, js_agent: str | None) -> Path:
-    """A tmp HOME whose global jsrc says `set agent fromjsrc`, with one personal
+    """A tmp HOME whose global jsrc says `set DEFAULT_AGENT fromjsrc`, with one personal
     agent per layer. Returns the project directory, which is also the cwd."""
     home = tmp_path / "home"
     project = tmp_path / "project"
@@ -51,13 +50,13 @@ def _home(monkeypatch, tmp_path: Path, js_agent: str | None) -> Path:
             monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     if js_agent is not None:
-        monkeypatch.setenv("JS_AGENT", js_agent)
+        monkeypatch.setenv("JS_DEFAULT_AGENT", js_agent)
     for agent in AGENTS:
         agent_dir = home / ".js" / "agents" / agent
         agent_dir.mkdir(parents=True)
         (agent_dir / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
         (agent_dir / "01-prompt.md").write_text(f"{agent}\n", encoding="utf-8")
-    (home / ".js" / "jsrc").write_text("set agent fromjsrc\n", encoding="utf-8")
+    (home / ".js" / "jsrc").write_text("set DEFAULT_AGENT fromjsrc\n", encoding="utf-8")
     monkeypatch.chdir(project)
     return project
 
@@ -81,10 +80,6 @@ def _fake_stream_result(text: str) -> ModelStreamResult:
     )
 
 
-def test_package_default_agent_is_defaultagent():
-    assert settings.default_value("agent") == "defaultagent"
-
-
 @pytest.mark.parametrize(("js_agent", "argv", "expected"), LAYERS)
 def test_config_resolves_agent_by_layer(monkeypatch, tmp_path, js_agent, argv, expected):
     _home(monkeypatch, tmp_path, js_agent)
@@ -92,20 +87,20 @@ def test_config_resolves_agent_by_layer(monkeypatch, tmp_path, js_agent, argv, e
     cfg = from_env(save_session=False, agent_id=_agent_flag(argv))
 
     assert cfg.agent_id == expected
-    assert cfg.prompts_dir == tmp_path / "home" / ".js" / "agents" / expected
+    assert tmp_path / "home" / ".js" / "agents" / expected in cfg.prompts_dir
 
 
 def test_extra_agent_beats_env(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path, "fromenv")
 
-    cfg = from_env(save_session=False, extras=["agent=fromflag"])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=("DEFAULT_AGENT=fromflag",)))
 
     assert cfg.agent_id == "fromflag"
 
 
 def test_unsafe_agent_in_jsrc_is_rejected(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path, None)
-    (tmp_path / "home" / ".js" / "jsrc").write_text("set agent ../../etc\n", encoding="utf-8")
+    (tmp_path / "home" / ".js" / "jsrc").write_text("set DEFAULT_AGENT ../../etc\n", encoding="utf-8")
 
     with pytest.raises(ValueError):
         from_env(save_session=False)
@@ -115,10 +110,10 @@ def test_unsafe_agent_in_jsrc_is_rejected(monkeypatch, tmp_path):
 def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, js_agent, argv, expected):
     _home(monkeypatch, tmp_path, js_agent)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.runtime, "run_turn",
-                        lambda cfg, system, messages, *a, **k: messages.append({"role": "assistant", "content": "ok"}))
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["first run"]))
-    assert cli.main(["--blocking", *argv]) == 0
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(
+        lambda cfg, system, messages, *a, **k: messages.append({"role": "assistant", "content": "ok"})))
+    stub_screen(monkeypatch, ["first run"], wait=True)
+    assert cli.main([*argv]) == 0
     [first] = _sessions(tmp_path)
     assert first_metadata(first)["agent"] == expected
     resumed: list = []
@@ -126,10 +121,10 @@ def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, j
     def record(cfg, system, messages, *a, **k):
         resumed.append((cfg.agent_id, [m["content"] for m in messages]))
 
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["second run"]))
-    monkeypatch.setattr(cli.runtime, "run_turn", record)
+    stub_screen(monkeypatch, ["second run"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(record))
 
-    assert cli.main(["--blocking", "--last", *argv]) == 0
+    assert cli.main(["--last", *argv]) == 0
 
     assert _sessions(tmp_path) == [first]
     assert resumed == [(expected, ["first run", "ok", "second run"])]

@@ -1,37 +1,47 @@
-"""Single import boundary for the Vercel AI Python SDK (`ai`).
+"""The model I/O boundary over the Vercel AI Python SDK (`ai`).
 
-This is the only production module that imports `ai`. It adapts the SDK's
-async, part-based API to the synchronous, dict-based runtime used by `js`.
-This is the canonical provider boundary for the migration.
+It resolves a route to an SDK model and streams a request, adapting the SDK's
+part-based stream to the records js keeps. Modules that only need the SDK's
+types (messages, tools, errors) import `ai` themselves.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextvars
-import json
 import time
 import uuid
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
-from urllib.parse import urlsplit
-from typing import Any, Literal
-from types import SimpleNamespace
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any
 
 import ai
-import httpx2
-
-from . import codex_auth, codex_provider, messages as msgs, providers, reasoning, retry, routing, stream_transport, tool_args
-from .sampling import Sampling
+import ai.models
 import ai.types.messages
 import ai.types.tools
 import ai.types.usage
-import ai.models
 from ai.models.core import params as ai_params
 from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
+
+from . import (
+    debug_trace,
+    owning_loop,
+    paranoid,
+    provider_errors,
+    providers,
+    reasoning,
+    request_params,
+    retry,
+    routing,
+    stream_protocols,
+    stream_transport,
+    tool_result_messages,
+)
+from .history_record import (
+    with_reasoning_blocks,
+)
+from .sampling import Sampling
 
 
 @dataclass(frozen=True)
@@ -58,168 +68,59 @@ class ModelStreamResult:
     elapsed_s: float = 0.0
     provider_metadata: dict[str, Any] | None = None
     incomplete_reason: str | None = None
+    # Claude's thinking blocks as CLIProxyAPI returns them on the OpenAI wire
+    # (`reasoning_blocks`), whole and in order; None when the reply had none.
+    reasoning_blocks: list[dict[str, Any]] | None = None
 
 
-class FriendlyProviderError(routing.ProviderNotLoggedInError):
-    """Provider-boundary failure already formatted for one-line user display."""
+# Headers the request body decides; a configured one is dropped before the
+# SDK sees it.
+_FRAMING_HEADERS = frozenset({"content-type", "content-length", "transfer-encoding", "host"})
 
 
-class StreamIdleError(ai.ProviderTimeoutError):
-    """A model request went `seconds` without a response byte and was aborted.
-    Retryable: the runtime sends the request again under its retry budget."""
-
-    def __init__(self, seconds: float, *, provider: str | None = None) -> None:
-        super().__init__(
-            f"no response bytes for {seconds:g}s (runtime.stream_idle_seconds)",
-            provider=provider, is_retryable=True,
-        )
-        self.seconds = seconds
+def _without_framing(headers: dict[str, str] | None) -> dict[str, str]:
+    return {k: v for k, v in (headers or {}).items() if k.lower() not in _FRAMING_HEADERS}
 
 
-def sends_max_output(provider_id: str | None) -> bool:
-    """Whether a request to this provider carries max_output_tokens. The Codex
-    endpoint takes no output cap, so a request there is sent without one."""
-    provider_def = providers.get_provider(provider_id)
-    provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
-    return not codex_auth.is_codex_provider(provider_name)
+def with_extra_headers(
+    headers: dict[str, str] | None, extra: dict[str, str] | None,
+) -> dict[str, str]:
+    """``headers`` with ``extra`` laid on top. A name in both (compared
+    without case, as HTTP does) takes ``extra``'s value."""
+    merged = dict(headers or {})
+    for name, value in (extra or {}).items():
+        for existing in [key for key in merged if key.lower() == name.lower()]:
+            del merged[existing]
+        merged[name] = value
+    return merged
 
 
-# The SDK finish reason for a reply that hit its output-token cap: OpenAI chat
-# "length" and Anthropic "max_tokens" both arrive as this.
-_OUTPUT_CAP_FINISH = "length"
+def turn_headers(headers: dict[str, str] | None, cfg: Any) -> dict[str, str]:
+    """The headers a turn's model request sends: the login's ``headers``,
+    then ``cfg``'s EXTRA_HEADERS, then the secret-scrub header."""
+    merged = with_extra_headers(headers, getattr(cfg, "extra_headers", None))
+    return with_extra_headers(merged, paranoid.wire_headers())
 
 
-def _provider_label(provider_id: str | None, exc: BaseException | None = None) -> str:
-    provider = getattr(exc, "provider", None) if exc is not None else None
-    if isinstance(provider, str) and provider:
-        return provider
-    return provider_id or "default"
+_model_factory: contextvars.ContextVar[Callable[..., ai.Model] | None] = contextvars.ContextVar(
+    "js_model_factory", default=None,
+)
 
 
-def _detail(exc: BaseException, *, max_len: int = 220) -> str:
-    text = " ".join(str(exc).split())
-    if not text:
-        return exc.__class__.__name__
-    if len(text) > max_len:
-        return text[: max_len - 1].rstrip() + "…"
-    return text
+@contextmanager
+def using_model_factory(factory: Callable[..., ai.Model]) -> Iterator[None]:
+    """Build streamed models with ``factory`` in this scope and its child tasks.
 
-
-def _friendly_provider_error(
-    exc: BaseException,
-    *,
-    provider_id: str | None,
-) -> FriendlyProviderError | None:
-    provider = _provider_label(provider_id, exc)
-    detail = _detail(exc)
-
-    if isinstance(exc, TypeError) and "Could not resolve authentication method" in str(exc):
-        return FriendlyProviderError(msgs.PROVIDER_NO_AUTH_METHOD.text(provider=provider))
-
-    if isinstance(exc, ValueError) and str(exc).startswith("unknown provider id:"):
-        unknown = str(exc).partition(":")[2].strip()
-        if unknown.startswith(("'", '"')) and len(unknown) >= 2:
-            provider = unknown[1:-1]
-        return FriendlyProviderError(msgs.PROVIDER_UNKNOWN.text(provider=provider))
-
-    if isinstance(exc, ai.ProviderAuthenticationError):
-        return FriendlyProviderError(msgs.PROVIDER_AUTH_FAILED.text(provider=provider, detail=detail))
-
-    if isinstance(exc, ai.ProviderNotConfiguredError):
-        return FriendlyProviderError(msgs.PROVIDER_NOT_CONFIGURED.text(provider=provider, detail=detail))
-
-    # Keep request failures intact: runtime and summary recovery consume the
-    # SDK type, retryability and structured overflow fields. The SDK diagnostic
-    # is also more useful here than suggesting login for an oversized request.
-    return None
-
-
-def _transport_error(exc: BaseException, *, provider_id: str | None) -> ai.ProviderConnectionError | None:
-    """The retryable SDK error for a connection lost or timed out while the
-    stream was being read, else None. The provider SDKs wrap transport errors
-    raised while sending the request; one raised mid-stream (a peer closing
-    inside a chunk) reaches js as the raw httpx2 error."""
-    if not isinstance(exc, httpx2.TransportError):
-        return None
-    kind = ai.ProviderTimeoutError if isinstance(exc, httpx2.TimeoutException) else ai.ProviderConnectionError
-    return kind(f"{type(exc).__name__}: {exc}", provider=_provider_label(provider_id, exc), is_retryable=True)
-
-
-# Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
-# `signature` in `thinking` block. The block is bound to a different
-# conversation. ..." (the preserved-thinking prefix check) or the same leading
-# clause alone (an undecryptable signature).
-_SIGNED_REASONING_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
-# The Responses API's 400 for a replayed reasoning item it cannot decrypt (an
-# item from another account or organization): code ``invalid_encrypted_content``,
-# message "The encrypted content for item rs_... could not be verified" or
-# "... could not be decrypted or parsed".
-_ENCRYPTED_REASONING_CODE = "invalid_encrypted_content"
-_ENCRYPTED_REASONING_REJECTIONS = ("could not be verified", "could not be decrypted")
-
-
-def is_signed_reasoning_rejection(exc: BaseException) -> bool:
-    """Whether ``exc`` is the provider refusing a replayed signed reasoning
-    block (an Anthropic thinking signature, a Codex encrypted reasoning item)."""
-    if not isinstance(exc, ai.ProviderBadRequestError):
-        return False
-    if getattr(exc, "code", None) == _ENCRYPTED_REASONING_CODE:
-        return True
-    haystack = " ".join(str(v) for v in (exc, getattr(exc, "body", None)) if v is not None).lower()
-    if _ENCRYPTED_REASONING_CODE in haystack:
-        return True
-    if "encrypted content" in haystack and any(n in haystack for n in _ENCRYPTED_REASONING_REJECTIONS):
-        return True
-    return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
-
-
-def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
-    """Return a stable incomplete reason from provider metadata, if present.
-
-    Codex streams surface ``response.incomplete`` as provider metadata on the
-    assistant message / stream end. Keep this helper permissive so provider
-    versions that expose either ``incomplete_reason`` or an OpenAI-shaped
-    ``incomplete_details.reason`` do not make a truncated turn look like a clean
-    stop again. Unknown-but-flagged incomplete streams get an explicit
-    ``unknown`` reason rather than disappearing.
+    The factory takes the same arguments as ``resolve_model``: positional
+    ``model_id`` and keyword provider id, base URL, API key and headers.
+    Each call transfers a model to js, which closes its provider after streaming.
+    Turns and summary compaction share this scope; nested scopes restore it.
     """
-    if not isinstance(provider_metadata, dict):
-        return None
-    reason = provider_metadata.get("incomplete_reason")
-    details = provider_metadata.get("incomplete_details")
-    if reason is None and isinstance(details, dict):
-        reason = details.get("reason")
-    if provider_metadata.get("incomplete") or reason is not None:
-        return str(reason or "unknown")
-    return None
-
-
-def incomplete_finish_reason(reason: str) -> str:
-    return f"incomplete:{reason}"
-
-
-class _ReasoningContentProtocol(OpenAIChatCompletionsProtocol):
-    """Adapt the SDK's reasoning field for local/custom chat-completions APIs.
-
-    llama.cpp parses ``reasoning_content`` before applying its chat template.
-    The client view is per stream; the provider still owns its real SDK client.
-    """
-
-    protocol_class_id: Literal["js_reasoning_content"] = "js_reasoning_content"
-
-    def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
-        async def create(**api_kwargs: Any):
-            outgoing = []
-            for message in api_kwargs["messages"]:
-                entry = dict(message)
-                if entry.get("role") == "assistant" and "reasoning" in entry:
-                    entry.setdefault("reasoning_content", entry.pop("reasoning"))
-                outgoing.append(entry)
-            api_kwargs["messages"] = outgoing
-            return await client.chat.completions.create(**api_kwargs)
-
-        view = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-        return super().stream(view, model, messages, **kwargs)
+    token = _model_factory.set(factory)
+    try:
+        yield
+    finally:
+        _model_factory.reset(token)
 
 
 def resolve_model(
@@ -232,67 +133,55 @@ def resolve_model(
 ) -> ai.Model:
     """Return an `ai.Model`, optionally bound to an explicit js provider.
 
-    ``provider_id`` is a user-facing js id.  The provider registry translates it
-    to the SDK/API shape while the model id is passed through verbatim.
+    ``provider_id`` is a user-facing js id; `routing.resolve_wire` translates
+    it to the SDK and protocol, and the model id is passed through verbatim.
+    With no provider, an explicit base URL is a deliberate endpoint choice:
+    an anonymous OpenAI-compatible endpoint on chat completions, like every
+    custom base. `ai.get_model` takes neither a base URL nor a key and would
+    route a bare id to the Vercel gateway.
     """
-    if provider_id is None:
-        # No js provider resolved. An explicit base URL is a deliberate endpoint
-        # choice, so honor it (the SDK-default gateway path). With neither a
-        # provider nor a base URL, riding the SDK's own env keys (AI_GATEWAY_API_KEY,
-        # OPENAI_API_KEY, ...) is exactly the env-farming the login gate forbids:
-        # fail with the same actionable not-logged-in message instead.
-        if provider_base_url:
-            return ai.get_model(model_id)
+    wire = routing.resolve_wire(provider_id, base_url=provider_base_url)
+    if provider_id is None and not provider_base_url:
+        # With neither a provider nor a base URL, riding the SDK's own env keys
+        # (AI_GATEWAY_API_KEY, OPENAI_API_KEY, ...) is exactly the env-farming
+        # the login gate forbids: fail with the same actionable not-logged-in
+        # message instead.
         raise routing.ProviderNotLoggedInError(routing.unconfigured_model_message(model_id))
-
-    provider_def = providers.get_provider(provider_id)
     # No client-side allowlist gate: ``allowed_models`` is a curated hint used to
     # filter noisy /models listings, NOT an authority on what the endpoint serves.
     # It goes stale the moment a provider ships a new id (e.g. opencode-go's
     # glm-5.2), so refusing here only blocks a model the server happily answers.
     # Let the request through; the provider is the one source of truth and will
     # 400 with its own message if the id is genuinely unknown.
-    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    if codex_auth.is_codex_provider(canonical_id):
-        provider = codex_provider.provider_from_login_or_token(
-            provider_base_url=provider_base_url,
-            provider_api_key=provider_api_key,
-        )
-        return ai.Model(id=model_id, provider=provider)
+    if wire.provider is not None:
+        providers.assert_endpoint_configured(wire.provider, provider_base_url)
 
-    if provider_def is not None:
-        providers.assert_endpoint_configured(provider_def, provider_base_url)
-
-    sdk_provider_id = (
-        provider_def.effective_sdk_provider_id
-        if provider_def is not None and provider_def.effective_sdk_provider_id
-        else canonical_id
-    )
-    headers = dict(provider_headers or {})
-    if provider_def is not None and provider_def.headers:
-        headers = {**provider_def.headers, **headers}
+    headers = {**(wire.provider.headers if wire.provider is not None else {}), **(provider_headers or {})}
     # ai>=0.2.1 flipped the openai SDK's default wire to the Responses API; every
     # chat-completions endpoint js targets through the openai SDK (opencode-go,
     # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
     # Pin chat-completions for those; only the explicit Responses transport keeps
     # the new default.
     protocol = None
-    transport = provider_def.transport if provider_def is not None else None
-    if sdk_provider_id == "openai" and transport != "custom_responses":
-        custom_base = providers.is_custom_base_url(provider_def, provider_base_url)
-        operator_endpoint = provider_def is not None and (
-            provider_def.local or not provider_def.established
-        )
+    if wire.sdk == "anthropic":
+        protocol = stream_protocols.AnthropicThinkingProtocol(explicit_prompt_cache=wire.provider_id != "anthropic")
+    elif wire.responses:
+        protocol = stream_protocols.ResponsesProtocol()
+    elif wire.sdk == "openai":
         protocol = (
-            _ReasoningContentProtocol()
-            if operator_endpoint or transport == "custom_openai" or custom_base
+            # Only a CLIProxyAPI route sends `reasoning_blocks`: its plugin
+            # takes them; a direct endpoint would not know the field.
+            stream_protocols.ReasoningContentProtocol(reasoning_blocks=wire.transport == "cliproxyapi")
+            if wire.reasoning_content
             else OpenAIChatCompletionsProtocol()
         )
     provider = ai.get_provider(
-        sdk_provider_id,
+        wire.sdk,
         base_url=provider_base_url,
-        api_key=provider_api_key,
-        headers=headers or None,
+        # With no provider a missing key goes out as "" (a keyless local
+        # server), never as the SDK's env key.
+        api_key=provider_api_key if provider_id is not None else provider_api_key or "",
+        headers=_without_framing(headers) or None,
         protocol=protocol,
     )
     return ai.Model(id=model_id, provider=provider)
@@ -323,357 +212,21 @@ def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
     return tools
 
 
-def _strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
-    """Drop reasoning parts for models whose chat-completions API rejects them.
+def _lay_headers(sdk_client: Any, headers: dict[str, str]):
+    """A request hook that settles each outgoing request's headers once the
+    SDK has added its own: ``headers`` (the login's, EXTRA_HEADERS) replace
+    the SDK's defaults under any spelling, then the SDK's auth header from
+    the login's key replaces any configured one. Each name goes out once."""
+    auth = {name: value for name, value in dict(getattr(sdk_client, "auth_headers", None) or {}).items()
+            if value}
 
-    The caller applies ``reasoning.rejects_reasoning_replay`` before using this
-    projection. Accepting models retain reasoning for prefix-stable replay.
-    """
-    out: list[ai.messages.Message] = []
-    for msg in messages:
-        if msg.role != "assistant" or not any(
-            isinstance(part, ai.types.messages.ReasoningPart) for part in msg.parts
-        ):
-            out.append(msg)
-            continue
-        kept = [part for part in msg.parts if not isinstance(part, ai.types.messages.ReasoningPart)]
-        if kept:
-            out.append(ai.assistant_message(*kept))
-    return out
+    async def lay(request: Any) -> None:
+        for name, value in headers.items():
+            request.headers[name] = value
+        for name, value in auth.items():
+            request.headers[name] = value
 
-
-def _is_message_part(value: Any) -> bool:
-    return hasattr(value, "kind")
-
-
-def _coerce_parts(content: Any) -> list[Any]:
-    """Build ``ai`` message parts from string content or mixed values."""
-    if isinstance(content, str):
-        return [ai.types.messages.TextPart(text=content)]
-    if isinstance(content, (list, tuple)):
-        parts: list[Any] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(ai.types.messages.TextPart(text=item))
-            elif _is_message_part(item):
-                parts.append(item)
-            else:
-                raise ValueError(f"unsupported message content item: {item!r}")
-        return parts
-    if _is_message_part(content):
-        return [content]
-    raise ValueError(f"unsupported message content: {content!r}")
-
-
-def signed_reasoning_parts(message: ai.messages.Message) -> list[dict] | None:
-    """The message's reasoning parts as history data, or None when no part
-    carries provider metadata (an Anthropic signature, a Codex encrypted item).
-
-    Each entry is ``{"text", "provider_metadata"?, "after_calls"?, "text_before"?}``;
-    ``after_calls`` counts the tool calls that came before the part in the
-    response and ``text_before`` the characters of answer text, so replay puts
-    it back between the same calls and at the same place in the text.
-    """
-    out: list[dict] = []
-    calls = 0
-    text_before = 0
-    signed = False
-    for part in message.parts:
-        if isinstance(part, ai.types.messages.ToolCallPart):
-            calls += 1
-        elif isinstance(part, ai.types.messages.TextPart):
-            text_before += len(part.text)
-        elif isinstance(part, ai.types.messages.ReasoningPart):
-            entry: dict[str, Any] = {"text": part.text}
-            if part.provider_metadata:
-                entry["provider_metadata"] = json.loads(json.dumps(part.provider_metadata, default=str))
-                signed = True
-            if calls:
-                entry["after_calls"] = calls
-            if text_before:
-                entry["text_before"] = text_before
-            out.append(entry)
-    return out if signed else None
-
-
-def _replayed_signed_parts(msg: dict, provider_id: str | None, model_id: str | None) -> list[dict] | None:
-    parts = msg.get("reasoning_parts")
-    if not isinstance(parts, list) or not parts:
-        return None
-    if not reasoning.replays_signed_reasoning(msg.get("reasoning_from"), provider_id, model_id):
-        return None
-    return [part for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)]
-
-
-def _after_calls(entry: dict, calls: list) -> int:
-    """How many of ``calls`` the signed part follows, capped at the calls kept."""
-    after = entry.get("after_calls")
-    return min(after if isinstance(after, int) and after > 0 else 0, len(calls))
-
-
-def _text_with_leading_signed_parts(content: Any, leading: list[dict]) -> list[Any]:
-    """The answer text with the signed parts that preceded every call placed
-    back at their ``text_before`` offsets."""
-    if not isinstance(content, str):
-        return [_signed_part(entry) for entry in leading] + (_coerce_parts(content) if content else [])
-    parts: list[Any] = []
-    position = 0
-    for entry in leading:
-        offset = entry.get("text_before")
-        offset = min(max(offset if isinstance(offset, int) else 0, position), len(content))
-        if offset > position:
-            parts.append(ai.types.messages.TextPart(text=content[position:offset]))
-            position = offset
-        parts.append(_signed_part(entry))
-    if position < len(content):
-        parts.append(ai.types.messages.TextPart(text=content[position:]))
-    return parts
-
-
-def _signed_part(entry: dict) -> ai.types.messages.ReasoningPart:
-    metadata = entry.get("provider_metadata")
-    return ai.thinking(entry["text"], provider_metadata=metadata if isinstance(metadata, dict) else None)
-
-
-def history_to_ai_messages(
-    system: str, messages: list[dict], *, provider_id: str | None = None,
-    model_id: str | None = None,
-) -> list[ai.messages.Message]:
-    """Convert the harness JSONL history into ``ai.messages.Message`` objects.
-
-    The harness history uses OpenAI-shaped dicts. We translate them at the
-    provider boundary so the runtime itself keeps the stable JSONL schema.
-    OpenAI chat-completions transports replay all reasoning to preserve the
-    generated prefix; other transports retain tool-call reasoning only.
-
-    * ``role == "system"`` -> ``ai.system_message(system)``
-    * ``role == "user"`` -> ``ai.user_message(content)``
-    * ``role == "assistant"`` -> ``ai.assistant_message`` with text,
-      reasoning, and tool call parts. Signed reasoning (``reasoning_parts``)
-      replays whole, signatures included, when the record's
-      ``reasoning_from`` is this ``provider_id`` and ``model_id``.
-    * ``role == "tool"`` -> ``ai.tool_message`` with a ``ToolResultPart``.
-    """
-    provider = providers.get_provider(provider_id)
-    sdk_id = provider.effective_sdk_provider_id if provider is not None else provider_id
-    preserve_reasoning = sdk_id == "openai" and (
-        provider is None or provider.transport != "custom_responses"
-    )
-    out: list[ai.messages.Message] = []
-    if system:
-        out.append(ai.system_message(system))
-
-    for msg in messages:
-        role = msg.get("role")
-        if role == "system":
-            # History system entries are rare; treat like explicit system text.
-            out.append(ai.system_message(str(msg.get("content", ""))))
-            continue
-        if role == "user":
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                out.append(ai.user_message(content))
-            else:
-                out.append(ai.user_message(*_coerce_parts(content)))
-            continue
-        if role == "assistant":
-            parts: list[Any] = []
-            calls = msg.get("tool_calls", []) or []
-            signed = _replayed_signed_parts(msg, provider_id, model_id)
-            content = msg.get("content")
-            if signed is not None:
-                parts.extend(_text_with_leading_signed_parts(
-                    content, [entry for entry in signed if _after_calls(entry, calls) == 0]))
-            else:
-                reasoning_text = msg.get("reasoning_content")
-                if reasoning_text and (preserve_reasoning or msg.get("tool_calls")):
-                    parts.append(ai.thinking(str(reasoning_text)))
-                if content:
-                    parts.extend(_coerce_parts(content))
-            for index, tc in enumerate(calls, start=1):
-                fn = tc.get("function", {})
-                parts.append(
-                    ai.types.messages.ToolCallPart(
-                        tool_call_id=tc.get("id", ""),
-                        tool_name=fn.get("name", ""),
-                        tool_args=tool_args.sdk_safe_tool_args(fn.get("arguments", "")),
-                    )
-                )
-                if signed is not None:
-                    parts.extend(
-                        _signed_part(entry) for entry in signed
-                        if _after_calls(entry, calls) == index
-                    )
-            assistant = ai.assistant_message(*parts)
-            provider_metadata = msg.get("provider_metadata")
-            if isinstance(provider_metadata, dict):
-                assistant = assistant.model_copy(update={"provider_metadata": provider_metadata})
-            out.append(assistant)
-            continue
-        if role == "tool":
-            content = msg.get("content")
-            is_error = isinstance(content, str) and content.startswith("ERROR")
-            out.append(
-                ai.tool_message(
-                    tool_call_id=msg.get("tool_call_id", ""),
-                    tool_name=msg.get("name", ""),
-                    result=content,
-                    is_error=is_error,
-                )
-            )
-            continue
-        raise ValueError(f"unsupported history role: {role!r}")
-
-    return out
-
-
-def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
-    prefix = "IMAGE_RESULT\t"
-    if not isinstance(result, str) or not result.startswith(prefix):
-        return None
-    parts = result.split("\t", 3)
-    if len(parts) != 4:
-        return "ERROR: malformed image result marker"
-    _, raw_path, mime, stub = parts
-    try:
-        data = Path(raw_path).read_bytes()
-    except OSError as exc:
-        return f"ERROR: could not read visual result {raw_path}: {exc}"
-    return stub, mime, data
-
-
-def _build_tool_result_part(
-    tool_call_id: str, tool_name: str, result: str
-) -> ai.types.messages.ToolResultPart:
-    """Create the text/stub ``ToolResultPart`` for a tool result."""
-    payload = _image_result_payload(result)
-    if payload is None:
-        return ai.tool_result_part(
-            tool_call_id,
-            result=result,
-            tool_name=tool_name,
-            is_error=isinstance(result, str) and result.startswith("ERROR"),
-        )
-    if isinstance(payload, str):
-        return ai.tool_result_part(
-            tool_call_id,
-            result=payload,
-            tool_name=tool_name,
-            is_error=True,
-        )
-    stub, _mime, _data = payload
-    return ai.tool_result_part(
-        tool_call_id,
-        result=stub,
-        tool_name=tool_name,
-        is_error=False,
-    )
-
-
-def build_tool_result_message(
-    tool_call_id: str, tool_name: str, result: Any
-) -> ai.messages.Message:
-    """Provider-facing tool result message for a single completed tool call."""
-    if isinstance(result, ai.messages.Message):
-        return result
-    if hasattr(result, "kind"):
-        part = result
-    else:
-        part = _build_tool_result_part(tool_call_id, tool_name, str(result))
-    return ai.tool_message(part)
-
-
-def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
-    from .toolkit.core import ToolResult
-
-    if not isinstance(result, ToolResult):
-        return str(result), [], False
-    text: list[str] = []
-    media: list[Any] = []
-    for block in result.blocks:
-        kind = block.get("type")
-        if kind == "text":
-            text.append(str(block.get("text", "")))
-        elif kind in {"image", "audio"}:
-            try:
-                data = base64.b64decode(str(block.get("data", "")), validate=True)
-            except (ValueError, TypeError):
-                text.append(f"ERROR: invalid {kind} content")
-                continue
-            mime = str(block.get("mimeType", "application/octet-stream"))
-            text.append(f"[{kind} {mime} attached]")
-            media.append(ai.types.messages.FilePart(data=data, media_type=mime))
-        elif kind == "resource":
-            resource = block.get("resource")
-            if not isinstance(resource, dict):
-                continue
-            uri = resource.get("uri", "")
-            if isinstance(resource.get("text"), str):
-                text.append(f"[embedded resource {uri}]\n{resource['text']}")
-            elif resource.get("blob") is not None:
-                try:
-                    data = base64.b64decode(str(resource["blob"]), validate=True)
-                except (ValueError, TypeError):
-                    text.append(f"ERROR: invalid embedded resource {uri}")
-                    continue
-                mime = str(resource.get("mimeType", "application/octet-stream"))
-                text.append(f"[embedded resource {uri} {mime} attached]")
-                media.append(ai.types.messages.FilePart(data=data, media_type=mime))
-        elif kind == "resource_link":
-            text.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
-        elif kind == "structured":
-            text.append(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return "\n".join(text), media, result.is_error
-
-
-def build_tool_result_messages(
-    tool_call_id: str, tool_name: str, result: Any
-) -> list[ai.messages.Message]:
-    """Provider-facing messages for a completed tool call.
-
-    Image markers must be visible as a normal user message with a ``FilePart``;
-    OpenAI/Anthropic tool-result converters stringify ``ToolResultPart.result``.
-    Persisted history still receives only the dehydrated text stub.
-    """
-    if not isinstance(result, str):
-        text, media, is_error = _mixed_result_parts(result)
-        if not media and not hasattr(result, "blocks"):
-            return [build_tool_result_message(tool_call_id, tool_name, result)]
-        messages = [ai.tool_message(ai.tool_result_part(
-            tool_call_id, result=text, tool_name=tool_name, is_error=is_error
-        ))]
-        if media:
-            messages.append(ai.user_message(ai.types.messages.TextPart(text=text), *media))
-        return messages
-    payload = _image_result_payload(result)
-    if payload is None:
-        return [build_tool_result_message(tool_call_id, tool_name, result)]
-    if isinstance(payload, str):
-        return [
-            ai.tool_message(
-                ai.tool_result_part(
-                    tool_call_id,
-                    result=payload,
-                    tool_name=tool_name,
-                    is_error=True,
-                )
-            )
-        ]
-    stub, mime, data = payload
-    return [
-        ai.tool_message(
-            ai.tool_result_part(
-                tool_call_id,
-                result=stub,
-                tool_name=tool_name,
-                is_error=False,
-            )
-        ),
-        ai.user_message(
-            ai.types.messages.TextPart(text=stub),
-            ai.types.messages.FilePart(data=data, media_type=mime),
-        ),
-    ]
+    return lay
 
 
 def _sdk_client(model: ai.Model) -> Any:
@@ -688,6 +241,14 @@ def _sdk_client(model: ai.Model) -> Any:
     return None
 
 
+def _http_client(model: ai.Model) -> Any:
+    """The provider's HTTP client when it exposes per-request event hooks."""
+    sdk_client = _sdk_client(model)
+    if sdk_client is not None:
+        return sdk_client._client
+    return None
+
+
 @asynccontextmanager
 async def _open_stream(
     *,
@@ -697,6 +258,7 @@ async def _open_stream(
     params: ai_params.InferenceRequestParams | None = None,
     on_request: Callable[[], None] | None = None,
     on_bytes: Callable[[], None] | None = None,
+    connect_timeout: float | None = None,
 ) -> AsyncIterator[ai.models.Stream]:
     """Open an SDK stream through one js-owned, patchable boundary.
 
@@ -705,7 +267,9 @@ async def _open_stream(
     :class:`ai.models.Stream` without reaching into SDK internals.
 
     ``on_request`` is called as each HTTP request is sent and ``on_bytes`` for
-    each response body chunk the transport reads.
+    each response body chunk the transport reads. Each request's handshake is bounded by
+    ``connect_timeout`` (None: no limit) and its reads by nothing: the
+    first-byte and idle clocks of `_stream_async` bound those silences.
     The OpenAI and Anthropic SDK clients retry nothing themselves: every retry
     runs under js's budget (js/retry.py).
     """
@@ -713,10 +277,20 @@ async def _open_stream(
         sdk_client = _sdk_client(model)
         if sdk_client is not None:
             sdk_client.max_retries = 0
+        http_client = _http_client(model)
+        if http_client is not None:
             await cleanup.enter_async_context(stream_transport.own_responses(
-                sdk_client._client, stream_transport.current_call(),
+                http_client, stream_transport.current_call(),
                 on_request=on_request, on_bytes=on_bytes,
+                timeout={"connect": connect_timeout, "read": None},
             ))
+        if sdk_client is not None:
+            headers = dict(getattr(model.provider, "headers", None) or {})
+            if headers:
+                hooks = sdk_client._client.event_hooks["request"]
+                lay = _lay_headers(sdk_client, headers)
+                hooks.append(lay)
+                cleanup.callback(hooks.remove, lay)
         async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
             yield stream
 
@@ -749,11 +323,13 @@ _reasoning_sink: contextvars.ContextVar[Callable[[str], None] | None] = contextv
     "js_reasoning_sink", default=None,
 )
 
-# runtime.stream_idle_seconds for the `stream_model_async` call running in this
-# context; None or 0 leaves the stream without a watchdog.
-_idle_seconds: contextvars.ContextVar[float | None] = contextvars.ContextVar(
-    "js_stream_idle_seconds", default=None,
+# The clocks of the `stream_model_async` call running in this context.
+_limits: contextvars.ContextVar[retry.StreamLimits] = contextvars.ContextVar(
+    "js_stream_limits", default=retry.StreamLimits(),
 )
+
+# The response events that carry model output.
+_OUTPUT_EVENTS = (ai.events.TextDelta, ai.events.ReasoningDelta, ai.events.ToolDelta)
 
 
 async def _stream_async(
@@ -775,25 +351,48 @@ async def _stream_async(
     first_token_s: float | None = None
     stream_provider_metadata: dict[str, Any] | None = None
     finish_reason: str | None = None
-    idle = _idle_seconds.get() or None
+    limits = _limits.get()
+    provider = getattr(model.provider, "name", None)
     loop = asyncio.get_running_loop()
-    # The idle deadline starts when the request is sent and moves forward on
-    # every response byte and every event, so it covers the wait for the
-    # response headers but not the SDK's own setup before the request (its
-    # first request in a process imports the SDK). For a provider whose
-    # requests js does not see, it starts at once.
-    sees_request = _sdk_client(model) is not None
-    deadline = asyncio.timeout(None if sees_request else idle)
+    # Two clocks share one deadline. From the request being sent to the first
+    # response body byte it is FIRST_BYTE_TIMEOUT (the prefill runs here);
+    # from that byte on, STREAM_IDLE_TIMEOUT, moved forward on every byte and
+    # every event. The SDK's own setup before the request (its first request
+    # in a process imports the SDK) is on neither. For a provider whose
+    # requests js does not see, the first clock starts at once and the first
+    # event is the first byte.
+    sees_request = _http_client(model) is not None
+    deadline = asyncio.timeout(None)
+    waiting = stream_transport.FirstByteWait()
+    first_byte = False
+
+    def sent() -> None:
+        if first_byte:
+            return
+        if limits.first_byte is not None and not deadline.expired():
+            deadline.reschedule(loop.time() + limits.first_byte)
+        waiting.start()
+
+    def alive() -> None:
+        nonlocal first_byte
+        if not first_byte:
+            first_byte = True
+            waiting.end()
+        if deadline.expired():
+            return
+        deadline.reschedule(None if limits.idle is None else loop.time() + limits.idle)
+
     try:
         async with deadline:
-
-            def alive() -> None:
-                if idle is not None and not deadline.expired():
-                    deadline.reschedule(loop.time() + idle)
-
-            async with _open_stream(**kwargs, on_request=alive, on_bytes=alive) as stream:
+            if not sees_request:
+                sent()
+            async with _open_stream(**kwargs, on_request=sent, on_bytes=alive,
+                                    connect_timeout=limits.connect) as stream:
                 async for event in stream:
-                    alive()
+                    # A transport js sees marks the first byte itself; an
+                    # event before it (a stream start on the headers) is not one.
+                    if first_byte or not sees_request or isinstance(event, _OUTPUT_EVENTS):
+                        alive()
                     event_metadata = getattr(event, "provider_metadata", None)
                     if isinstance(event_metadata, dict):
                         stream_provider_metadata = event_metadata
@@ -808,9 +407,16 @@ async def _stream_async(
     except Exception as exc:
         # The expired deadline cancelled the read; asyncio.timeout reports that
         # as TimeoutError, and an SDK may have wrapped it on the way out.
-        if idle is not None and deadline.expired():
-            raise StreamIdleError(idle, provider=getattr(model.provider, "name", None)) from exc
-        raise
+        if deadline.expired():
+            if first_byte:
+                raise provider_errors.StreamIdleError(limits.idle, provider=provider) from exc
+            raise provider_errors.FirstByteTimeoutError(limits.first_byte, provider=provider) from exc
+        failure = provider_errors.request_failure(exc, provider=provider, limits=limits)
+        if failure is exc:
+            raise
+        raise failure from exc
+    finally:
+        waiting.end()
     elapsed_s = time.perf_counter() - start
 
     text = stream.text
@@ -821,9 +427,11 @@ async def _stream_async(
         or stream_provider_metadata
         or getattr(stream, "provider_metadata", None)
     )
-    incomplete_reason = incomplete_reason_from_metadata(provider_metadata)
-    if incomplete_reason is None and finish_reason == _OUTPUT_CAP_FINISH:
+    incomplete_reason = provider_errors.incomplete_reason_from_metadata(provider_metadata)
+    if incomplete_reason is None and finish_reason == provider_errors.OUTPUT_CAP_FINISH:
         incomplete_reason = "max_output_tokens"
+    if incomplete_reason is None and finish_reason == "content_filter":
+        incomplete_reason = "content_filter"
     tool_calls = [
         ModelToolCall(
             id=part.tool_call_id,
@@ -832,7 +440,7 @@ async def _stream_async(
         )
         for part in stream.message.tool_calls
     ]
-    finish = incomplete_finish_reason(incomplete_reason) if incomplete_reason else ("tool_calls" if tool_calls else "stop")
+    finish = provider_errors.incomplete_finish_reason(incomplete_reason) if incomplete_reason else ("tool_calls" if tool_calls else "stop")
     return ModelStreamResult(
         text=text,
         tool_calls=tool_calls,
@@ -845,188 +453,6 @@ async def _stream_async(
         provider_metadata=provider_metadata if isinstance(provider_metadata, dict) else None,
         incomplete_reason=incomplete_reason,
     )
-
-
-def _sampler_map(values: dict) -> dict:
-    """Encode the TOP-LEVEL sampling knobs this transport accepts as ai>=0.2.1
-    SamplerParamsMap entries (keyed by param class). Knobs ``call_params`` routed
-    into ``extra_body`` (top_k/repetition_penalty on the openai-compatible family)
-    stay OUT of here: the OpenAI protocol hard-raises on TopK/RepetitionPenalty
-    param classes, so those ride through as raw extra_body instead."""
-    out: dict = {}
-    if "temperature" in values:
-        out[ai_params.TemperatureSamplerParams] = ai_params.TemperatureSamplerParams(
-            temperature=values["temperature"]
-        )
-    if "top_p" in values:
-        out[ai_params.TopPSamplerParams] = ai_params.TopPSamplerParams(top_p=values["top_p"])
-    if "top_k" in values:
-        out[ai_params.TopKSamplerParams] = ai_params.TopKSamplerParams(top_k=values["top_k"])
-    rep: dict[str, float] = {}
-    if "repetition_penalty" in values:
-        rep["repetition_penalty"] = values["repetition_penalty"]
-    if "presence_penalty" in values:
-        rep["presence_penalty"] = values["presence_penalty"]
-    if rep:
-        out[ai_params.RepetitionPenaltyParams] = ai_params.RepetitionPenaltyParams(**rep)
-    return out
-
-
-def _build_inference_params(
-    sampling: Sampling,
-    transport: str | None,
-    *,
-    reasoning: ai_params.ReasoningParams | None,
-    output: ai_params.OutputParams | None,
-    extra_body: dict[str, Any],
-    cache: ai_params.CacheParams | None = None,
-) -> ai_params.InferenceRequestParams | None:
-    """Assemble an ``InferenceRequestParams`` from the parts, or None when there
-    is nothing to send (so the provider keeps every default)."""
-    kwargs: dict[str, Any] = {}
-    values = dict(sampling.call_params(transport))
-    sampler_extra = values.pop("extra_body", {}) or {}
-    sampler_map = _sampler_map(values)
-    if sampler_map:
-        kwargs["sampling"] = sampler_map
-    if reasoning is not None:
-        kwargs["reasoning"] = reasoning
-    if output is not None:
-        kwargs["output"] = output
-    if cache is not None:
-        kwargs["cache"] = cache
-    merged_extra = {**sampler_extra, **(extra_body or {})}
-    if merged_extra:
-        kwargs["extra_body"] = merged_extra
-    if not kwargs:
-        return None
-    return ai_params.InferenceRequestParams(**kwargs)
-
-
-def _debug_json(value: Any) -> str:
-    import json as _json
-
-    return _json.dumps(value, indent=2, default=str, ensure_ascii=False)
-
-
-def _message_to_debug(msg: ai.messages.Message) -> Any:
-    """Best-effort full serialization of one outgoing message. Never raises."""
-    try:
-        return msg.model_dump(mode="json")
-    except Exception:
-        parts = []
-        for part in getattr(msg, "parts", None) or []:
-            parts.append(
-                {k: getattr(part, k) for k in ("text", "tool_name", "tool_args", "tool_call_id")
-                 if hasattr(part, k)}
-            )
-        return {"role": getattr(msg, "role", "?"), "parts": parts}
-
-
-def _tool_to_debug(tool: ai.types.tools.Tool) -> dict:
-    spec = getattr(tool, "spec", None)
-    return {
-        "name": getattr(tool, "name", "?"),
-        "description": getattr(spec, "description", ""),
-        "parameters": getattr(spec, "params", {}),
-    }
-
-
-def _emit_request_trace(
-    *,
-    sink: Any,
-    model_id: str,
-    provider_id: str | None,
-    provider_base_url: str | None,
-    params: ai_params.InferenceRequestParams | None,
-    messages: list[ai.messages.Message],
-    tools: list[ai.types.tools.Tool] | None,
-    dump_schemas: bool,
-    dump_from: int,
-) -> None:
-    """Byte-honest dump of the request as it leaves js for the SDK: the resolved
-    provider/model/params, and — once per turn — the unclipped system prompt and
-    FULL tool spec JSON (descriptions and all), then the messages newly sent this
-    call. This is the instrument the tool-contract audit reads, so it must not
-    clip or summarize. Never raises: a debug trace may not break a turn.
-
-    Written ONLY to ``sink`` (the autolog file / --debug-file), never to stdout —
-    this dump is far too large for the terminal. If ``sink`` is None it is a no-op.
-
-    Note: for custom providers (codex) this shows the request js hands the SDK,
-    including the resolved base_url — the provider's own in-SDK reshaping to its
-    wire format happens downstream and is not captured here.
-    """
-    if sink is None:
-        return
-    try:
-        header = {
-            "model_id": model_id,
-            "provider_id": provider_id,
-            "base_url": provider_base_url or "provider-default",
-            "message_count": len(messages),
-            "tool_count": len(tools) if tools else 0,
-            "tool_names": [tool.name for tool in tools] if tools else [],
-        }
-        if params is not None:
-            try:
-                header["params"] = params.model_dump(mode="json")
-            except Exception:
-                header["params"] = str(params)
-        blocks = ["\n━━ REQUEST (model_client) ━━", _debug_json(header)]
-        if dump_schemas:
-            sys_txt = ""
-            if messages and getattr(messages[0], "role", None) == "system":
-                first_parts = getattr(messages[0], "parts", None) or []
-                sys_txt = getattr(first_parts[0], "text", "") if first_parts else ""
-            blocks.append("── SYSTEM PROMPT (unclipped) ──")
-            blocks.append(sys_txt)
-            blocks.append(f"── TOOL SCHEMAS ({len(tools) if tools else 0}) ──")
-            blocks.append(_debug_json([_tool_to_debug(t) for t in (tools or [])]))
-        new_msgs = messages[dump_from:] if dump_from else messages
-        blocks.append(f"── MESSAGES (+{len(new_msgs)}) ──")
-        blocks.append(_debug_json([_message_to_debug(m) for m in new_msgs]))
-        sink.write("\n".join(blocks) + "\n")
-    except Exception:
-        pass
-
-
-# The two vendors that document `prompt_cache_key`: OpenAI, and DeepSeek, whose
-# automatic disk cache takes the key harmlessly. Hosts, because that is the only
-# thing that stays true when a provider id is pointed at somebody else's server.
-_CACHE_KEY_HOSTS = frozenset({"api.openai.com", "api.deepseek.com"})
-# The provider ids that reach one of those hosts by default, i.e. when nothing
-# overrode the base URL. OpenAI's own entries carry no `default_base_url` — the
-# SDK fills in api.openai.com — so there is no URL to match against for them.
-_CACHE_KEY_VENDORS = frozenset({"openai", "openai-completions", "openai-responses", "deepseek"})
-
-
-# opencode-go routes and caches by conversation, keyed on this header. Its
-# Anthropic endpoint refuses a request without it: 400 MissingSessionID,
-# "Request is missing x-opencode-session and cannot be routed efficiently".
-# A request with no session key (a session-less run, a compaction summary)
-# gets a one-off id.
-_OPENCODE_GO_PROVIDERS = frozenset({"opencode-go", "opencode-go-anthropic"})
-_OPENCODE_SESSION_HEADER = "x-opencode-session"
-
-
-def accepts_prompt_cache_key(
-    *, provider_name: str, sdk_provider_name: str, base_url: str | None
-) -> bool:
-    """Does the endpoint this request is actually going to take `prompt_cache_key`?
-
-    A provider id names a vendor only until someone points it elsewhere; the base
-    URL is what says where the request lands. So a redirected `openai` provider
-    answers no, and a `sdk="openai"` provider serving its own vendor's host
-    (ollama, vLLM, mimo, xAI) was never OpenAI to begin with.
-    """
-    if base_url:
-        try:
-            host = (urlsplit(base_url).hostname or "").lower()
-        except ValueError:
-            return False
-        return host in _CACHE_KEY_HOSTS
-    return provider_name in _CACHE_KEY_VENDORS or sdk_provider_name in _CACHE_KEY_VENDORS
 
 
 async def stream_model_async(
@@ -1050,7 +476,8 @@ async def stream_model_async(
     trace_request_schemas: bool = True,
     trace_request_from: int = 0,
     cache_key: str | None = None,
-    stream_idle_seconds: float | None = None,
+    stream_limits: retry.StreamLimits | None = None,
+    settings: dict | None = None,
 ) -> ModelStreamResult:
     """Async entry point: stream one model turn on the CALLER'S event loop.
 
@@ -1059,16 +486,19 @@ async def stream_model_async(
     so many turns/subagents can run concurrently on one shared loop. The sync
     ``stream_model`` below wraps this for callers not yet on the async runtime.
 
-    ``stream_idle_seconds`` (None or 0: no limit) aborts the request with
-    :class:`StreamIdleError` once that long passes without a response byte.
+    ``stream_limits`` are the request's clocks (`retry.StreamLimits`; None:
+    none): CONNECT_TIMEOUT, FIRST_BYTE_TIMEOUT and STREAM_IDLE_TIMEOUT.
     """
-    if (providers.normalize_provider_id(provider_id) or "") in _OPENCODE_GO_PROVIDERS:
+    if (providers.normalize_provider_id(provider_id) or "") in request_params.OPENCODE_GO_PROVIDERS:
         provider_headers = {
-            _OPENCODE_SESSION_HEADER: cache_key or f"js-{uuid.uuid4().hex}",
+            request_params.OPENCODE_SESSION_HEADER: cache_key or f"js-{uuid.uuid4().hex}",
             **(provider_headers or {}),
         }
     try:
-        model = resolve_model(
+        factory = _model_factory.get()
+        if factory is None:
+            factory = resolve_model
+        model = factory(
             model_id,
             provider_id=provider_id,
             provider_base_url=provider_base_url,
@@ -1078,155 +508,88 @@ async def stream_model_async(
     except routing.ProviderNotLoggedInError:
         raise
     except Exception as exc:
-        friendly = _friendly_provider_error(exc, provider_id=provider_id)
+        friendly = provider_errors.friendly_provider_error(exc, provider_id=provider_id)
         if friendly is not None:
             raise friendly from exc
         raise
-    # Per-provider params: this is the canonical place to encode quirks. We build
-    # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
-    # field to the provider's wire shape, so js no longer hand-routes sampling
-    # knobs into top-level-vs-extra_body per transport — it declares intent and
-    # lets the provider drop what it can't take.
-    # provider.extra is free-form raw passthrough. In the structured model every
-    # raw kwarg rides extra_body, so fold a nested ``extra_body`` key up and carry
-    # any sibling keys alongside it.
-    extra_body: dict[str, Any] = {}
-    _provider_extra = dict(provider_extra or {})
-    _nested_extra_body = _provider_extra.pop("extra_body", None)
-    if isinstance(_nested_extra_body, dict):
-        extra_body.update(_nested_extra_body)
-    extra_body.update(_provider_extra)
-    provider_def = providers.get_provider(provider_id)
-    provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
-    sdk_provider_name = (
-        provider_def.effective_sdk_provider_id
-        if provider_def is not None and provider_def.effective_sdk_provider_id
-        else (provider_id or "")
-    ).lower()
-    model_name = model_id.lower()
-    explicit_provider = provider_id is not None
-    is_codex = codex_auth.is_codex_provider(provider_name)
-    # Two different questions, and they are not the same question:
-    # The old `is_deepseek` asked "is this a DeepSeek model?" and was used to
-    # decide "does this endpoint take DeepSeek's extras?" — a different question.
-    # A DeepSeek model hosted by someone else answers yes to the first and no to
-    # the second. `nvidia/deepseek-ai/deepseek-v4-pro-0813` is exactly that, and
-    # sending DeepSeek's private extras to NVIDIA is a 400.
-    is_deepseek_wire = provider_name == "deepseek" or sdk_provider_name == "deepseek" or (
-        # Implicit gateway path (`deepseek/deepseek-v3` with no provider): the
-        # caller named no endpoint, so the model id is the only signal there is.
-        not explicit_provider and "deepseek" in model_name
-    )
-    is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
+    # The provider owns an HTTP client from here on; every exit below, including
+    # a failure while the request is still being assembled, must close it.
+    try:
+        return await _stream_with_model(
+            model,
+            model_id=model_id,
+            provider_id=provider_id,
+            provider_base_url=provider_base_url,
+            messages=messages,
+            tools=tools,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            on_text=on_text,
+            on_reasoning=on_reasoning,
+            trace_request=trace_request,
+            trace_sink=trace_sink,
+            trace_request_schemas=trace_request_schemas,
+            trace_request_from=trace_request_from,
+            sampling=sampling,
+            provider_extra=provider_extra,
+            thinking_budget=thinking_budget,
+            cache_key=cache_key,
+            stream_limits=stream_limits,
+            settings=settings,
+        )
+    finally:
+        try:
+            await model.provider.aclose()
+        except Exception:
+            pass
 
-    is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
-    output_max_tokens = max_output_tokens if sends_max_output(provider_id) else None
 
-    reasoning_params: ai_params.ReasoningParams | None = None
-    if is_anthropic_wire:
-        # Every provider on the Anthropic Messages wire takes the reasoning
-        # setting as thinking: adaptive plus an effort on the models that take
-        # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
-        # provider.extra wins.
-        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget)
-        own_thinking = "thinking" not in extra_body
-        if plan is not None:
-            if plan.thinking is not None:
-                extra_body.setdefault("thinking", plan.thinking)
-            if plan.effort is not None:
-                reasoning_params = ai_params.ReasoningParams(effort=plan.effort)
-            if plan.max_tokens is not None and own_thinking:
-                output_max_tokens = plan.max_tokens
-        thinking = extra_body.get("thinking")
-        extra_budget = thinking.get("budget_tokens") if isinstance(thinking, dict) and not own_thinking else None
-        if isinstance(extra_budget, int) and max_output_tokens is None:
-            # A budget from provider.extra on a model with no known output cap:
-            # max_tokens has to sit above it.
-            output_max_tokens = extra_budget + reasoning.ANTHROPIC_UNKNOWN_CAP_ANSWER
-        if sampling is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":
-            # Budget thinking takes no temperature or top_k: Anthropic answers
-            # either with a 400.
-            sampling = replace(sampling, temperature=None, top_k=None)
-    elif reasoning_effort is not None and not is_minimax:
-        # Direct DeepSeek steers reasoning via its own budget (below), not the
-        # OpenAI effort knob. Codex and any openai-SDK endpoint take the effort
-        # knob — snapped to the stops the target actually serves
-        # (js/reasoning.py), so the one dial fits each.
-        steers_via_effort = is_codex or sdk_provider_name == "openai" or not explicit_provider
-        if steers_via_effort:
-            if is_codex:
-                allowed: frozenset[str] | None = reasoning.CODEX_EFFORTS
-            elif explicit_provider and sdk_provider_name == "openai":
-                allowed = reasoning.supported_efforts(model_name)
-            else:
-                allowed = None  # gateway / implicit: let it self-normalize
-            effort = reasoning.snap_effort(reasoning_effort, allowed)
-            if effort == "none":
-                # Disable explicitly only where "none" is a real stop (glm) or on
-                # the implicit/gateway path that historically disabled; for an
-                # unknown explicit model, omit the knob and take its default
-                # rather than send a non-standard reasoning_effort="none".
-                if not explicit_provider or (allowed is not None and "none" in allowed):
-                    reasoning_params = ai_params.ReasoningParams(effort=None)
-            elif effort is not None:
-                reasoning_params = ai_params.ReasoningParams(effort=effort)
+async def _stream_with_model(
+    model: ai.Model,
+    *,
+    model_id: str,
+    provider_id: str | None,
+    provider_base_url: str | None,
+    messages: list[ai.messages.Message],
+    tools: list[ai.types.tools.Tool] | None,
+    max_output_tokens: int | None,
+    reasoning_effort: str | None,
+    on_text: Callable[[str], None],
+    on_reasoning: Callable[[str], None] | None,
+    trace_request: bool,
+    trace_sink: Any,
+    trace_request_schemas: bool,
+    trace_request_from: int,
+    sampling: Sampling | None,
+    provider_extra: dict[str, Any] | None,
+    thinking_budget: int | None,
+    cache_key: str | None,
+    stream_limits: retry.StreamLimits | None,
+    settings: dict | None,
+) -> ModelStreamResult:
+    wire = routing.resolve_wire(provider_id, base_url=provider_base_url, model_id=model_id)
+    if wire.anthropic:
+        messages = tool_result_messages.without_empty_text_parts(messages)
+        systems = [message for message in messages if message.role == "system"]
+        if len(systems) > 1:
+            system = "\n\n".join("".join(part.text for part in message.parts
+                                       if isinstance(part, ai.types.messages.TextPart))
+                                   for message in systems)
+            messages = [ai.system_message(system),
+                        *(message for message in messages if message.role != "system")]
 
-    output_params = (
-        ai_params.OutputParams(max_tokens=output_max_tokens)
-        if output_max_tokens is not None
-        else None
-    )
-
-    # DeepSeek gets the maximum reasoning budget by default as an extra_body
-    # field. Gated on the WIRE, not the model id: this is DeepSeek's own
-    # extension, and an endpoint that validates its inputs rejects the whole
-    # request rather than dropping the key it does not know. It is not the
-    # harmless passthrough the previous comment here claimed —
-    # `js --model nvidia/deepseek-ai/deepseek-v4-pro-0813 -p foo` returned
-    # 400 Unsupported parameter(s): `max_reasoning_tokens`.
-    if is_deepseek_wire and reasoning_effort != "none":
-        extra_body.setdefault("max_reasoning_tokens", 32_000)
-
-    # Prompt caching. Every turn resends the whole conversation, so the prefix it
-    # shares with the previous turn is the bulk of each request, and the three
-    # providers in use want three different things:
-    #   Anthropic caches only what a cache_control breakpoint covers, so the
-    #     request has to ask; the SDK's top-level form covers tools + system.
-    #   OpenAI-compatible endpoints cache long prefixes automatically. There is no
-    #     breakpoint to set, but prompt_cache_key pins a conversation to the machine
-    #     holding its prefix, which is what makes the hit rate hold up across turns.
-    #   DeepSeek caches on disk automatically from token zero, with no request-side
-    #     control at all, so it takes the same key harmlessly.
-    # `prompt_cache_key` is an OpenAI extension, not part of the OpenAI-compatible
-    # shape everyone implements, so what decides it is which ENDPOINT is being
-    # called, not which SDK shape talks to it. `sdk="openai"` is the wire for
-    # ollama, vLLM, llama.cpp, mimo, xAI and every `JS_BASE_URL` redirect, none of
-    # which are OpenAI; asking the wire sent the key to all of them, and an
-    # endpoint that validates its inputs rejects the whole request rather than
-    # dropping a key it does not know (observed:
-    # `JS_PROVIDER=openai JS_BASE_URL=https://integrate.api.nvidia.com/v1`, 400
-    # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
-    # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
-    # entire request.
-    accepts_cache_key = is_codex or accepts_prompt_cache_key(
-        provider_name=provider_name,
-        sdk_provider_name=sdk_provider_name,
-        base_url=provider_base_url,
-    )
-    if is_anthropic_wire:
-        cache_params = ai_params.CacheParams()
-    elif cache_key and accepts_cache_key:
-        cache_params = ai_params.CacheParams(key=cache_key)
-    else:
-        cache_params = None
-
-    params = _build_inference_params(
-        sampling or Sampling(),
-        provider_def.transport if provider_def is not None else None,
-        reasoning=reasoning_params,
-        output=output_params,
-        extra_body=extra_body,
-        cache=cache_params,
+    params = request_params.build_request_params(
+        model_id=model_id,
+        provider_id=provider_id,
+        provider_base_url=provider_base_url,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=reasoning_effort,
+        thinking_budget=thinking_budget,
+        provider_extra=provider_extra,
+        sampling=sampling,
+        cache_key=cache_key,
+        settings=settings,
+        wire=wire,
     )
 
     # DeepSeek, MiMo, and Anthropic-like providers are append-only in the sense
@@ -1238,16 +601,11 @@ async def stream_model_async(
     # which otherwise breaks resume and mid-conversation model switches. Strip it
     # only for those models, so a stored session stays portable without rewriting
     # history for backends (mimo, kimi) that accept the field.
-    transport = provider_def.transport if provider_def is not None else None
-    if (
-        sdk_provider_name == "openai"
-        and transport != "custom_responses"
-        and reasoning.rejects_reasoning_replay(model_name)
-    ):
-        messages = _strip_reasoning_parts(messages)
+    if wire.chat_completions and reasoning.rejects_reasoning_replay(model_id.lower()):
+        messages = tool_result_messages.strip_reasoning_parts(messages)
 
     if trace_request and trace_sink is not None:
-        _emit_request_trace(
+        debug_trace.emit_request_trace(
             sink=trace_sink,
             model_id=model_id,
             provider_id=provider_id,
@@ -1280,117 +638,47 @@ async def stream_model_async(
                 _on_reasoning(chunk)
 
     reasoning_token = _reasoning_sink.set(on_reasoning)
-    idle_token = _idle_seconds.set(stream_idle_seconds)
+    limits_token = _limits.set(stream_limits or retry.StreamLimits())
+    collected = stream_protocols.ReasoningBlocks()
+    blocks_token = stream_protocols.reasoning_blocks_sink.set(collected)
     try:
-        return await _stream_async(
+        result = await _stream_async(
             model=model,
             messages=messages,
             tools=tools,
             params=params,
             on_text=on_text,
         )
+        blocks = collected.blocks()
+        if blocks is None:
+            return result
+        return replace(result, reasoning_blocks=blocks,
+                       assistant_message=with_reasoning_blocks(result.assistant_message, blocks))
     except routing.ProviderNotLoggedInError:
         raise
     except Exception as exc:
         if net_call is not None:
             net_call.failed(exc)
-        friendly = _friendly_provider_error(exc, provider_id=provider_id)
+        friendly = provider_errors.friendly_provider_error(exc, provider_id=provider_id)
         if friendly is not None:
             raise friendly from exc
-        dropped = _transport_error(exc, provider_id=provider_id)
-        if dropped is not None:
-            raise dropped from exc
         raise
     finally:
-        _idle_seconds.reset(idle_token)
+        stream_protocols.reasoning_blocks_sink.reset(blocks_token)
+        _limits.reset(limits_token)
         _reasoning_sink.reset(reasoning_token)
         stream_transport.reset_call(net_token)
-        try:
-            await model.provider.aclose()
-        except Exception:
-            pass
-
-
-# The loop's own teardown protocol, not anybody's failure. `shutdown_asyncgens`
-# throws GeneratorExit into every async generator still suspended at a yield; a
-# generator whose teardown awaits (or whose teardown is itself another generator
-# being closed in the same pass) cannot stop on that throw, and the close fails
-# with one of these. Every one of them is raised BY the close protocol, after the
-# work already succeeded.
-_ASYNCGEN_SHUTDOWN_MESSAGE = "an error occurred during closing of asynchronous generator"
-_ASYNCGEN_PROTOCOL_ERRORS = (
-    "didn't stop after athrow()",
-    "asynchronous generator is already running",
-    "async generator is already running",
-    "ignored GeneratorExit",
-)
-
-
-def install_asyncgen_shutdown_filter(loop: asyncio.AbstractEventLoop) -> None:
-    """Arm the filter below on a loop js owns, immediately before shutting it down.
-
-    Every sync entry point that runs a turn ends by closing its own loop, and
-    every one of them hits the same upstream teardown, so each of them installs
-    this. Arming it late keeps a running loop's own error reporting untouched.
-    """
-    loop.set_exception_handler(_asyncgen_shutdown_filter(loop.get_exception_handler()))
-
-
-def _asyncgen_shutdown_filter(previous: Callable[..., None] | None) -> Callable[..., None]:
-    """An asyncio exception handler that drops exactly the close-protocol noise.
-
-    Nothing else: a teardown that fails for a real reason (an OSError closing a
-    file, a ValueError out of a `finally`) still reaches the previous handler,
-    and so does any other loop error.
-    """
-
-    def handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
-        exc = context.get("exception")
-        # asyncio appends the generator's repr to the message, so match the stem.
-        if (
-            str(context.get("message", "")).startswith(_ASYNCGEN_SHUTDOWN_MESSAGE)
-            and isinstance(exc, RuntimeError)
-            and any(needle in str(exc) for needle in _ASYNCGEN_PROTOCOL_ERRORS)
-        ):
-            return
-        if previous is not None:
-            previous(loop, context)
-        else:
-            loop.default_exception_handler(context)
-
-    return handler
-
-
-def run_owning_loop(coro: Any) -> Any:
-    """``asyncio.run(coro)``, minus one upstream traceback on the way out.
-
-    A completed turn used to print a `RuntimeError` traceback after its own
-    telemetry line, because `asyncio.run`'s last act is `shutdown_asyncgens()`
-    and the transport leaves a response-body iterator suspended at a yield whose
-    teardown awaits. We cannot close that iterator ourselves: it is not the
-    object the SDK closes (`PoolByteStream.aclose()` closes `self._stream`, a
-    different object), and it belongs to the transport, not to js. The defect is
-    upstream, so this narrows what the loop reports rather than pretending to
-    fix it — only during OUR shutdown of OUR loop, and only for errors the close
-    protocol itself raised.
-    """
-    runner = asyncio.Runner()
-    try:
-        return runner.run(coro)
-    finally:
-        install_asyncgen_shutdown_filter(runner.get_loop())
-        runner.close()
 
 
 def stream_model(*, retry_budget: retry.Budget | None = None, **kwargs: Any) -> ModelStreamResult:
     """Sync wrapper over :func:`stream_model_async` — spins a throwaway loop per
     call. This is the OLD blocking path; the non-blocking runtime calls
-    ``stream_model_async`` directly on its shared loop. Kept so un-migrated
-    callers (and the current sync run_turn) keep working during the transition.
+    ``stream_model_async`` directly on its shared loop. Kept for callers
+    off the loop.
 
-    With ``retry_budget`` a retryable failure sends the request again under it;
+    With ``retry_budget`` a provider_errors.retryable failure sends the request again under it;
     without one the first failure raises.
     """
     if retry_budget is None:
-        return run_owning_loop(stream_model_async(**kwargs))
-    return run_owning_loop(retry.call(lambda: stream_model_async(**kwargs), retry_budget))
+        return owning_loop.run_owning_loop(stream_model_async(**kwargs))
+    return owning_loop.run_owning_loop(retry.call(lambda: stream_model_async(**kwargs), retry_budget))

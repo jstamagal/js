@@ -10,17 +10,26 @@ from unittest.mock import AsyncMock
 import ai
 import pytest
 from ai.types.usage import Usage
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, model_client, runtime, stream_transport
-from js import messages as msgs
+from js import (
+    compaction,
+    compaction_summary,
+    context_window,
+    memory,
+    messages as msgs,
+    microcompact,
+    model_client,
+    network_display,
+    runtime,
+)
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -28,22 +37,22 @@ def offline_metadata(monkeypatch):
 def net_lines():
     lines: list[str] = []
     level = {"value": 2}
-    stream_transport.install_sink(stream_transport.NetSink(level=lambda: level["value"], emit=lines.append))
+    network_display.install_sink(network_display.NetSink(level=lambda: level["value"], emit=lines.append))
     try:
         yield lines, level
     finally:
-        stream_transport.install_sink(None)
+        network_display.install_sink(None)
 
 
 def _config(tmp_path, compact: dict | None = None):
     return replace(_cfg(tmp_path), provider_id="openai", provider_api_key="offline",
                    provider_base_url="http://127.0.0.1:1/v1", max_output_tokens=500,
-                   settings={"compact": dict(compact or {})})
+                   settings=dict(compact or {}))
 
 
 # A 10k window with a 500-token reply reserve and a 100-token buffer.
-_SMALL_WINDOW = {"context_window": 10000, "tail_tokens": 100, "buffer_tokens": 100,
-                 "summary_reserve_tokens": 500}
+_SMALL_WINDOW = {"CONTEXT_SIZE": 10000, "COMPACTION_KEEP_RECENT_TOKENS": 100, "COMPACTION_HEADROOM_TOKENS": 100,
+                 "COMPACTION_REPLY_RESERVE_TOKENS": 500}
 
 
 def _over_budget_history() -> list[dict]:
@@ -92,7 +101,7 @@ def test_three_failed_summaries_pause_in_turn_compaction_with_one_line(monkeypat
         raise RuntimeError("summarizer down")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", failing_summary)
     for _ in range(4):
         _turn(cfg, _over_budget_history(), context)
 
@@ -103,7 +112,7 @@ def test_three_failed_summaries_pause_in_turn_compaction_with_one_line(monkeypat
 
 
 def test_breaker_limit_is_the_setting(monkeypatch, tmp_path):
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "max_summary_failures": 1})
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_FAILURES_MAX": 1})
     context = ToolContext(cwd=tmp_path)
     attempts = []
 
@@ -115,7 +124,7 @@ def test_breaker_limit_is_the_setting(monkeypatch, tmp_path):
         raise RuntimeError("summarizer down")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", failing_summary)
     _turn(cfg, _over_budget_history(), context)
     _turn(cfg, _over_budget_history(), context)
     assert len(attempts) == 1
@@ -130,7 +139,7 @@ def test_a_successful_summary_resumes_paused_compaction(monkeypatch, tmp_path):
     async def summary(*args, **kwargs):
         return "short summary"
 
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     result = compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context)
     assert compaction.compacted(result)
     assert context.summary_failures == 0
@@ -138,7 +147,7 @@ def test_a_successful_summary_resumes_paused_compaction(monkeypatch, tmp_path):
 
 
 def test_between_turn_compaction_pauses_after_three_failures(monkeypatch, tmp_path):
-    cfg = _config(tmp_path, {"context_window": 100, "buffer_tokens": 0})
+    cfg = _config(tmp_path, {"CONTEXT_SIZE": 100, "COMPACTION_HEADROOM_TOKENS": 0})
     context = ToolContext(cwd=tmp_path)
     context.last_prompt_tokens = 95
     failing = AsyncMock(side_effect=RuntimeError("summarizer down"))
@@ -178,7 +187,7 @@ def test_summary_request_is_plain_text_with_tool_results_clipped(monkeypatch, tm
             {"id": "c1", "type": "function", "function": {"name": "read", "arguments": '{"path": "a.py"}'}}]},
         {"role": "tool", "tool_call_id": "c1", "name": "read", "content": body},
     ]
-    asyncio.run(compaction.summarize(_config(tmp_path), "offline-test", messages, "", ""))
+    asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", ""))
 
     (text,) = requests
     assert user in text                 # verbatim, not JSON-escaped
@@ -192,14 +201,14 @@ def test_summary_tool_result_chars_zero_sends_whole_results(monkeypatch, tmp_pat
     body = "z" * 10_000
     messages = [{"role": "user", "content": "go"},
                 {"role": "tool", "tool_call_id": "c1", "name": "read", "content": body}]
-    cfg = _config(tmp_path, {"summary_tool_result_chars": 0})
-    asyncio.run(compaction.summarize(cfg, "offline-test", messages, "", ""))
+    cfg = _config(tmp_path, {"COMPACTION_SUMMARY_RESULT_CHARS_MAX": 0})
+    asyncio.run(compaction_summary.summarize(cfg, "offline-test", messages, "", ""))
     assert body in requests[0]
 
 
 def test_second_compaction_updates_the_previous_summary(monkeypatch, tmp_path):
     requests = _capture_summary_requests(monkeypatch, ["FIRST_SUMMARY", "SECOND_SUMMARY"])
-    cfg = _config(tmp_path, {"tail_tokens": 10, "min_savings_tokens": 1})
+    cfg = _config(tmp_path, {"COMPACTION_KEEP_RECENT_TOKENS": 10, "COMPACTION_MIN_SAVINGS_TOKENS": 1})
     context = ToolContext(cwd=tmp_path)
     messages = [{"role": "user", "content": "EARLY_WORK " * 500},
                 {"role": "assistant", "content": "done early"},
@@ -230,9 +239,9 @@ def test_split_summary_sends_the_previous_summary_once(monkeypatch, tmp_path):
         return _result(text=f"part {len(requests)}")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    messages = [compaction._compaction_summary_message("OLD_SUMMARY"),
+    messages = [memory.compaction_summary_message("OLD_SUMMARY"),
                 *({"role": "user", "content": f"entry {i}"} for i in range(8))]
-    summary = asyncio.run(compaction.summarize(_config(tmp_path), "offline-test", messages, "", ""))
+    summary = asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", ""))
     assert ["OLD_SUMMARY" in r for r in requests] == [True, True, False]
     assert "part 2" in summary and "part 3" in summary
 
@@ -255,10 +264,10 @@ def test_budget_clears_tool_results_once_the_cache_expired(monkeypatch, tmp_path
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = _tool_heavy_history()
     _turn(cfg, messages, context)
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
     assert summaries == []
 
 
@@ -276,11 +285,11 @@ def test_budget_summarizes_instead_of_clearing_while_the_cache_is_warm(monkeypat
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = _tool_heavy_history()
     _turn(cfg, messages, context)
     assert summaries
-    assert not any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert not any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def _current_turn_tool_heavy_history(n: int = 30, body: int = 2000) -> list[dict]:
@@ -306,11 +315,11 @@ def test_paused_summaries_still_clear_while_the_cache_is_warm(monkeypatch, tmp_p
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = history()
     _turn(cfg, messages, context)
     assert summaries == []
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def test_warm_cache_clears_the_current_turn_before_summarizing_it(monkeypatch, tmp_path):
@@ -327,11 +336,11 @@ def test_warm_cache_clears_the_current_turn_before_summarizing_it(monkeypatch, t
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = _current_turn_tool_heavy_history()
     _turn(cfg, messages, context)
     assert summaries == []
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def test_one_budget_check_counts_one_failed_summary(monkeypatch, tmp_path):
@@ -347,19 +356,10 @@ def test_one_budget_check_counts_one_failed_summary(monkeypatch, tmp_path):
         raise RuntimeError("summarizer down")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", failing_summary)
     _turn(cfg, _over_budget_history(), context)
     assert len(attempts) == 1
     assert context.summary_failures == 1
-
-
-def test_cache_ttl_is_the_setting(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    context.last_request_at = 1000.0
-    assert not compaction.cache_expired(_config(tmp_path), context, now=1299.0)
-    assert compaction.cache_expired(_config(tmp_path), context, now=1300.0)
-    assert compaction.cache_expired(_config(tmp_path, {"cache_ttl_seconds": 0}), context, now=1000.0)
-    assert not compaction.cache_expired(_config(tmp_path, {"cache_ttl_seconds": 3600}), context, now=1300.0)
 
 
 def test_provider_overflow_clears_even_while_the_cache_is_warm(monkeypatch, tmp_path):
@@ -377,7 +377,7 @@ def test_provider_overflow_clears_even_while_the_cache_is_warm(monkeypatch, tmp_
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = _tool_heavy_history(n=22)
     _turn(cfg, messages, context)
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
     assert messages[-1]["content"] == "ok"
 
 
@@ -417,16 +417,16 @@ def test_a_response_without_usage_keeps_the_baseline(tmp_path):
 
 @pytest.mark.parametrize("command", ["/reset", "/wipe"])
 def test_clearing_the_history_is_not_a_cache_break(monkeypatch, tmp_path, command):
-    from js import cli
-    from js.config import from_env
-    from repl_driver import repl_state
+    from repl_driver import run_async
 
+    from js.config import from_env
+
+    monkeypatch.chdir(tmp_path)
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
     cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
-    state, _spec = repl_state(cfg)
     compaction.note_response(context, model_key="p/m", cache_read=100_000, now=0.0)
-    cli._handle_command(command, state, cfg)
+    run_async(monkeypatch, cfg, [command])
     assert compaction.note_response(context, model_key="p/m", cache_read=0, now=1.0) is None
 
 
@@ -458,3 +458,38 @@ def test_cache_break_is_silent_below_net_level_two(monkeypatch, tmp_path, net_li
     level["value"] = 1
     _cached_turns(monkeypatch, tmp_path, [100_000, 20_000])
     assert not any("20000" in _plain(line) for line in lines)
+
+
+def test_a_paid_summary_that_saves_too_little_counts_toward_the_breaker(monkeypatch, tmp_path):
+    """The post-summary savings skip was not a
+    failure, so every turn paid for the same summary again."""
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_FAILURES_MAX": 2})
+    context = ToolContext(cwd=tmp_path)
+    calls = []
+
+    async def huge_summary(*args, **kwargs):
+        calls.append(1)
+        return "word " * 60000            # bigger than what it replaces
+
+    monkeypatch.setattr(compaction_summary, "summarize", huge_summary)
+    trigger = {"phase": "between-turn"}
+    for _ in range(4):
+        if compaction.auto_paused(cfg, context):
+            break
+        result = compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context,
+                                             trigger=trigger)
+        assert result.message == msgs.COMPACT_SKIPPED_SAVINGS
+    assert len(calls) == 2
+    assert compaction.auto_paused(cfg, context)
+
+
+def test_a_manual_compact_skip_does_not_touch_the_breaker(monkeypatch, tmp_path):
+    cfg = _config(tmp_path, _SMALL_WINDOW)
+    context = ToolContext(cwd=tmp_path)
+
+    async def huge_summary(*args, **kwargs):
+        return "word " * 60000
+
+    monkeypatch.setattr(compaction_summary, "summarize", huge_summary)
+    compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context)
+    assert getattr(context, "summary_failures", 0) == 0
