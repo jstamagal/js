@@ -17,8 +17,9 @@ set dotenv-load
 # publishes no musllinux wheels, so a musl system goes without `browser`.
 # Termux gets the base packages only.
 termux := `if [ -n "${TERMUX_VERSION:-}" ]; then printf true; else case "${PREFIX:-}" in /data/*/com.termux/files/usr|/data/*/com.termux/files/usr/) printf true ;; *) printf false ;; esac; fi`
+android := if termux == "true" { "true" } else { `if [ "$(uname -o 2>/dev/null)" = Android ]; then printf true; else printf false; fi` }
 musl := `if ldd --version 2>&1 | grep -qi musl; then printf true; else printf false; fi`
-extras := if termux == "true" { "" } else if musl == "true" { "--extra kernel --extra vision" } else { "--extra kernel --extra vision --extra browser" }
+extras := if android == "true" { "" } else if musl == "true" { "--extra kernel --extra vision" } else { "--extra kernel --extra vision --extra browser" }
 
 # show all recipes (default when `just` is called with no argument)
 default:
@@ -80,6 +81,14 @@ install:
         echo "!! this is a linked git worktree — run 'just install' from the main checkout:" >&2
         echo "!!   $(dirname "$(git rev-parse --git-common-dir)")" >&2
         exit 1
+    fi
+    if [ "{{ android }}" = true ] && [ -z "${UV_FIND_LINKS:-}" ] && ! command -v rustc >/dev/null; then
+        case "$(uname -m)" in
+            armv7*|armv8l)
+                echo "!! 32-bit ARM Android needs native wheels matching your Python and ABI." >&2
+                echo "!! Set UV_FIND_LINKS to a wheelhouse including pydantic-core, jiter, rpds-py and PyYAML." >&2
+                exit 1 ;;
+        esac
     fi
     repo="$(pwd -P)"
     bin="$HOME/.local/bin"
@@ -178,6 +187,12 @@ install:
 # Install CLI binaries into tools/bin: native pkg tools on Termux, otherwise
 # pinned, checksummed downloads bootstrapped by managed aria2c.
 install-tool-binaries:
+    #!/usr/bin/env sh
+    set -eu
+    if [ "{{ android }}" = true ] && [ "{{ termux }}" = false ]; then
+        echo "Android: using CLI tools from PATH"
+        exit 0
+    fi
     uv run {{ extras }} python -m js.tool_binaries
 
 # Provision managed binaries, using Termux packages on Android.
