@@ -203,7 +203,9 @@ def _scanned(current: Path) -> tuple[Path, ...]:
     for directory in (current, *current.parents):
         if directory == user:
             break
-        if directory in homes or (directory / ".js").resolve(strict=False) in homes:
+        # ``directory`` is resolved, so its `.js` resolves elsewhere only as a symlink.
+        layer = directory / ".js"
+        if directory in homes or layer in homes or (layer.is_symlink() and layer.resolve(strict=False) in homes):
             continue
         found.append(directory)
     return tuple(found)
