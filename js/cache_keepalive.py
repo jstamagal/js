@@ -213,22 +213,19 @@ class CacheKeepalive:
             return
         ttl = int(_settings.knob(live, "COMPACTION_CACHE_TTL") or 0)
         delay = refresh_delay(ttl)
-        if delay is None:
-            self.next_at = None
-            return
-        due = self._read_at + delay
-        self.next_at = due
+        self.next_at = self._read_at + delay if delay is not None else None
         now = self._clock()
         idle_max = int(_settings.knob(live, "CACHE_KEEPALIVE_IDLE_MAX") or 0)
         if idle_max <= 0:
             self._stop()
             return
-        if now < min(due, request.sent_at + idle_max):
+        idle_deadline = request.sent_at + idle_max
+        if now < idle_deadline and (self.next_at is None or now < self.next_at):
             return
         if self._route() != (request.model, request.provider_id, request.base_url, request.api_key, request.headers or {}):
             self._stop()
             return
-        if now - request.sent_at >= idle_max:
+        if now >= idle_deadline:
             self._end_idle(live, request, now)
             return
         if now >= self._read_at + ttl:
