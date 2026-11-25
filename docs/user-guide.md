@@ -190,7 +190,13 @@ on tool_call exec ~/bin/js-guard
 
 A `tool_call` handler whose command exits 2 refuses the call: the call never
 runs, and the model reads the first line of the command's stderr (else of its
-stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Subagents'
+stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Exit 3
+rewrites it: the command's stdout is the JSON object of arguments the call
+runs with instead. The rewrite meets the same schema and argument bans as the
+model's own arguments, and one that fails them, or is not a JSON object,
+refuses the call. The model's history keeps the arguments it sent; only the
+tool sees the rewrite. A later handler reads the call as the one before it
+left it. Subagents'
 tool calls and a kernel cell's `tools.<name>(...)` calls go through the same
 `tool_call` handlers; a subagent's turn fires no other event. Any other status, or running past `EXEC_TIMEOUT`
 seconds (30, 0 for no limit; the process group is killed), prints one `exec:`

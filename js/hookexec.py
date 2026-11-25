@@ -21,6 +21,9 @@ from . import events, settings as _settings
 
 # The exit status that refuses a refusable event (Claude Code's blocking status).
 REFUSE_STATUS = 2
+# A tool_call handler that exits 3 rewrites the call: its stdout is the
+# JSON object of arguments the call runs with instead.
+REWRITE_STATUS = 3
 
 
 @dataclass(frozen=True)
@@ -208,4 +211,24 @@ def apply_refusal(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool
             or call.emission.event not in events.REFUSABLE_EVENTS):
         return False
     call.refusal = refusal(outcome, str(call.emission.payload.get("name") or "the call"))
+    return True
+
+
+def apply_rewrite(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool:
+    """Record a tool_call handler's argument rewrite: exit 3 with a JSON
+    object on stdout. A rewrite that is not a JSON object refuses the call,
+    so a broken handler never lets the original arguments through."""
+    if (call is None or outcome.returncode != REWRITE_STATUS
+            or call.emission.event not in events.REFUSABLE_EVENTS):
+        return False
+    tool = str(call.emission.payload.get("name") or "the call")
+    try:
+        arguments = json.loads(outcome.stdout)
+    except ValueError as exc:
+        call.refusal = f"ERROR: an on tool_call handler rewrote {tool} to invalid JSON: {exc}"
+        return True
+    if not isinstance(arguments, dict):
+        call.refusal = f"ERROR: an on tool_call handler rewrote {tool} to a non-object: {type(arguments).__name__}"
+        return True
+    call.arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     return True

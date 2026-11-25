@@ -325,6 +325,83 @@ def test_session_start_handler_timeout_is_not_a_refusal(tmp_path):
     assert emission.results[0].error is not None
 
 
+def _run_one_tool_call_history(tmp_path, state) -> tuple[list[str], list[dict], list[dict]]:
+    """``_run_one_tool_call`` plus the whole history the turn left."""
+    ran: list[str] = []
+
+    def echo(text: str):
+        ran.append(text)
+        return f"echoed {text}"
+
+    registry = ToolRegistry(
+        tools=(Tool(name="echo", description="echo", handler=echo,
+                    params={"text": {"type": "string"}}, required=("text",)),),
+        aliases={"echo": "echo"},
+    )
+    replies = iter([model_tool_call_result("echo", ['{"text": "hi"}']), model_text_result("done")])
+    messages = [{"role": "user", "content": "echo hi"}]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runtime.model_client, "stream_model_async", lambda **_kw: next(replies))
+        one_turn(
+            offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
+            trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+            suppress_output=True, event_hooks=state.events,
+        )
+    return ran, [m for m in messages if m.get("role") == "tool"], messages
+
+
+def test_tool_call_handler_exit_3_rewrites_the_arguments(tmp_path):
+    state, cfg = _state(tmp_path)
+    _on(state, cfg, """tool_call exec sh -c 'printf "{\\"text\\": \\"secret\\"}"; exit 3'""")
+
+    ran, results, messages = _run_one_tool_call_history(tmp_path, state)
+
+    assert ran == ["secret"]
+    assert results[0]["content"] == "echoed secret"
+    # The model's history keeps the arguments the model sent.
+    assert "secret" not in json.dumps([m for m in messages if m.get("role") == "assistant"])
+
+
+def test_a_later_handler_reads_the_rewritten_arguments(tmp_path):
+    state, cfg = _state(tmp_path)
+    seen = tmp_path / "seen.json"
+    _on(state, cfg, """tool_call exec sh -c 'printf "{\\"text\\": \\"first\\"}"; exit 3'""")
+    _on(state, cfg, f"tool_call exec sh -c 'cat > {seen}'")
+
+    ran, _results, _ = _run_one_tool_call_history(tmp_path, state)
+
+    assert ran == ["first"]
+    assert json.loads(json.loads(seen.read_text(encoding="utf-8"))["arguments"]) == {"text": "first"}
+
+
+@pytest.mark.parametrize("stdout, expected", [
+    ("not json", "rewrote echo to invalid JSON"),
+    ("[1]", "rewrote echo to a non-object"),
+    ('{"text": 5, "extra": 1}', "rewrote echo to invalid arguments"),
+])
+def test_a_bad_rewrite_refuses_the_call(tmp_path, stdout, expected):
+    state, cfg = _state(tmp_path)
+    script = tmp_path / "rewrite.sh"
+    script.write_text(f"cat >/dev/null\nprintf '%s' '{stdout}'\nexit 3\n", encoding="utf-8")
+    _on(state, cfg, f"tool_call exec sh {script}")
+
+    ran, results, _ = _run_one_tool_call_history(tmp_path, state)
+
+    assert ran == []
+    first = results[0]["content"].splitlines()[0]
+    assert first.startswith("ERROR") and expected in first
+
+
+def test_exit_3_outside_tool_call_is_a_failure_not_a_rewrite(tmp_path):
+    state, cfg = _state(tmp_path)
+    _on(state, cfg, """turn_end exec sh -c 'printf "{}"; exit 3'""")
+
+    emission = state.events.emit("turn_end")
+
+    assert events.arguments_of(emission) is None
+    assert emission.results[0].error is not None
+
+
 def test_tool_call_handler_exit_0_lets_the_call_run(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "tool_call exec true")
