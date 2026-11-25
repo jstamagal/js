@@ -100,6 +100,7 @@ def print_resume_hint(cfg: Config, state: ReplState) -> None:
     resume = command_line.argv(("--agent", cfg.agent_id if named else None),
                                ("--model", model if isinstance(model, str) and model else None),
                                ("--home", str(_paths.home()) if _paths.custom_home() else None),
+                               *command_line.isolate_argv(),
                                ("--session", session_store.session_hint_arg(cfg)))
     msgs.say(msgs.RESUME_HINT, command=shlex.join(["js", *resume]))
 
@@ -173,6 +174,7 @@ def exec_session(target: session_picker.SessionTarget) -> None:
         ("--session", str(target.path)),
         ("-a", target.agent or None),
         ("-C", target.cwd if target.jailed and target.cwd else None),
+        *command_line.isolate_argv(),
     )]
     sys.stdout.flush()
     sys.stderr.flush()
@@ -214,6 +216,14 @@ async def _close_session_mcp_host(state: ReplState) -> None:
         await host.close()
 
 
+def _isolation_lines() -> list[str]:
+    """The banner's line naming the isolation border this run is under, if any."""
+    found = _paths.isolation()
+    if found is None:
+        return []
+    return [msgs.STARTUP_ISOLATED.line(layer=found.layer, by=found.marker or "--isolate")]
+
+
 def _default_startup_banner(cfg: Config, state: ReplState, notices: list[str], errors: list[str]) -> str:
     """What the REPL prints into its scrollback when it is up: the MOTD
     (`js.motd`) raw with its colours reset after, then the startup line,
@@ -226,6 +236,7 @@ def _default_startup_banner(cfg: Config, state: ReplState, notices: list[str], e
         msgs.STARTUP_MODEL.line(model=state.model),
         msgs.STARTUP_PROMPT.line(prompt=", ".join(map(str, cfg.prompts_dir)) if isinstance(cfg.prompts_dir, tuple) else cfg.prompts_dir),
         msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
+        *_isolation_lines(),
         "",
         repl_state.repl_hint(msgs.STARTUP_HINT, state).line(),
         "",

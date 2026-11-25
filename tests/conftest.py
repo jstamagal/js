@@ -55,6 +55,7 @@ def isolated_user_profile(monkeypatch, tmp_path):
     # the store under this HOME.
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", None)
     monkeypatch.setattr(paths, "_HOME", None)
+    monkeypatch.setattr(paths, "_ISOLATE", None)
     # A command line one test ran must not shape the next test's settings.
     from js import config as _config
 

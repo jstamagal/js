@@ -325,7 +325,7 @@ def _cmd_save(arg: str, state: ReplState, cfg: Config) -> str | None:
     if not (keys or fset_names or extra):
         msgs.say(msgs.SAVE_NOTHING)
         return None
-    path = _paths.global_config_file()
+    path = _paths.save_config_file()
     try:
         count = jsrc_save.save_settings_to_jsrc(path, live, keys=keys, fset_names=fset_names,
                                                 extra_lines=extra)

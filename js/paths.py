@@ -4,7 +4,8 @@ One home: `--home DIR`, else `$JS_HOME`, else `~/.js/`. Startup resolves it
 once to an absolute directory. Project `.js/` directories (jsrc, jsrc.local,
 agents, skills, commands, toolbox, JS.md) stay with their project: each one
 from the project root (`project_root`) down to the working directory is a
-layer over the home, the nearest winning.
+layer over the home, the nearest winning. A `.isolate` marker is a border: no
+layer above it is read, the home included (`isolation`).
 
 `ensure_home()` creates every directory of the layout on each start, so the
 whole structure is always there:
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 _ROOT = Path(os.path.realpath(__file__)).parent.parent
@@ -92,11 +94,7 @@ def _submodule_marker(marker: Path) -> bool:
     return any(parts[i:i + 2] == (".git", "modules") for i in range(len(parts) - 1))
 
 
-def project_root(cwd: Path | None = None) -> Path | None:
-    """The top of the project ``cwd`` (default: here) is in: the nearest
-    directory at or above it holding a `.git`, lifted out of a submodule to
-    the repository that holds it. None outside any repository."""
-    current = (cwd or Path.cwd()).resolve(strict=False)
+def _git_root(current: Path) -> Path | None:
     found: Path | None = None
     for directory in (current, *current.parents):
         marker = directory / ".git"
@@ -109,13 +107,20 @@ def project_root(cwd: Path | None = None) -> Path | None:
     return found
 
 
-def project_chain(cwd: Path | None = None) -> tuple[Path, ...]:
-    """Every directory from the project root down to ``cwd`` (default: here),
-    root first. Empty outside any repository."""
+def project_root(cwd: Path | None = None) -> Path | None:
+    """The top of the project ``cwd`` (default: here) is in: the nearest
+    directory at or above it holding a `.git`, lifted out of a submodule to
+    the repository that holds it. Outside any repository, an isolation
+    border (`isolation`) is a root of its own. None otherwise."""
     current = (cwd or Path.cwd()).resolve(strict=False)
-    root = project_root(current)
+    root = _git_root(current)
     if root is None:
-        return ()
+        found = isolation(current)
+        root = None if found is None else found.directory
+    return root
+
+
+def _chain_from(root: Path, current: Path) -> tuple[Path, ...]:
     try:
         rel = current.relative_to(root)
     except ValueError:
@@ -123,11 +128,138 @@ def project_chain(cwd: Path | None = None) -> tuple[Path, ...]:
     return (root, *(root.joinpath(*rel.parts[:depth]) for depth in range(1, len(rel.parts) + 1)))
 
 
+# --isolate (True) / --no-isolate (False) for this run; None follows the markers.
+_ISOLATE: bool | None = None
+
+ISOLATE_MARKER = ".isolate"
+
+# Whether git tracks a marker, by its path: asked once per run.
+_TRACKED: dict[Path, bool] = {}
+
+
+def configure_isolate(value: bool | None) -> None:
+    """Record this run's --isolate (True) or --no-isolate (False); None
+    leaves isolation to the `.isolate` markers."""
+    global _ISOLATE
+    _ISOLATE = value
+
+
+def isolate_override() -> bool | None:
+    return _ISOLATE
+
+
+@dataclass(frozen=True)
+class Isolation:
+    """A border: no setup layer above ``directory`` is read, the home
+    included. ``directory``'s `.js/` and every chain layer below it stack over
+    stock. ``marker`` is the `.isolate` file that set it, None when
+    --isolate did; a marker above the repository root borders at the root."""
+    directory: Path
+    marker: Path | None
+
+    @property
+    def layer(self) -> Path:
+        """The topmost setup directory read: ``directory``'s `.js/`."""
+        return self.directory / ".js"
+
+
+def _home_layers() -> set[Path]:
+    return {home().resolve(strict=False), default_home().resolve(strict=False)}
+
+
+def _tracked(marker: Path) -> bool:
+    """Whether git tracks ``marker``: a committed `.isolate` is ignored."""
+    if marker not in _TRACKED:
+        import subprocess
+        try:
+            result = subprocess.run(["git", "-C", str(marker.parent), "ls-files", "--error-unmatch", "--", marker.name],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+            _TRACKED[marker] = result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            _TRACKED[marker] = False
+    return _TRACKED[marker]
+
+
+def _scanned(current: Path) -> tuple[Path, ...]:
+    """The directories a marker is looked for in, nearest first: ``current``
+    and its parents below `$HOME`, or every parent outside `$HOME`. The home
+    profile and a directory whose `.js/` is the home are left out, since only
+    stock is under the home."""
+    user = user_home().resolve(strict=False)
+    homes = _home_layers()
+    found = []
+    for directory in (current, *current.parents):
+        if directory == user:
+            break
+        if directory in homes or (directory / ".js").resolve(strict=False) in homes:
+            continue
+        found.append(directory)
+    return tuple(found)
+
+
+def _marker_in(directory: Path) -> Path | None:
+    return next((path for path in (directory / ISOLATE_MARKER, directory / ".js" / ISOLATE_MARKER)
+                 if path.exists() and not _tracked(path)), None)
+
+
+def tracked_markers(cwd: Path | None = None) -> tuple[Path, ...]:
+    """The `.isolate` files around ``cwd`` that git tracks, which isolation ignores."""
+    current = (cwd or Path.cwd()).resolve(strict=False)
+    return tuple(path for directory in _scanned(current)
+                 for path in (directory / ISOLATE_MARKER, directory / ".js" / ISOLATE_MARKER)
+                 if path.exists() and _tracked(path))
+
+
+def isolation(cwd: Path | None = None) -> Isolation | None:
+    """The border a run started in ``cwd`` (default: here) is under, or None.
+    The nearest directory at or above ``cwd`` (up to, not including, `$HOME`)
+    with an untracked `.isolate` in it or in its `.js/` sets it. Inside a
+    repository a marker at or below the root borders there, and one above
+    the root borders at the root, since nothing above the root is read.
+    Outside a repository the marked directory is the root. --isolate borders
+    at the nearest existing project `.js/`, and --no-isolate ignores every
+    marker."""
+    if _ISOLATE is False:
+        return None
+    current = (cwd or Path.cwd()).resolve(strict=False)
+    root = _git_root(current)
+    scanned = _scanned(current)
+    if _ISOLATE:
+        inside = scanned if root is None else tuple(d for d in scanned if d.is_relative_to(root))
+        nearest = next((directory for directory in inside if (directory / ".js").is_dir()), None)
+        return None if nearest is None else Isolation(nearest, None)
+    for directory in scanned:
+        marker = _marker_in(directory)
+        if marker is None:
+            continue
+        if root is not None and not directory.is_relative_to(root):
+            return Isolation(root, marker)
+        return Isolation(directory, marker)
+    return None
+
+
+def uses_home(cwd: Path | None = None) -> bool:
+    """Whether a run started in ``cwd`` reads the home's setup: false under isolation."""
+    return isolation(cwd) is None
+
+
+def project_chain(cwd: Path | None = None) -> tuple[Path, ...]:
+    """Every directory from the project root down to ``cwd`` (default: here),
+    root first. Empty outside any repository and any border. Under isolation
+    it starts at the border directory."""
+    current = (cwd or Path.cwd()).resolve(strict=False)
+    found = isolation(current)
+    if found is not None:
+        return _chain_from(found.directory, current)
+    root = _git_root(current)
+    return () if root is None else _chain_from(root, current)
+
+
 def project_dirs(cwd: Path | None = None) -> tuple[Path, ...]:
     """Each project `.js/` from the root down to ``cwd``, lowest first, that
     exists. A `.js/` that is the home (or, under another profile, the
     operator's `~/.js`) is the global layer, never a project one."""
-    skip = {home().resolve(strict=False), default_home().resolve(strict=False)}
+    skip = _home_layers()
     found = []
     for directory in project_chain(cwd):
         candidate = directory / ".js"
@@ -161,13 +293,15 @@ def defaults_dir() -> Path:
 def layers(cwd: Path | None = None) -> tuple[Path, ...]:
     """Setup roots, lowest priority first: stock, home, then each project
     `.js/` from the root down to ``cwd``. Project files use their existing scopes."""
-    return tuple(dict.fromkeys((defaults_dir(), home(), *project_dirs(cwd))))
+    homes = (home(),) if uses_home(cwd) else ()
+    return tuple(dict.fromkeys((defaults_dir(), *homes, *project_dirs(cwd))))
 
 
 def agent_roots(cwd: Path | None = None) -> tuple[Path, ...]:
     """Each layer's agents directory, lowest first: stock, home, then each
     project `.js/agents` from the root down to ``cwd``."""
-    return (defaults_dir() / "agents", global_agents_dir(),
+    homes = (global_agents_dir(),) if uses_home(cwd) else ()
+    return (defaults_dir() / "agents", *homes,
             *(directory / "agents" for directory in project_dirs(cwd)))
 
 
@@ -200,7 +334,9 @@ def _file_layers(rel: str | Path) -> tuple[Path, ...]:
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"setup path must be relative: {rel}")
     roots = layers()
-    return roots if path.parts and path.parts[0] in _PROJECT_SCOPES else roots[:2]
+    if path.parts and path.parts[0] in _PROJECT_SCOPES:
+        return roots
+    return roots[:2] if uses_home() else roots[:1]
 
 
 def searched(rel: str | Path = "", roots: Iterable[Path] | None = None) -> str:
@@ -223,6 +359,13 @@ def names(rel_dir: str | Path) -> list[str]:
 
 def global_config_file() -> Path:
     return home() / "jsrc"
+
+
+def save_config_file(cwd: Path | None = None) -> Path:
+    """The jsrc `/save` writes: the home's, or under isolation the border
+    layer's, the topmost layer the run reads."""
+    found = isolation(cwd)
+    return global_config_file() if found is None else found.layer / "jsrc"
 
 
 def legacy_global_config_file() -> Path:

@@ -367,7 +367,7 @@ def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[
         name = raw.strip()
         if not name:
             continue
-        if not sources.ignore_global_config:
+        if not sources.ignore_global_config and _paths.uses_home(project_dir):
             paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
         if not sources.ignore_local_config:
             paths.extend(directory / f"jsrc.{name}" for directory in _paths.project_dirs(project_dir))
@@ -402,7 +402,7 @@ def jsrc_paths(project_dir: Path, sources: InvocationSources = InvocationSources
     jsrc, then each project `.js/` from the root down to ``project_dir``,
     its jsrc then its jsrc.local (`paths.project_dirs`)."""
     paths: list[Path] = []
-    if not sources.ignore_global_config:
+    if not sources.ignore_global_config and _paths.uses_home(project_dir):
         paths.append(_paths.global_config_file())
     if not sources.ignore_local_config:
         for directory in _paths.project_dirs(project_dir):
@@ -429,8 +429,9 @@ def instruction_files_for(project_dir: Path, setup_names: list[str], project_nam
     its `.js/` reads ``setup_names`` too, and the directory itself reads each
     ``project_names`` entry (PROJECT_INSTRUCTION_FILES), the first present
     name of the entry. Nothing above the root is read, and outside a
-    repository only the home is."""
-    found = [_paths.home() / name for name in setup_names]
+    repository only the home is. Under isolation to a project `.js/` the
+    home reads nothing."""
+    found = [_paths.home() / name for name in setup_names] if _paths.uses_home(project_dir) else []
     setup = {directory.parent: directory for directory in _paths.project_dirs(project_dir)}
     choices = [_instruction_choices(entry) for entry in project_names]
     for directory in _paths.project_chain(project_dir):

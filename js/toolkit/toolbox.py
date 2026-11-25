@@ -173,8 +173,8 @@ del __js_load
 def toolbox_dirs(cwd: Path) -> tuple[Path, ...]:
     """The global toolbox, then each project `.js/toolbox` from the root down
     to ``cwd``. A nearer one wins on a name clash, mirroring agent precedence."""
-    return (_paths.global_toolbox_dir(),
-            *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
+    homes = (_paths.global_toolbox_dir(),) if _paths.uses_home(Path(cwd)) else ()
+    return (*homes, *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
 
 
 def project_toolbox_dir(cwd: Path) -> Path | None:
