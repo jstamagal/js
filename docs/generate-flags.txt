@@ -1,249 +1,62 @@
-# js generate — candidate flags, one per line. Headings name verified support.
-# /v1 = OpenAI-style image API. Native ComfyUI uses /prompt. sd.cpp also has native and /sdapi routes.
-# Other engines may offer equivalents. Sources: generate-media.md, “Flag inventory sources”.
+# js generate — shortlist. One proposed flag per line.
+# js generate --t2i -p 'A squirrel with big nuts'    -> ./out.png
+# js generate --stt --audio-file interview.wav      -> transcript on stdout
 
-# OpenAI Images /v1 + sd.cpp /v1
---t2i                            Generate an image from text.
---i2i                            Edit a supplied image with a prompt.
---inpaint                        Edit the masked part of an image.
--p, --prompt TEXT                Text sent to the image model.
---image FILE                     Source image for an edit.
---ref FILE                       Additional ordered images for a multi-image edit.
---mask FILE                      Mask file for an edit.
--n, --count N                    Request multiple images in one call.
---size WxH                       Output dimensions, e.g. 1024x1024.
---format NAME                    Choose the output image format.
---variation                      Convenience over edits: supply the image and a variation prompt. No dedicated current route.
---compression N                  Set lossy output compression.
+# Model, prompt and output
+-m, --model ID               Override JS_IMAGE_MODEL, JS_VIDEO_MODEL, JS_MUSIC_MODEL, JS_SFX_MODEL, JS_TTS_MODEL or JS_STT_MODEL for this run.
+-u, --url SPEC               Use the existing js endpoint override.
+-p, --prompt TEXT            Supply a prompt, or the exact script for TTS. Use - to read stdin.
+--prompt-file FILE           Read the prompt or script verbatim from a file.
+-o, --output PATH            Save the result here. Use - for one artifact on stdout.
+--format NAME                Request the output encoding from the endpoint.
+--force                      Replace an existing output file.
+--param-json KEY=JSON        Send an extra endpoint field as a typed value; repeatable.
+--dry-run                    Show the resolved model, request and output path before making calls.
+--enhance                    Have a writing model refine the prompt using a guide for the target model and operation. Preserve quoted text, lyrics and spoken scripts.
 
-# sd.cpp + ComfyUI — native request or workflow controls
---strength N                     Image-to-image denoising strength; same underlying control as --denoise.
---negative-prompt TEXT           Text to discourage during sampling.
--s, --seed N                     Set the sampling seed.
---width PX                       Canvas width in pixels.
---height PX                      Canvas height in pixels.
---steps N                        Number of diffusion steps.
---guidance-scale N               Classifier-free guidance strength.
---sampler NAME                   Select the sampling method.
---scheduler NAME                 Select the noise schedule.
---denoise N                      Set image-to-image denoising strength.
---clip-skip N                    Select an earlier CLIP layer; each engine numbers layers differently.
---checkpoint FILE                Select a checkpoint on the server or in the workflow.
---vae FILE                       Select a VAE.
---text-encoder FILE              Select a text encoder.
---lora NAME=WEIGHT               Apply a weighted LoRA.
---control-image FILE             Guide diffusion with a control image.
---control-strength N             Set control image influence.
---batch-size N                   Number of images in a local batch.
---vae-tiling                     Encode or decode the image in tiles.
---tile-size PX                   Set VAE tile dimensions.
---mask-invert                    Reverse which pixels the mask selects.
---frames N                       Set video frame count on a video model.
---fps RATE                       Set sequence frame rate or fps conditioning, depending on model.
+# Image — OpenAI-style generation and edits
+--t2i                        Generate an image from text.
+--i2i                        Edit an image using a prompt.
+--image FILE                 Supply the source image for an edit.
+--ref PATH_OR_URL            Add an ordered reference image for an edit or reference-guided video; repeatable.
+--mask FILE                  Specify the editable area on a masked edit.
+-n, --count N                Request multiple images in one call.
+--size WxH                   Request exact pixel dimensions.
+--quality LEVEL              Request a quality tier (GPT Image, Grok Imagine).
+--background MODE            Request transparent, opaque or auto (GPT Image).
+--markup FILE                Attach an annotated overlay for a supported GPT Image edit.
+--aspect-ratio W:H           Request proportions such as 16:9 (Grok, Google).
+--resolution NAME            Request a tier such as 2K for a still or 720p for a clip.
 
-# sd.cpp — native fields and sdapi controls
---ref-name NAME=FILE             Bind an image to an ID for use inside a prompt.
---sigmas LIST                    Supply an explicit noise schedule.
---eta N                          Set sampler stochasticity.
---sampling-shift N               Set flow timestep shift.
---distilled-guidance N           Set distilled guidance.
---ip-adapter FILE                Select an IP-Adapter model component.
---ip-adapter-weight N            Set IP-Adapter image strength.
---upscaler MODEL                 Choose the upscaler for a high-resolution generation pass.
---highres-scale FACTOR           Scale up between diffusion passes.
---highres-steps N                Steps in the second diffusion pass.
---highres-denoise N              Denoising strength for that pass.
---reference-video FILE           Supply reference video frames to a compatible recipe.
---reference-audio FILE           Supply a reference audio clip to a compatible recipe.
---preview-every N                Request a sampling preview every N steps.
---embed-metadata                 Embed generation details in an image.
---list-samplers                  List the running server's samplers.
---status ID                      Read a native job's status by ID.
---cancel ID                      Cancel a native job by ID.
+# Video — Grok Imagine
+--t2v                        Generate a clip from text.
+--i2v                        Animate a starting image.
+--r2v                        Use reference images to guide a shot.
+--v2v                        Edit an existing clip.
+--extend-video               Continue a clip from its ending.
+--video FILE                 Supply the source clip for editing or extension.
+--first-frame FILE           Pin the opening frame.
+--last-frame FILE            Pin the closing frame on a compatible model.
+--keyframe SEC=FILE          Pin an image inside the clip on a compatible model; repeatable.
+--duration SEC               Request a clip, music cue or sound effect of this length.
+--audio                      Request a generated soundtrack with the video.
+--no-audio                   Request silent video.
 
-# sd.cpp CLI + ComfyUI — standalone upscale, outside the OpenAI Images routes
---upscale                        Enlarge an existing image with sd.cpp's UPSCALE mode or Comfy's ImageUpscaleWithModel.
+# Speech — TTS and STT
+--tts                        Speak the supplied text.
+--stt                        Transcribe the supplied recording (Mistral Voxtral).
+--audio-file FILE            Supply the source recording for transcription.
+--voice NAME                 Choose the speaking voice.
+--list-voices                List voices when the selected endpoint exposes them (e.g. Grok TTS).
+--instructions TEXT          Give delivery directions separately from the words to speak.
+--language CODE              Specify the spoken language or give the transcriber a language hint.
+--timestamps                 Include segment times in the transcript (Voxtral).
+--diarize                    Include speaker labels and segment times (Voxtral).
 
-# ComfyUI — workflow nodes
---scale FACTOR                   Resize by a factor with ImageScaleBy.
---outpaint                       Pad the image and pass the resulting mask to inpainting.
---outpaint-margin L,T,R,B        Set left, top, right and bottom padding for outpainting.
---mask-grow PX                   Expand or shrink a mask with GrowMask.
---lora-model-weight N            Set the diffusion model's LoRA strength.
---lora-text-weight N             Set the text encoder's LoRA strength.
---control-start FRACTION         Begin ControlNet at this fraction of sampling.
---control-end FRACTION           End ControlNet at this fraction of sampling.
---motion-bucket N                Set SVD image-to-video motion bucket ID.
---tile-overlap PX                Specify tiled VAE overlap in pixels.
---keep-region MASK               Use ImageCompositeMasked to restore selected source pixels.
---prompt-schedule FILE           Apply conditioning over a timestep range in the graph.
---workflow FILE                  Submit an API-format workflow graph.
-
-# ComfyUI — optional IPAdapter Plus nodes
---style-ref FILE                 Condition on a style image.
---composition-ref FILE           Condition on a composition image.
---reference-weight NAME=N        Set style or composition weight in the IPAdapter node.
-
-# GPT Image — model-specific
--m, --model ID                   Select the model in the OpenAI request; sd.cpp /v1 uses its loaded model.
---background MODE                Request transparent, opaque or auto where supported.
---complexity LEVEL               Select rendering complexity on compatible GPT Image models.
---input-fidelity LEVEL           Select reference-image fidelity on supported edit models.
---markup FILE                    Attach a transparent markup overlay to guide an edit.
-
-# GPT Image + Grok Imagine
---quality LEVEL                  Choose rendering quality; accepted values depend on the model.
-
-# Grok Imagine + Google Gemini image generation
---aspect-ratio W:H               Request proportions such as 16:9.
---resolution NAME                Request an output tier such as 2K.
-
-# Grok video + sd.cpp video
---t2v                            Generate video from a text prompt.
---i2v                            Animate an input still.
---first-frame FILE               Anchor the opening of the clip.
---last-frame FILE                Anchor the end of the clip on compatible models.
-
-# Grok Imagine — image and video
---r2v                            Guide a clip with subject reference images.
---subject-ref FILE               Supply an ordered subject reference; Grok binds it by index.
---v2v                            Edit a clip through /v1/videos/edits.
---video FILE                     Supply the clip for editing or extension.
---extend-video                   Continue the action from a clip's final frame.
---keyframe TIME=FILE             Pin an image at a timestamp inside a clip on Grok video 1.5.
---duration SEC                   Set the length of a generated clip in seconds.
---audio                          Request a generated soundtrack on a compatible video model.
---no-audio                       Set generate_audio to false.
---asset-id ID                    Reuse a reference by its Files API file ID.
---reference-url URL              Pass a reference by HTTPS URL.
---poll-interval SEC              Time between status checks in the xAI SDK.
---timeout SEC                    Bound how long the xAI client polls a video job.
-
-# Speech — OpenAI
---tts                            Synthesize speech from text.
---voice NAME                     Select a supported voice.
---instructions TEXT              Direct delivery on an instruction-capable speech model.
---speed FACTOR                   Set speech rate.
-
-# Audio — ElevenLabs unless otherwise named
---music                          Compose a piece of music.
---sfx                            Generate a sound effect from text.
---speech-to-speech               Convert a recorded performance to another voice.
---loop                           Generate an effect that loops smoothly.
---prompt-influence N             Set how closely the effect follows its description.
---instrumental                   Request an instrumental piece.
---composition-plan FILE          Supply structured musical sections.
---respect-section-durations      Enforce plan timings on Music v1; v2 already enforces them.
---language CODE                  Set a language code for speech synthesis.
---stability N                    Set voice stability.
---similarity N                   Set voice similarity boost.
---speaker-boost                  Enable speaker boost on compatible voices.
---pronunciation-dictionary FILE  Apply pronunciation dictionary locators.
---normalize-text MODE            Set text-normalization behavior.
---previous-text TEXT             Supply preceding dialogue for continuity.
---next-text TEXT                 Supply following dialogue for continuity.
---previous-request-id ID         Refer to a previous speech request.
---next-request-id ID             Refer to a following speech request.
---alignment FILE                 Save character alignment from timed synthesis.
---stems DIR                      Separate a finished recording into stems in a second operation.
-
-# Music — ACE-Step and MusicGen
---lyrics TEXT                    Supply lyrics to ACE-Step.
---bpm N                          Request a tempo in ACE-Step.
---key NAME                       Request a musical key in ACE-Step.
---time-signature METER           Set the meter in ACE-Step.
---melody-ref FILE                Condition a compatible MusicGen checkpoint on a melody.
-
-# Prompt enhancement and direction — model-specific
---enhance                        Run Wan prompt extension or the FLUX.2 prompt upsampler.
---enhance-model ID               Select Wan's prompt extension model.
---enhance-language CODE          Set Wan's prompt extension output language.
---enhance-vision                 Let Wan's prompt extender see the input still.
---enhance-only                   Generate motion prompts for review before video rendering (fal-media-pipeline).
---provider-optimizer MODE        Toggle Hailuo's server-side prompt optimization.
---camera MOVE                    Insert a documented Hailuo director token into the prompt.
---lock-camera                    Insert Hailuo's static-shot prompt token.
-
-# CLI and file handling — existing tool behavior, implemented by the client
--u, --url URL                    Select a configured endpoint (existing js option).
---home DIR                       Select the js profile (existing js option).
---preset NAME                    Load a js settings preset.
---extra KEY=VALUE                Override a registered js setting.
---prompt-file FILE               Read prompt text from a file (OpenAI image CLI).
---param-json KEY=JSON            Merge extra request parameters as JSON (ElevenLabs CLI).
--o, --output PATH                Save the generated file to the chosen path (OpenAI image CLI).
---output-dir DIR                 Write generated files to a directory (OpenAI image CLI).
---force                          Replace an existing output (OpenAI image CLI).
---dry-run                        Print the request and output path offline (OpenAI image CLI).
---batch FILE                     Read JSONL generation jobs (OpenAI image CLI).
---concurrency N                  Limit parallel jobs in that batch (OpenAI image CLI).
---json                           Print structured results (Comfy CLI).
---json-stream                    Stream events as JSON Lines (existing js convention).
--q, --quiet                      Suppress ordinary output (existing js convention).
---list-models                    List the sd.cpp server's configured model.
---list-voices                    List voices available to edge-tts.
---async                          Submit a graph and immediately return its ID (Comfy CLI cloud).
---resume ID                      Wait on an existing Comfy Cloud prompt ID.
---download-only ID               Fetch outputs from an existing Comfy Cloud job.
---input NAME=VALUE               Bind a named input in a Comfy CLI workflow via --set.
---schema                         Display a supported model's advertised parameters (Comfy CLI generate).
---list-workflows                 Enumerate Higgsfield workflows.
---estimate                       Estimate cost of supported Higgsfield workflows.
---play                           Play synthesized speech locally (Piper with ffplay).
---audio-file FILE                Provide source audio for Wan speech-to-video.
---audio-to-video                 Drive Wan S2V from speech and a still.
---voice-ref FILE                 Condition Wan S2V's optional TTS on a reference recording and its transcript.
---offload MODE                   Offload Wan's local model to CPU.
---sentence-silence SEC           Set the pause between sentences in Piper.
---volume VALUE                   Set the playback volume multiplier in Piper synthesis.
---pitch VALUE                    Set voice pitch in edge-tts.
---subtitles FILE                 Write speech timing to a subtitle file (edge-tts).
-
-# Local postprocessing — FFmpeg or ImageMagick
---number-from N                  Start an FFmpeg image sequence at the requested number.
---crop WxH+X+Y                   Extract a rectangle with FFmpeg crop.
---pad L,T,R,B                    Add borders with FFmpeg pad.
---start-time SEC                 Seek to a time in the source with FFmpeg -ss.
---end-time SEC                   Stop reading or writing at a timestamp with FFmpeg -to.
---fit MODE                       Fit an image into a bounding box with ImageMagick -resize.
---crop-anchor POSITION           Set ImageMagick crop placement with -gravity.
---background-color COLOR         Set the ImageMagick background used for padding or flattening.
---strip-metadata                 Strip profiles and comments with ImageMagick -strip.
---color-space NAME               Transform to a named color space with ImageMagick -colorspace.
---icc-profile FILE               Apply an ICC profile with ImageMagick -profile.
---alpha-mode MODE                Choose ImageMagick alpha handling with -alpha.
---transcode FORMAT               Encode a delivery copy with FFmpeg.
---codec NAME                     Select the FFmpeg encoder.
---sample-rate HZ                 Set audio sample rate with FFmpeg -ar.
---channels N                     Set audio channel count with FFmpeg -ac.
---bitrate RATE                   Set the FFmpeg encoder bitrate.
---pixel-format NAME              Set FFmpeg pixel format.
---crf N                          Set constant rate factor on an encoder supporting CRF.
---encoder-preset NAME            Select an encoder-specific speed/compression preset.
---output-fps RATE                Convert delivery frame rate with the FFmpeg fps filter.
---frames-out DIR                 Export numbered stills with FFmpeg's image2 muxer.
---burn-captions                  Render subtitle text onto video with FFmpeg subtitles.
---normalize-loudness LUFS        Set the integrated loudness target with loudnorm.
---true-peak DBTP                 Set loudnorm's true-peak target.
---trim-silence                   Trim silent edges with silenceremove.
---fade-in SEC                    Fade audio or video in with afade or fade.
---fade-out SEC                   Fade audio or video out with afade or fade.
---crossfade SEC                  Crossfade audio with acrossfade.
---contact-sheet FILE             Tile frame thumbnails into a contact sheet.
---sheet-columns N                Set the tile filter's layout width.
---waveform-out FILE              Render an audio waveform image with showwavespic.
---interpolate FACTOR             Interpolate frames with minterpolate.
---stabilize                      Stabilize with vidstabdetect and vidstabtransform.
---transition NAME                Apply an FFmpeg xfade transition between clips.
---duck-under FILE                Use dialogue as the sidechain for sidechaincompress.
---fit-to-duration SEC            Time-stretch audio using atempo and the source/target length ratio.
---loop-preview N                 Repeat video frames to audition a seam.
-
-# Existing workflows — named tools
---sweep PARAM=VALUES             Render a parameter grid with AUTOMATIC1111's X/Y/Z plot script.
---pick INDEX                     Select which generated image to animate (fal-media-pipeline).
---fresh                          Regenerate a saved motion prompt (fal-media-pipeline).
---at SEC                         Anchor a sketched video edit at a timestamp (Higgsfield draw_to_video).
---reframe W:H                    Recompose a clip using Higgsfield's reframe workflow.
---dub LANGUAGE                   Translate a spoken track using Higgsfield's dubbing workflow.
---assemble FILE                  Combine ordered narration/visual blocks (Higgsfield explainer_video).
+# Music and effects — ElevenLabs fields; Sono routing still to verify
+--music                      Generate a music track from a description.
+--lyrics TEXT                 Supply exact words to sing; js places them in an ElevenLabs composition plan.
+--instrumental               Request a track without vocals.
+--composition-plan FILE      Supply a complete song plan with lyrics, sections and timing.
+--sfx                        Generate a sound effect from text.
+--loop                       Request a seamless sound-effect loop.
