@@ -179,12 +179,12 @@ def toolbox_dirs(cwd: Path) -> tuple[Path, ...]:
 
 def project_toolbox_dir(cwd: Path) -> Path | None:
     """Where a project-scope save goes: the nearest project `.js/toolbox`,
-    else the project root's. None outside a repository."""
+    else the first directory of the active project chain."""
     found = _paths.project_dirs(Path(cwd))
     if found:
         return found[-1] / "toolbox"
-    root = _paths.project_root(Path(cwd))
-    return None if root is None else root / ".js" / "toolbox"
+    chain = _paths.project_chain(Path(cwd))
+    return chain[0] / ".js" / "toolbox" if chain else None
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
