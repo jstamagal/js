@@ -105,7 +105,8 @@ within `ACP_STEER_WAIT` seconds (2) stops the turn; 0 stops it at the cancel.
 Each turn runs in a fresh
 worker in the session directory. Conversation history and workspace files
 carry across prompts. In-memory shell, terminal and kernel handles last for
-the turn that opened them. The ACP input supports text and text resources.
+the turn that opened them. The ACP input supports text, images and text
+resources.
 
 ## Interactive REPL
 

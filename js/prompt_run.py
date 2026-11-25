@@ -93,7 +93,8 @@ class PromptClient:
 
     mcp_servers: dict
     approve: events.Approve | None
-    steer: Callable[[], dict | None] | None = None
+    # Called with the turn's config at each tool boundary.
+    steer: Callable[[Config], dict | None] | None = None
 
 
 prompt_client: ContextVar[PromptClient | None] = ContextVar("prompt_client", default=None)
@@ -381,7 +382,7 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
     if inputs.client is not None:
         turn_kwargs["approve"] = inputs.client.approve
         if inputs.client.steer is not None:
-            turn_kwargs["steer"] = inputs.client.steer
+            turn_kwargs["steer"] = lambda: inputs.client.steer(prepared.cfg)
     if inputs.maxout is not None:
         turn_kwargs["max_output_override"] = inputs.maxout
     prepared.started_at = time.time()

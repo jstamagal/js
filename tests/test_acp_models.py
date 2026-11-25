@@ -164,7 +164,7 @@ def test_a_prompt_after_a_cancel_steers_the_running_turn(cached_models, monkeypa
         while not steers.waiting:
             await asyncio.sleep(0.01)
             await emit({"type": "text", "delta": "working "})
-        turns.append(list(steers.waiting))
+        turns.append([steer["steer"] for steer in steers.waiting])
         steers._taken(1)
         await emit({"type": "text", "delta": "steered"})
 
@@ -213,4 +213,26 @@ def test_a_cancel_no_prompt_follows_ends_the_turn(cached_models, monkeypatch):
         assert ended
 
     asyncio.run(scenario())
+
+
+def test_an_image_in_a_prompt_is_a_file_the_turn_attaches(cached_models, monkeypatch):
+    from acp.schema import ImageContentBlock
+
+    seen = []
+
+    async def run_turn(*, text, files, **kwargs):
+        seen.append((text, [open(path, "rb").read() for path in files]))
+
+    async def scenario():
+        monkeypatch.setattr(acp_turn, "run_turn", run_turn)
+        agent = acp_agent.Agent([])
+        agent.on_connect(SimpleNamespace())
+        assert (await agent.initialize(1)).agent_capabilities.prompt_capabilities.image
+        session_id = (await agent.new_session(str(cached_models))).session_id
+        image = ImageContentBlock(type="image", data="aW1hZ2U=", mime_type="image/png")
+        await agent.prompt(session_id, [TextContentBlock(text="look"), image])
+        await agent.prompt(session_id, [image])
+
+    asyncio.run(scenario())
+    assert seen == [("look", [b"image"]), ("", [b"image"])]
 

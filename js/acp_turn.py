@@ -28,18 +28,26 @@ class TurnInput:
     took; ``waiting`` holds the ones no worker has taken."""
 
     def __init__(self) -> None:
-        self.waiting: list[str] = []
+        self.waiting: list[dict] = []
         self._stdin = None
 
-    async def steer(self, text: str) -> None:
-        self.waiting.append(text)
+    async def steer(self, text: str, files: list[str] | None = None) -> None:
+        """Say ``text`` to the turn, with ``files`` attached."""
+        steer = {"steer": text, "files": list(files or [])}
+        self.waiting.append(steer)
         if self._stdin is not None:
-            await _write_input(self._stdin, _json_line({"steer": text}))
+            await _write_input(self._stdin, _json_line(steer))
+
+    def take_waiting(self) -> tuple[str, list[str]]:
+        """The steers no worker took, as the text and files of one prompt."""
+        waiting, self.waiting = self.waiting, []
+        return ("\n\n".join(steer["steer"] for steer in waiting if steer["steer"]),
+                [path for steer in waiting for path in steer["files"]])
 
     async def _attach(self, stdin) -> None:
         self._stdin = stdin
-        for text in self.waiting:
-            await _write_input(stdin, _json_line({"steer": text}))
+        for steer in self.waiting:
+            await _write_input(stdin, _json_line(steer))
 
     def _taken(self, count: int) -> None:
         del self.waiting[:count]
@@ -98,14 +106,17 @@ async def run_turn(
     emit: Emit,
     approve: Approve | None = None,
     steers: TurnInput | None = None,
+    files: list[str] | None = None,
 ) -> None:
     """Emit js JSON-stream records for a saved session. Cancel the task to stop.
-    ``steers`` reaches the worker for as long as it runs."""
+    ``files`` are attached to the prompt. ``steers`` reaches the worker for as
+    long as it runs."""
     payload = _json_line({"prompt": text, "mcp_servers": mcp_servers,
                           "approval": approve is not None})
     launch = asyncio.create_task(asyncio.create_subprocess_exec(
         sys.executable, "-I", "-m", "js.acp_turn",
-        *options, "--session=" + session_id, "--json-stream", "-p", "-",
+        *options, *(f"--file={path}" for path in files or ()),
+        "--session=" + session_id, "--json-stream", "-p", "-",
         cwd=cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=16 * 1024 * 1024,
     ))
@@ -189,7 +200,7 @@ def _input_lines(fd: int):
 
 
 def _worker() -> int:
-    from . import cli, headless, prompt_run
+    from . import attach, cli, headless, prompt_run
 
     decisions = _input_lines(os.dup(0))
     with open(os.devnull, "rb") as null:
@@ -200,13 +211,13 @@ def _worker() -> int:
         # The server's lines after the request: a steer at any time, an
         # approval decision after each approval asked for.
         refusals: queue.Queue[dict | None] = queue.Queue()
-        steers: list[str] = []
+        steers: list[dict] = []
 
         def read_input() -> None:
             for line in decisions:
                 message = json.loads(line)
                 if "steer" in message:
-                    steers.append(message["steer"])
+                    steers.append(message)
                 else:
                     refusals.put(message)
             refusals.put(None)
@@ -227,14 +238,18 @@ def _worker() -> int:
         async def approve(call: dict) -> str | None:
             return await asyncio.to_thread(request_approval, call)
 
-        def take_steer() -> dict | None:
+        def take_steer(cfg) -> dict | None:
             taken = [steers.pop(0) for _ in range(len(steers))]
             if not taken:
                 return None
             with lock:
                 if (stream := headless.active) is not None:
                     stream.emit("steered", count=len(taken))
-            return {"role": "user", "content": "\n\n".join(taken)}
+            text = "\n\n".join(steer["steer"] for steer in taken if steer["steer"])
+            files = [path for steer in taken for path in steer.get("files", ())]
+            if not files:
+                return {"role": "user", "content": text}
+            return attach.build_user_message(text, files, cfg, missing_ok=True)
 
         client = prompt_run.PromptClient(request["mcp_servers"], approve if request["approval"] else None,
                                          take_steer)

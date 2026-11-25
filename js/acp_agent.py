@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import mimetypes
 import os
 import re
 import signal
 import sys
+from base64 import b64decode
 from contextlib import ExitStack, contextmanager, redirect_stdout, suppress
 from dataclasses import dataclass
 from hashlib import sha256
@@ -79,11 +81,23 @@ def _servers(definitions: list) -> dict:
     return servers
 
 
-def _prompt_text(blocks: list) -> str:
-    parts = []
+def _prompt_parts(blocks: list, marker: Path) -> tuple[str, list[str]]:
+    """The text of a prompt and the files it attaches. An image is written
+    under the session's ``marker`` directory, where the worker reads it."""
+    parts, files = [], []
     for block in blocks:
         if isinstance(block, acp.TextContentBlock):
             parts.append(block.text)
+        elif isinstance(block, acp.ImageContentBlock):
+            try:
+                data = b64decode(block.data, validate=True)
+            except ValueError as exc:
+                raise RequestError.invalid_params({"message": "Image data is not base64"}) from exc
+            suffix = mimetypes.guess_extension(block.mime_type or "") or ".png"
+            path = marker / "attachments" / f"{uuid4().hex}{suffix}"
+            path.parent.mkdir(exist_ok=True)
+            atomic_write(path, data)
+            files.append(str(path))
         elif isinstance(block, acp.EmbeddedResourceContentBlock) and isinstance(
             block.resource, acp.TextResourceContents
         ):
@@ -92,9 +106,9 @@ def _prompt_text(blocks: list) -> str:
             parts.append(f"Resource {block.title or block.name} ({block.uri})")
         else:
             raise RequestError.invalid_params({"message": f"Unsupported prompt content: {block.type}"})
-    if not any(part.strip() for part in parts):
-        raise RequestError.invalid_params({"message": "Prompt must contain text or a resource reference"})
-    return "\n\n".join(parts)
+    if not files and not any(part.strip() for part in parts):
+        raise RequestError.invalid_params({"message": "Prompt must contain text, an image or a resource reference"})
+    return "\n\n".join(parts), files
 
 
 def _cwd(value: str) -> Path:
@@ -284,7 +298,7 @@ class Agent:
             agent_capabilities=acp.AgentCapabilities(
                 mcp_capabilities=acp.McpCapabilities(http=True),
                 session_capabilities=acp.SessionCapabilities(resume=acp.SessionResumeCapabilities()),
-                prompt_capabilities=acp.PromptCapabilities(embedded_context=True),
+                prompt_capabilities=acp.PromptCapabilities(embedded_context=True, image=True),
             ),
         )
 
@@ -337,7 +351,8 @@ class Agent:
         session = self.sessions.get(session_id)
         if session is None:
             raise RequestError.invalid_params({"message": "Unknown session"})
-        text = _prompt_text(prompt)
+        marker = _session_marker(session.cwd, session_id)
+        text, files = _prompt_parts(prompt, marker)
         if session.turn is not None and not session.turn.done():
             if session.stop is None:
                 raise RequestError.invalid_request({"message": "A prompt is already running for this session"})
@@ -345,19 +360,18 @@ class Agent:
             # turn goes on and takes the prompt at its next tool boundary.
             session.stop.cancel()
             session.stop = None
-            await session.steers.steer(text)
+            await session.steers.steer(text, files)
             await session.updates.resume()
         else:
             if session.updates is not None:
                 # What the last turn said after its prompt request was answered.
                 await session.updates.resume()
-            marker = _session_marker(session.cwd, session_id)
             held = ExitStack()
             held.enter_context(_session_lock(marker))
             session.cancelled = False
             session.updates = TurnUpdates(self.connection, session_id, session.cwd)
             session.steers = TurnInput()
-            session.turn = asyncio.create_task(self._turns(session, session_id, text, marker))
+            session.turn = asyncio.create_task(self._turns(session, session_id, text, files, marker))
 
             def ended(turn: asyncio.Task) -> None:
                 held.close()
@@ -367,8 +381,9 @@ class Agent:
             session.turn.add_done_callback(ended)
         return await self._follow(session)
 
-    async def _turns(self, session: Session, session_id: str, text: str, marker: Path) -> None:
-        """The turn of ``text``, then one more for each steer no worker took:
+    async def _turns(self, session: Session, session_id: str, text: str, files: list[str],
+                     marker: Path) -> None:
+        """The turn of ``text`` and ``files``, then one more for each steer no worker took:
         it came after the last tool boundary."""
         from .acp_turn import run_turn
 
@@ -381,12 +396,11 @@ class Agent:
                 await run_turn(
                     cwd=session.cwd, session_id=session_id, text=text, options=options,
                     mcp_servers=session.mcp_servers, emit=updates.emit, approve=updates.approve,
-                    steers=steers,
+                    steers=steers, files=files,
                 )
                 if not steers.waiting:
                     return
-                text = "\n\n".join(steers.waiting)
-                steers.waiting.clear()
+                text, files = steers.take_waiting()
         except asyncio.CancelledError:
             updates.held = None
             with suppress(Exception):
