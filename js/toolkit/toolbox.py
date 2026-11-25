@@ -173,18 +173,18 @@ del __js_load
 def toolbox_dirs(cwd: Path) -> tuple[Path, ...]:
     """The global toolbox, then each project `.js/toolbox` from the root down
     to ``cwd``. A nearer one wins on a name clash, mirroring agent precedence."""
-    return (_paths.global_toolbox_dir(),
-            *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
+    homes = (_paths.global_toolbox_dir(),) if _paths.uses_home(Path(cwd)) else ()
+    return (*homes, *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
 
 
 def project_toolbox_dir(cwd: Path) -> Path | None:
     """Where a project-scope save goes: the nearest project `.js/toolbox`,
-    else the project root's. None outside a repository."""
+    else the first directory of the active project chain."""
     found = _paths.project_dirs(Path(cwd))
     if found:
         return found[-1] / "toolbox"
-    root = _paths.project_root(Path(cwd))
-    return None if root is None else root / ".js" / "toolbox"
+    chain = _paths.project_chain(Path(cwd))
+    return chain[0] / ".js" / "toolbox" if chain else None
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
@@ -262,8 +262,8 @@ def _render_header(meta: dict) -> str:
 def discover(cwd: Path) -> dict[str, ToolRecord]:
     """Index every tool file. A file that will not parse is recorded, never raised."""
     found: dict[str, ToolRecord] = {}
-    for index, directory in enumerate(toolbox_dirs(cwd)):
-        scope = "project" if index else "global"
+    for directory in toolbox_dirs(cwd):
+        scope = "global" if directory == _paths.global_toolbox_dir() else "project"
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.py")):

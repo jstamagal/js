@@ -54,7 +54,7 @@ class ToolPolicyError(ValueError):
 
 
 def tools_config_path() -> Path:
-    return paths.find("tools.yaml") or paths.tools_config_file()
+    return paths.find("tools.yaml") or (paths.layers()[-1] / "tools.yaml")
 
 
 @dataclass(frozen=True)

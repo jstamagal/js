@@ -65,7 +65,11 @@ beside the prompt picks model, reasoning and tool surface, resolved against
 `tools.yaml` noun:modifier rules). The project chain (`js/paths.py`
 `project_root`/`project_dirs`): the root is the nearest `.git`, lifted out of a
 submodule; each `.js/` from the root down to the start directory is a layer
-over the home, nearest wins; no repository means home only. Config layers
+over the home, nearest wins; no repository means home only. An untracked `.isolate` marker in a directory
+or its `.js/` is a border (`paths.isolation`): nothing above it is read, the
+home included, and the nearest marker wins; outside a repository it is a
+root; `--isolate`/`--no-isolate` force or
+ignore it per run. Config layers
 `defaults/jsrc` < home `jsrc` < each chain `.js/jsrc` then `.js/jsrc.local` <
 presets < env < `--extra`; `set -KEY` falls back to the layer below. Sessions are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion

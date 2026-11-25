@@ -340,7 +340,7 @@ def discover_skills(
         if roots)
     layers = (
         ("builtin", (builtin_root,)),
-        ("global", (user_root, global_root)),
+        *((("global", (user_root, global_root)),) if paths.uses_home(project_dir) else ()),
         *project_layers,
     )
     selected: dict[str, _SkillRecord] = {}
