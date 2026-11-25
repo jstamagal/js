@@ -913,8 +913,9 @@ def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
     python_kernel.kernel(code=(
         "from pathlib import Path as FilePath\n"
         "from dataclasses import replace as copy_with\n"
+        "from os.path import basename\n"
         "def revised(record, path):\n"
-        "    return copy_with(record, name=FilePath(path).name)\n"
+        "    return copy_with(record, name=basename(FilePath(path)))\n"
     ), context=ctx)
 
     tbmod.toolbox(action="save", name="revised", context=ctx)
@@ -922,6 +923,7 @@ def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
     restored = {}
     body = (directory / "revised.py").read_text()
     assert "from pathlib import Path as FilePath" in body
+    assert "from os.path import basename" in body
     exec(body, restored)
 
     from dataclasses import dataclass
@@ -945,6 +947,21 @@ def test_dynamic_redefinition_never_saves_the_earlier_cell(ctx):
     assert report.startswith("ERROR") and "source" in report
     assert record.revision == 1
     assert archived_revisions(record) == []
+
+
+@needs_kernel
+def test_class_save_requires_the_source_of_the_live_class(ctx):
+    python_kernel.kernel(code="class Thing: v = 1", context=ctx)
+    tbmod.toolbox(action="save", name="Thing", context=ctx)
+    record = tbmod.discover(Path(ctx.cwd))["Thing"]
+    restored = {}
+    exec(record.path.read_text(), restored)
+    assert restored["Thing"].v == 1
+
+    python_kernel.kernel(code="exec('class Thing: v = 2')", context=ctx)
+    report = tbmod.toolbox(action="save", name="Thing", context=ctx)
+    assert report.startswith("ERROR") and "source" in report
+    assert tbmod.discover(Path(ctx.cwd))["Thing"].revision == 1
 
 
 @needs_kernel
