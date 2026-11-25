@@ -11,15 +11,13 @@ reference implementation, not as the target.
 |---|---|---|
 | Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. Layers, lowest first: built-in `defaults/skills/` (ships in the package), global `~/.agents/skills` then `~/.js/skills`, project `./.agents/skills` then `./.js/skills`. A project dir that resolves to a global dir (js run from `$HOME`) is skipped, so those skills keep the `global` source and are scanned once. Native wins within a layer; a higher layer shadows a lower one by name. |
 | Parse | frontmatter `name`, `description`; body kept on disk | Same, plus `tools`, `disable-model-invocation` and `paths`. `js/skills.py` indexes metadata only; bodies read at activation. |
-| **Disclose** | **name + description of every skill visible to the model at session start** | **Nothing.** Skills exist only inside the `tool_discovery` catalog. The model has to call `tool_discovery` with an empty query to learn a skill exists. There is no skills block in the system prompt or first turn. |
-| Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill` in the REPL lists every skill, user-only ones marked; `/skill <name> [request]` sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
+| Disclose | name + description of every skill visible to the model at session start | The `skill` tool's description ends with an `<available_skills>` block (name and description of each model-loadable skill, the chain's winner for each name), and its `name` argument is an enum of those names. Built per turn on the tool surface, so `SKILLS_DISABLED`, user-only skills and the agent's tool policy are already applied. No loadable skill: no block and no `skill` tool. |
+| Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; user: `/skill <name> [request]`. All three return one `<skill_content name="...">` block: body, `Skill directory: <dir>` with the relative-path rule, `<skill_resources>` listing up to 50 bundled files (not read), and the declared-tool outcome. `/skill` in the REPL lists every skill, user-only ones marked. |
 | Path-scoped | Claude Code `paths:` | The first `read`, `patch` or `write` of a matching file starts its result with one `<js-reminder>` offering the skill, once per session (see `docs/tools-reference.md`, `skill`). The skill stays in the catalog either way. |
 | User-only | `disable-model-invocation: true` | Honored. The skill is absent from the `tool_discovery` catalog, `skill` and `load=skill:<name>` refuse it, and `/skill <name>` still loads it. |
 | Disable | hide disabled skills from the catalog | `SKILLS_DISABLED` (a JSON list of names) leaves those skills out of discovery for the model and the user: absent from the `tool_discovery` catalog and path-scoped offers, refused by `skill`, `load=skill:<name>` and `/skill <name>`, not listed by `/skill`. `/skills` opens a picker that lists every skill with its source and description; space switches one on or off, enter sets the setting, `/save` keeps it. |
-| Protect | exempt skill content from compaction | Not checked in this pass. |
-
-The disclosure gap is why agents never load skills: a skill the model cannot see
-is a skill it will never ask for.
+| Validate | `name`: lowercase, digits, single hyphens, ≤64, matches its directory; `description` ≤1024 | A name breaking the character/length rule, or not matching its directory, loads with a warning (the client guide's lenient rule). A name js cannot use (spaces, slashes) skips the skill. Descriptions are cut at 1024. A missing description is still derived from the body. |
+| Protect | exempt skill content from compaction | Microcompaction never clears a tool result that starts with `<skill_content`. A summary compaction summarizes it like everything else. |
 
 ## Built-in skills
 
@@ -134,18 +132,18 @@ bodies are re-injected, each truncated to 5000 tokens, 25 000 tokens total.
 
 ## Your spec vs Claude Code
 
-| | Yours | Claude Code |
+| | js | Claude Code |
 |---|---|---|
-| Roots | `~/.js/skills`, `~/.agents/skills`, `./.js/skills`, `./.agents/skills` | `~/.claude/skills`, `.claude/skills` walking cwd→git root. No `.agents`. |
+| Roots | `~/.agents/skills`, `~/.js/skills`, then `.agents/skills` and `.js/skills` in each directory from the repository root down to the cwd | `~/.claude/skills`, `.claude/skills` walking cwd→git root. No `.agents`. |
 | Layout | `<root>/<name>/SKILL.md`, exact case | Same |
-| Where the catalog goes | system prompt, under a "skills available" heading | first-turn user message in `<system-reminder>`, plus rules in the tool description |
-| When | once per session | once per process; deltas for late-added skills; suppressed on resume |
-| Byte-stable | required | yes for the initial listing (sorted, deterministic), and it is never re-sent on compaction |
-| Over budget | names only + "use discovery for descriptions" | snapshot: proportional truncation, names-only last resort, bundled never degrade. **Shipped today:** drop descriptions of least-invoked skills first; every name always listed. |
-| Per-entry description cap | — | snapshot 250 chars; **shipped today 1 536** (`skillListingMaxDescChars`) |
-| Way over budget (names don't fit) | undecided | not handled; all names always listed |
-| Activation arg | — | free string (no enum) |
-| Activation payload | — | base-dir header + body, frontmatter stripped |
+| Where the catalog goes | `<available_skills>` at the end of the `skill` tool description | first-turn user message in `<system-reminder>`, plus rules in the tool description |
+| When | every turn, with the tool set | once per process; deltas for late-added skills; suppressed on resume |
+| Byte-stable | yes (sorted by name) | yes for the initial listing (sorted, deterministic), and it is never re-sent on compaction |
+| Over budget | no budget | snapshot: proportional truncation, names-only last resort, bundled never degrade. **Shipped today:** drop descriptions of least-invoked skills first; every name always listed. |
+| Per-entry description cap | 1024 (the spec's maximum) | snapshot 250 chars; **shipped today 1 536** (`skillListingMaxDescChars`) |
+| Way over budget (names don't fit) | no budget | not handled; all names always listed |
+| Activation arg | enum of the listed names | free string (no enum) |
+| Activation payload | `<skill_content>`: body, skill directory, bundled files | base-dir header + body, frontmatter stripped |
 
 Where Claude Code's is sharper:
 
@@ -161,75 +159,29 @@ Where Claude Code's is sharper:
 - **Rules live in the tool description**, which is cached with the tool set,
   not repeated in prose every turn.
 
-Where yours is sharper:
+Where js is sharper:
 
-- **System prompt placement** is what the spec calls simplest and most portable,
-  and it is cached as part of the system block on every provider. Claude Code's
+- **Tool-description placement** is one of the two placements the spec names,
+  and it is cached with the tool set on every provider. Claude Code's
   user-message injection is a workaround for its attachment pipeline, not a
   design goal.
 - **`.agents/skills`** support is the cross-client convention the spec
   recommends; Claude Code ignores it.
-- **Explicit lazy fallback.** js already has `tool_discovery`. "Names only, call
-  `tool_discovery kind=skill` for descriptions" is a real path Claude Code lacks
-  in its shipped build.
+- **`tool_discovery`** also searches and loads skills, beside tools and MCP.
 
-For the unanswered case (names alone exceed budget): Claude Code has no answer
-either. The spec's numbers say it should not happen — 41 skills is ~600 bytes of
-names. If it ever does, the lazy fallback already covers it: emit the count and
-the discovery instruction, no names.
+## How js does it
 
-## Implementing it in js
+The catalog goes in the `skill` tool's description, not the system prompt.
+js settles the system prompt at run assembly and records it in the session
+file, before the turn's tool surface exists; what the model may load
+(`SKILLS_DISABLED`, `disable-model-invocation`, whether the agent has `skill`
+at all) is decided on that surface (`TurnToolSurface` in
+`js/toolkit/registry.py`, `with_catalog` in `js/toolkit/skill.py`). The block
+is sorted by name, so it is byte-stable and caches with the tool set.
 
-Everything below is disclosure; discovery and activation already exist.
+There is no listing budget. Descriptions are capped at 1024 characters by the
+spec; the block grows with the number of skills.
 
-1. **Render a catalog block** from `SkillCatalog.skills` (already sorted,
-   deterministic):
-
-   ```
-   ## Skills available
-   Load one with `skill` (name) or `tool_discovery` (load=skill:<name>) when a
-   task matches its description. Do not load a skill that is already active.
-
-   - code-review: Review the changes since a fixed point ...
-   - tdd: Test-driven development. Use when ...
-   ```
-
-   Description cap 1 536 chars (current Claude Code default). Budget 1% of
-   the model's context window in chars, 8 000 fallback, overridable by a
-   fixed char count. Over budget → built-in skills keep descriptions, then
-   drop descriptions least-used-first if an activation counter exists,
-   otherwise truncate the rest to an even share; share under ~20 chars →
-   names only plus `Descriptions: tool_discovery {"kind":"skill"}`. If no
-   skills, emit nothing and do not register `skill`.
-
-2. **Place it in the system prompt** where `JS.md`/agent prompts are assembled
-   (`js/persona.py`, which puts the instruction files ahead of the agent
-   prompt), after the operator context. Compute it once when the session's
-   `TurnToolSurface` is built (`ToolRegistry.lazy_surface` in
-   `js/toolkit/registry.py`); the string is stored, not recomputed per turn.
-
-3. **Move the behavioural rules into `skill.md`'s tool description** and
-   reference the block: "Available skills are listed under *Skills available* in
-   the system prompt."
-
-4. **Hide filtered skills.** Anything policy-denied (`allowed.resolve("skill")`
-   is None, or a skill whose declared tools are all denied) is omitted from the
-   block, not listed and refused.
-
-5. **Compaction.** Do not re-send the catalog; it is in the system prompt.
-   Track activated skill names per session and skip re-injection on repeat
-   `skill` calls (return "already active").
-
-6. **Tests** (behaviour only): the block is byte-identical across two builds
-   from the same catalog; a skill listed in the block is loadable by the name
-   shown; a denied skill is absent from the block; with an empty catalog the
-   block is absent and `skill` is not registered; over budget every name is
-   still present.
-
-`disable-model-invocation: true` is read at parse time: such a skill is
-user-only. It stays out of the model's catalog and the block above, the model
-cannot load it, and the user loads it with `/skill <name>`.
-
-Optional, from Claude Code, if wanted later: the `Base directory for this
-skill:` header in the model's activation payload (the `/skill` path already
-sends it) so relative paths in a skill body resolve.
+Repeat activations are not refused: the tool description tells the model not
+to reload a loaded skill, and a summary compaction may make a reload the right
+call.

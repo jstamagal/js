@@ -1175,6 +1175,8 @@ DESCRIPTION_UNBALANCED = Message("{label}unbalanced {{{{#if}}}}/{{{{#unless}}}} 
 SKILL_SKIPPED = Message("Skill {path} skipped: {error}")
 SKILL_DUPLICATE = Message("Skill {path} skipped: {root} already has a skill named {name!r} at {prior}")
 SKILL_OVERRIDES = Message("Skill {name!r} at {path} is used in place of {prior}")
+SKILL_NAME_OFF_SPEC = Message("Skill {path}: name {name!r} is not lowercase letters, digits and single hyphens, at most 64 characters; loaded anyway")
+SKILL_NAME_NOT_DIRECTORY = Message("Skill {path}: name {name!r} does not match its directory {directory!r}; loaded anyway")
 ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.")
 DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}")
 # Why a directive was not expanded: the {error} hole of DIRECTIVE_NOT_EXPANDED.

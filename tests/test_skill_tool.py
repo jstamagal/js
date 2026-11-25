@@ -21,7 +21,8 @@ def test_skill_loads_local_skill_from_agents_skills_dir(tmp_path):
 
     result = skill.skill("deploy", context=context)
 
-    assert result == "# Deploy\n\nrun the thing\n"
+    assert result.startswith('<skill_content name="deploy">\n# Deploy\n\nrun the thing\n')
+    assert f"Skill directory: {tmp_path / '.agents' / 'skills' / 'deploy'}\n" in result
 
 
 def test_skill_loads_from_native_js_skills_dir(tmp_path):
@@ -29,7 +30,7 @@ def test_skill_loads_from_native_js_skills_dir(tmp_path):
     context = ToolContext(cwd=tmp_path)
     _write_skill(tmp_path / ".js" / "skills", "lint", "lint skill")
 
-    assert skill.skill("lint", context=context) == "lint skill"
+    assert '<skill_content name="lint">\nlint skill\n' in skill.skill("lint", context=context)
 
 
 def test_skill_tool_refuses_user_only_skill(tmp_path):
@@ -55,7 +56,7 @@ def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
         "---\ntools: [shell, missing]\n---\nlegacy instructions",
     )
 
-    assert skill.skill("legacy", context=context) == "legacy instructions"
+    assert "\nlegacy instructions\n" in skill.skill("legacy", context=context)
 
 
 def test_skill_invocation_activates_declared_tools_and_still_returns_instructions(tmp_path):
@@ -81,10 +82,8 @@ def test_skill_invocation_activates_declared_tools_and_still_returns_instruction
     result = skill.skill("deploy", context=context)
 
     assert context.tool_registry.requested == ("shell", "browser", "absent")
-    assert result == (
-        "# Deploy\n\nrun it\n\n"
-        "Skill tool requirements unavailable: policy-denied: browser; unknown: absent"
-    )
+    assert "# Deploy\n\nrun it\n" in result
+    assert "browser" in result and "absent" in result
 
 
 def test_skill_errors_when_not_found_anywhere(tmp_path):

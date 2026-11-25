@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from ..skills import discover_skills, load_skill
+from collections.abc import Sequence
+from dataclasses import replace
+
+from ..skills import SkillMetadata, catalog_block, discover_skills, load_skill
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
 from .presentation import Presentation
@@ -21,8 +24,19 @@ def skill(name: str, context: ToolContext | None = None, *, user_command: str = 
     except (OSError, ValueError):
         return f"ERROR: skill {name!r} instructions could not be read"
     if loaded is not None:
-        return loaded.render()
+        return loaded.render(getattr(context.tool_registry, "public_name", None))
     return f"ERROR: skill {name!r} not found in js/skills or local skills directories"
+
+
+def with_catalog(tool: Tool, skills: Sequence[SkillMetadata]) -> Tool | None:
+    """The skill tool for one turn: its description ends with the
+    ``<available_skills>`` catalog and its ``name`` takes only those names.
+    None when no skill is available, so the tool is left out."""
+    if not skills:
+        return None
+    name = {**tool.params["name"], "enum": [skill.name for skill in skills]}
+    description = tool.description.rstrip("\n") + "\n\n" + catalog_block(skills)
+    return replace(tool, description=description, params={**tool.params, "name": name})
 
 
 def tools() -> tuple[Tool, ...]:
