@@ -44,12 +44,14 @@ Inputs:
   files; worker persona and model-selection rules still apply.
 - `session_id` resumes a worker session. When resumed, the worker keeps previous
   context. When omitted, a fresh worker session is created.
-- `tasks` is what the worker reads. The worker's routing — model, agent_id,
-  session_id — rides the fields, never the prose.
+- `tasks` is what the worker reads. The worker's routing — model, reasoning,
+  agent_id, session_id — rides the fields, never the prose.
 <!--if:model_override-->
 - `model` overrides the model the worker runs on. Leave it unset by default — the
   worker uses its configured model. ONLY set it when the operator explicitly asks
   for behavior the agent isn't configured for; do not pick a model on your own.
+- `reasoning` sets the worker's reasoning effort, like `-r`. Same rule: set it
+  only when the operator names an effort.
 <!--endif-->
 
 Parallelism:
@@ -125,6 +127,10 @@ Background task id from a HANDLE line, for poll/wait/kill.
 ### model
 
 Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise.
+
+### reasoning
+
+Reasoning effort for the subagent(s): minimal, low, medium, high, xhigh or max. Set it when the operator names one; omit otherwise.
 
 ### session_id
 

@@ -784,6 +784,7 @@ def _task_params(flags: tuple[str, ...]) -> dict:
     }
     if "model_override" in flags:
         params["model"] = {"type": "string", "description": load_parameter_description('task', 'model')}
+        params["reasoning"] = {"type": "string", "description": load_parameter_description('task', 'reasoning')}
     return params
 
 
