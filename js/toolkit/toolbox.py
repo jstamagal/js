@@ -58,24 +58,38 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 # NameErrors on load: `summarise` used `statistics.fmean`, `statistics` was
 # imported in a different cell, the saved file had no import, and the tool was
 # broken the moment the session that wrote it ended. So the probe resolves every
-# free name against the live namespace: modules become import lines prepended to
+# free name against the live namespace: importable objects become lines prepended to
 # the saved body. Whatever stays unbound in that body is what `save` refuses on
 # (see `unbound_names`), because a name the file does not carry is a NameError
 # waiting for the next session that loads it.
 #
 # `inspect.getsource` covers cells IPython registered with linecache and files a
-# previous `load` exec'd; the `In` scan is the fallback for anything it misses.
+# previous `load` exec'd. For interactive classes the kernel records the cell
+# and source span when the class statement runs.
 _SOURCE_PROBE = """
 def __js_src(target_name):
-    import ast, builtins, inspect, json, textwrap
+    import ast, builtins, inspect, json, sys, textwrap
 
     def _body():
         target = globals().get(target_name)
-        if target is not None and callable(target):
+        if target_name in globals():
+            kernel_client = sys.modules.get('js_tools')
+            if inspect.isclass(target) and kernel_client is not None:
+                source = kernel_client.class_sources.source(target)
+                if source:
+                    return source
+            def owns_definition(wrapper):
+                if not inspect.isfunction(wrapper):
+                    return False
+                # A raw exec can borrow an older definition's __wrapped__.
+                inspect.findsource(wrapper.__code__)
+                return wrapper.__code__.co_name == target_name
             try:
-                return textwrap.dedent(inspect.getsource(target))
-            except (OSError, TypeError):
-                pass
+                definition = inspect.unwrap(target, stop=owns_definition)
+                subject = definition.__code__ if inspect.isfunction(definition) else definition
+                return textwrap.dedent(inspect.getsource(subject))
+            except (OSError, TypeError, ValueError):
+                return ''
         history = globals().get('In')
         if isinstance(history, list):
             wanted = ('def ' + target_name, 'class ' + target_name)
@@ -115,20 +129,72 @@ def __js_src(target_name):
                 bound.update(node.names)
         seen, out = set(), []
         for name in used:
-            if name in bound or name in dir(builtins) or name in seen:
+            if name in bound or name in seen:
                 continue
             seen.add(name)
             out.append(name)
         return out
 
+    def _from_imports(names):
+        # A public re-export can live under a different name in its defining module.
+        found = {}
+        history = globals().get('In')
+        if not isinstance(history, list):
+            return found
+        for cell in reversed(history):
+            if not names:
+                break
+            if not isinstance(cell, str) or 'import' not in cell:
+                continue
+            try:
+                statements = ast.parse(cell).body
+            except SyntaxError:
+                continue
+            for node in reversed(statements):
+                if not isinstance(node, ast.ImportFrom) or node.level or node.module == '__main__':
+                    continue
+                owner = sys.modules.get(node.module)
+                if owner is None:
+                    continue
+                for alias in node.names:
+                    name = alias.asname or alias.name
+                    if name in names and vars(owner).get(alias.name, missing) is globals()[name]:
+                        found[name] = 'from ' + node.module + ' import ' + ast.unparse(alias)
+                        names.remove(name)
+        return found
+
     source = _body()
+    missing = object()
+    names = [name for name in _free(source) if name in globals()
+             and globals()[name] is not vars(builtins).get(name, missing)]
+    recorded = _from_imports(set(names))
     imports = []
-    for name in _free(source):
-        value = globals().get(name)
-        module = getattr(value, '__name__', None) if inspect.ismodule(value) else None
-        if module:
-            imports.append('import ' + module
-                           + ('' if module == name else ' as ' + name))
+    for name in names:
+        if name in recorded:
+            imports.append(recorded[name])
+            continue
+        value = globals()[name]
+        if inspect.ismodule(value):
+            exported = value.__name__
+            statement = 'import ' + exported
+        elif inspect.isclass(value) or inspect.isroutine(value):
+            module = getattr(value, '__module__', None)
+            exported = getattr(value, '__name__', '')
+            owner = sys.modules.get(module)
+            if module == '__main__' or owner is None or vars(owner).get(exported) is not value:
+                continue
+            # A loaded tool's imports are outside In. Prefer the public package
+            # re-export when it carries the same object as the defining module.
+            parent = module.rpartition('.')[0]
+            while parent:
+                package = sys.modules.get(parent)
+                if package is not None and vars(package).get(exported) is value:
+                    module = parent
+                parent = parent.rpartition('.')[0]
+            statement = 'from ' + module + ' import ' + exported
+        else:
+            continue
+        imports.append(statement + ('' if exported == name else ' as ' + name))
     return json.dumps({'source': source, 'imports': imports})
 print('__JS_SRC__' + __js_src(%(name)r))
 del __js_src

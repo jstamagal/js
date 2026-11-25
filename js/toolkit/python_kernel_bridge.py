@@ -77,6 +77,7 @@ def install_cell(socket_path: Path, token: str) -> str:
         "    module = types.ModuleType('js_tools')\n"
         f"    exec(compile({client_source()!r}, 'js_tools', 'exec'), module.__dict__)\n"
         "    sys.modules['js_tools'] = module\n"
+        "    get_ipython().ast_transformers.append(module.class_sources)\n"
         f"    globals()['tools'] = module.Tools({str(socket_path)!r}, {token!r})\n"
         "__js_install_tools()\n"
         "del __js_install_tools\n"

@@ -1,8 +1,8 @@
 """The `tools` object a kernel cell calls js tools through.
 
 This file runs inside the kernel process. python_kernel.py sends its source to the
-kernel as a cell, which builds the `js_tools` module from it and binds
-`tools = js_tools.Tools(socket_path, token)` in the cell namespace. It imports
+kernel as a cell, which builds the `js_tools` module from it, registers
+the class source recorder, and binds `tools` in the cell namespace. It imports
 only the standard library: the kernel under `js -C` runs in the jail, where
 the js package is not importable.
 
@@ -13,8 +13,44 @@ and the reply is one JSON document. js runs the tool and answers.
 
 from __future__ import annotations
 
+import ast
 import json
+import linecache
 import socket
+import sys
+import weakref
+
+
+class ClassSources(ast.NodeTransformer):
+    """Associate top-level IPython class definitions with their executed cell."""
+
+    def __init__(self):
+        self.classes = weakref.WeakValueDictionary()
+
+    def visit_Module(self, node):
+        statements = []
+        for statement in node.body:
+            statements.append(statement)
+            if isinstance(statement, ast.ClassDef):
+                start = min([statement.lineno, *(d.lineno for d in statement.decorator_list)])
+                call = f"__import__('js_tools').class_sources.record({statement.name}, {start}, {statement.end_lineno})"
+                statements.append(ast.increment_lineno(ast.parse(call).body[0], statement.end_lineno - 1))
+        node.body = statements
+        return node
+
+    def record(self, cls, start, end):
+        if isinstance(cls, type):
+            filename = sys._getframe(1).f_code.co_filename
+            self.classes[filename, start, end] = cls
+
+    def source(self, cls):
+        for (filename, start, end), recorded in self.classes.items():
+            if recorded is cls:
+                return "".join(linecache.getlines(filename)[start - 1:end])
+        return ""
+
+
+class_sources = ClassSources()
 
 
 class ToolError(Exception):

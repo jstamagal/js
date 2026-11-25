@@ -18,8 +18,8 @@ Parameters:
   under `.js/toolbox/` and only visible here). A project tool shadows a global
   tool of the same name.
 - `revision`: for `restore` — the revision number to roll back to.
-- `source`: for `save` — the definition text, only needed when the function is
-  not in the kernel namespace.
+- `source`: for `save` — the definition text. Pass it when the kernel lacks
+  the source, such as a definition created with `exec(src)`.
 - `verbosity`: `quiet`, `normal`, or `verbose` for the operator's terminal view.
 
 `list` shows every saved tool with its current revision, its scope, and the
@@ -47,12 +47,12 @@ stays restorable forever. A first save is `r1`; a save over an existing tool is
 What is worth saving: a parser, a fetcher, a report formatter — a function
 that would otherwise be rewritten next session.
 
-Before writing, `save` hoists the definition's module imports into the file so
-it stands alone, and refuses the save if the definition still reads a name the
-file would not carry: a session constant, a client built in an earlier cell, a
-helper you defined but never saved. Calling another saved tool is fine — every
-tool file execs into one namespace at load — so only names that would be absent
-there count. The ERROR names every one of them; save those as their own tools,
+Before writing, `save` carries the definition's imports into the file,
+including the module and alias used by a `from` import. It refuses the save
+if the definition still reads a name the file would not carry, such as a
+session constant, a client built in an earlier cell, or an unsaved helper.
+Calling another saved tool works because the files share a namespace at load.
+The error names the missing bindings. Save those as their own tools,
 inline them, or pass a complete definition in `source`. Nothing is written and
 no revision is bumped by a refused save. The same check runs on an explicit
 `source`.
