@@ -183,6 +183,14 @@ def __js_src(target_name):
             owner = sys.modules.get(module)
             if module == '__main__' or owner is None or vars(owner).get(exported) is not value:
                 continue
+            # A loaded tool's imports are outside In. Prefer the public package
+            # re-export when it carries the same object as the defining module.
+            parent = module.rpartition('.')[0]
+            while parent:
+                package = sys.modules.get(parent)
+                if package is not None and vars(package).get(exported) is value:
+                    module = parent
+                parent = parent.rpartition('.')[0]
             statement = 'from ' + module + ' import ' + exported
         else:
             continue
