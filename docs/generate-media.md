@@ -1,0 +1,119 @@
+# A media generation command for js
+
+Research and proposed interface, 2026-11-24. The `js generate` examples below are designs. The GitHub examples identify the tools that already implement the underlying behaviors.
+
+## The one-line command
+
+```sh
+js generate --t2i -p 'A squirrel with big nuts'
+```
+
+Read the image model setting, send the prompt directly, and save the result to `./out.png`. Print the local path so a script can use it. One invocation requests one image. A backend that returns JPEG needs an actual PNG conversion to meet this contract. Select native PNG when available. If the output path already exists, fail before submitting or let the user opt into replacement with `--force`.
+
+```sh
+js generate --i2i -p 'Keep the squirrel. Replace the background with snow.' --image out.png -o winter.png
+js generate --i2v --first-frame out.png --last-frame winter.png -p 'Autumn turns to winter' -o seasons.mp4
+js generate --tts -p 'Winter came early.' --voice coral -o line.wav
+js generate --music -p 'Upright bass and brushed snare, sparse enough for narration' --instrumental --duration 12 -o bed.mp3
+js generate --sfx -p 'A walnut rolling across a wooden floor' --duration 3 -o roll.wav
+```
+
+### How it fits the existing parser
+
+The console entry point calls `js.cli.main`. In `_main`, js selects the home, handles startup, and tests the **first remaining word** for `login`, `logout` or `models-edit`. Only afterwards does it build the normal parser, check short options and output flags, and parse chat arguments. The normal positional `target` is rejected outside commit mode. Add one sibling dispatch for literal `generate` and give the tail to its own parser with `allow_abbrev=False`. This also keeps generates out of session, REPL and agent startup. Document the subcommand in top-level help. [CLI dispatch](../js/cli.py) · [Argument definitions and argv reader](../js/command_line.py)
+
+**Yes, conflicting flags work.** Chat can keep `-n` for no-save and `-s` for session while generate uses `-n 4` for four outputs and `-s 42` for a seed. Keep familiar meanings for `-p`, `-m`, `-q`, `--json` and `--json-stream`. The exception is `--home`, which the bootstrap removes anywhere before the literal `--`. Under this design write `js generate -m …` or `js --home DIR generate -m …`. Putting `-m` *before* `generate` goes through normal parsing. Looking only at the first remaining word preserves `js -p generate` and `js --commit generate`. A local argv probe confirmed those two cases and both placements of `--home`. [Home pre-parser](../js/home_cli.py) · [CLI validation](../js/cli.py)
+
+Use a mutually exclusive operation selector. Image operations (`--t2i`, `--i2i`, `--inpaint`, `--outpaint`, `--upscale`) resolve `IMAGE_MODEL`. Video operations (`--t2v`, `--i2v`, `--r2v` for references, `--v2v`, `--extend-video`) resolve `VIDEO_MODEL`. Speech, music and effects (`--tts`, `--music`, `--sfx`) resolve `TTS_MODEL`, `MUSIC_MODEL` and `SFX_MODEL`. A selector picks the operation even when `-m` names a model that serves several. An unset model should produce the exact setting and an example invocation.
+
+**Proposed resolution:** explicit `-m/--model` wins, then `--extra IMAGE_MODEL=…`, then `JS_IMAGE_MODEL`, then the existing preset and jsrc layers. Use `JS_MUSIC_MODEL` with the final L. Register the settings so `/set`, `/save`, jsrc and env work together. Reuse `dotenv.load`, `InvocationSources` and `run_settings`. Keep `--extra` for js settings and a separate `--param` for media endpoint parameters. Use js's existing qualified `provider/model` spelling. Preserve the real jail semantics if exposing `-C`. [Settings registry](../js/settings.py) · [Config layers](../js/config.py) · [Dotenv](../js/dotenv.py) · [Provider routing](../js/providers.py)
+
+### How much transport work is there?
+
+The lockfile selects Python `ai 0.9.0`. Its image operation already takes images, a mask, count, size, aspect ratio, seed and provider options. Its video operation takes first/last frames, references, duration, resolution, fps and audio. Its audio operation is speech synthesis with text, instructions, voice, language, format and speed. In the installed package the concrete protocol implementations for these three operations are in AI Gateway v3/v4. The base protocol raises `NotImplementedError`; the installed direct OpenAI protocol inherits that behavior. For a direct OpenAI login, the project already depends on the official `openai` client, which has Images and Speech endpoints. Music and SFX need their own operations. A working chat login or a model that accepts images as input establishes neither an output modality nor a working generation transport. [Project lock](../uv.lock) · [Python SDK source](https://github.com/vercel-labs/ai-python/tree/main/src/ai) · [OpenAI Images](https://developers.openai.com/api/docs/guides/image-generation) · [OpenAI Speech](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
+
+Build around **provider + exact model + operation**. For example, the SDK's generic video prompt treats references and anchor frames as exclusive, while one Grok route accepts both together. Hailuo has distinct documented first/last-frame models and duration/resolution combinations. Expose what the selected route can actually send. Reject an explicitly unsupported field before charging, and surface any returned provider warnings. [Grok references and pinned frames](https://docs.x.ai/developers/model-capabilities/video/reference-to-video) · [Hailuo interpolation](https://platform.minimax.io/docs/api-reference/video-generation-fl2v)
+
+## 1. Freebies and necessities
+
+“Free” here means one existing endpoint request, an input asset, or a file destination. A provider may charge for additional samples or seconds. The spellings are proposed js flags. Each row is a menu for applicable models. In particular, a prompt hint, a native control and a local postprocess have different effects.
+
+| Area | Candidate flags | What they buy |
+| --- | --- | --- |
+| Prompt and routing | `-p/--prompt TEXT`, `--prompt-file FILE`, `-m/--model ID`, `--negative-prompt TEXT`, `--negative-prompt-file FILE` | Accept `-p -` for piped text. Keep an ordered source list for edits and explicit negatives where supported. |
+| Sources and roles | `--image FILE`, `--mask FILE`, `--markup FILE`, repeatable `--ref FILE`, `--style-ref`, `--subject-ref`, `--pose-ref`, `--video FILE`, `--audio-file FILE`, `--voice-ref FILE`, `--first-frame FILE`, `--last-frame FILE`, repeatable `--keyframe TIME=FILE` | Allow a local path, URL or supported provider file ID. Keep argument order. A style reference guides appearance, a mask localizes an edit, and a first frame pins the opening. |
+| Shared request | `-n/--count`, `-s/--seed`, `--aspect-ratio`, `--size WxH`, `--resolution`, `--quality`, `--format` | Report native count limits, supported geometry and format. Multiple paid calls to emulate count belong in a batch. A seed is meaningful within the chosen backend. |
+| Files and pipes | `-o/--output PATH`, `--output-dir DIR`, `--output-template TEMPLATE`, `--force`, `--metadata-out FILE`, `-q/--quiet`, `--json`, `--json-stream` | Default to one local file. For a set, use indexed names such as `out-001.png`. `-o -` emits one binary artifact, progress goes to stderr. JSON returns paths, media types and job IDs. Reject binary and JSON on the same stdout. |
+| Full endpoint surface | `--param KEY=VALUE` (repeatable), `--request-file JSON`, `--schema`, `--list-models`, `--list-voices`, `--dry-run` | Type values against the endpoint schema, including booleans and arrays. Request file supplies the base, explicit CLI fields override it. Reject the same field supplied by both a named flag and `--param`. Dry run shows route, effective fields and paths without uploading or calling an LLM. |
+| Image render | `--background auto\|opaque\|transparent`, `--compression`, `--style`, `--palette`, `--complexity`, `--input-fidelity`, `--strength`, `--scale`, `--tile` | Transparent cutouts, edit fidelity, image-to-image denoising strength, native upscale and seamless textures. Even models from the same family accept different fields. |
+| Diffusion-specific | `--steps`, `--guidance-scale`, `--sampler`, `--scheduler`, `--clip-skip`, `--denoise`, `--lora NAME=WEIGHT`, `--control-image`, `--control-type`, `--control-strength`, `--checkpoint`, `--vae`, `--device`, `--offload` | Expose sampling, weighted adapters, pose/depth/edge guidance and local memory choices where the backend implements them. |
+| Video | `--duration SEC`, `--fps`, `--frames`, `--audio/--no-audio`, `--motion-strength`, `--shot-type`, `--camera`, `--loop`, `--extend-direction`, `--reference-weight`, `--watermark` | Frame count and playback rate can constrain duration. Camera moves may compile into documented prompt tokens. Show the actual submitted text. Native generation with sound and adding a soundtrack later are separate operations. |
+| Speech | `--voice`, `--language`, `--instructions`, `--speed`, `--pitch`, `--volume`, `--stability`, `--similarity`, `--style`, `--speaker-boost`, `--pronunciation-dictionary`, `--normalize-text`, `--previous-text`, `--next-text`, `--sentence-silence`, `--timestamps-out FILE` | Keep the spoken script distinct from delivery direction. Choose names, phonemes, sentence pacing and neighboring context for pickup lines. Save native alignment when requested. |
+| Music | `--instrumental`, `--lyrics`, `--lyrics-file`, `--composition-plan FILE`, `--respect-section-durations`, `--melody-ref`, `--continue-from`, `--genre`, `--mood`, `--instrument`, `--bpm`, `--key`, `--time-signature` | Some engines take a structured score, a guiding melody or continuation audio. With text-only controls, tempo and key become directions in the prompt. Display them as such. |
+| Sound effects and audio encoding | `--sfx`, `--duration`, `--loop`, `--prompt-influence`, `--codec`, `--sample-rate`, `--bitrate`, `--channels` | Request a repeatable ambience loop, a timed Foley hit or a specific delivery encoding. Expose local conversion separately when the requested encoding needs it. |
+
+Image precedents include ordered edits, dry runs, transparent output, model-specific fidelity, local diffusion controls and reconstructable PNG parameters. [OpenAI CLI reference](https://github.com/openai/skills/blob/main/skills/.system/imagegen/references/cli.md) · [Stable Diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) · [OpenAI image prompting](https://developers.openai.com/api/docs/guides/image-prompting)
+
+Video precedents include model-specific help, uploads, typed refs and explicit start/end frames. Audio precedents include structured composition plans, loop synthesis, raw PCM, sentence silence, word boundaries and pronunciation controls. [fal genmedia CLI](https://github.com/fal-ai-community/genmedia-cli) · [Hailuo I2V](https://platform.minimax.io/docs/api-reference/video-generation-i2v) · [ElevenLabs CLI command reference](https://github.com/elevenlabs/cli/blob/main/reference.md) · [Piper CLI](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/CLI.md) · [edge-tts](https://github.com/rany2/edge-tts)
+
+## 2. Nice to haves
+
+| Feature | Candidate interface | Behavior |
+| --- | --- | --- |
+| Model-aware prompt enhancement | `--enhance`, `--enhance-model ID`, `--enhance-profile NAME`, `--enhance-only`, `--save-prompt FILE`, `--edit-prompt`, `--provider-optimizer on\|off\|auto` | Run one text or vision call with the target model's instructions. Inspect, edit or reuse the result. See the example below. |
+| Recoverable remote jobs | `--async`, `--wait SEC`, `--status ID`, `--resume ID`, `--cancel ID`, `--download-only ID`, `--logs` | Record provider, endpoint and job ID as soon as submission succeeds. Reconnect to the same job on timeout or a failed download. Download expiring results promptly. |
+| Receipt and replay | `--manifest FILE`, `--replay FILE`, `--embed-metadata`, `--save-request FILE` | Save effective model, revision if known, prompts, input hashes, seed, output paths and provider warnings. Write redacted requests. Replay exposes the original settings and allows overrides. |
+| Auditions and batch | `--batch FILE.jsonl`, repeatable `--variant TEXT`, `--seed-list`, `--concurrency N`, `--skip-existing`, `--retry-failed`, `--contact-sheet FILE` | Stable job and output names, one result per input, visual index for choosing takes. Reattach to outstanding jobs before retrying. |
+| Cost and progress | `--estimate`, `--max-cost`, `--progress`, `--preview-dir DIR`, `--open`, `--play` | Show estimate and units when available. For a hard budget, an unknown price is actionable. Save partials only where provided. Preview/playback use a local viewer. |
+| Delivery | `--subtitles FILE.srt`, `--alignment FILE.json`, `--thumbnail FILE`, `--poster-time SEC`, `--last-frame-out FILE`, `--transcode FORMAT`, `--normalize-loudness` | Reuse native timing and artifacts first. Frame extraction, subtitle formatting, loudness correction and transcoding are local media work. |
+
+### What enhancement should actually do
+
+```sh
+js generate --i2i --image squirrel.png --enhance-only -p 'Make it winter' > edit.txt
+js generate --i2i --image squirrel.png --prompt-file edit.txt -o winter.png
+```
+
+Resolve the **target** first. Pick the writing profile by exact model and operation, then family and operation, then a generic modality profile. Allow an explicit profile override for a local alias. Put detailed editable system instructions in stock agent prompt files with normal js project/home overrides. The enhancer's own model is a separate text/vision setting. Tools are unnecessary. Treat prompt text, quoted lettering, lyrics, dialogue, ref names and the approved output as data. Pass it directly to the media endpoint without a second inline-directive expansion.
+
+| Target | What its system prompt should teach the writer |
+| --- | --- |
+| GPT Image, new image or edit | Name subject, framing, materials and light. For visible text preserve the literal spelling in quotes. Assign each ref a role. For an edit, say exactly what changes and what the source must retain. [OpenAI prompting guide](https://developers.openai.com/api/docs/guides/image-prompting) |
+| Grok Imagine, especially multi-image edit | Lead with concrete subject, count and spatial relationship. Associate materials with the correct object and bind each ordered input to its role. For a second edit, carry the selected previous image. [xAI prompting](https://docs.x.ai/developers/model-capabilities/images/prompting-guide) · [Multi-image edits](https://docs.x.ai/developers/model-capabilities/images/multi-image-editing) |
+| Hailuo, image to video | Treat the opening still as established. Describe what moves, the order it moves in, and where the camera ends. Render a requested move in the documented director syntax on compatible models. Keep frame anchors, duration and resolution in the request. [MiniMax camera syntax and optimizer](https://platform.minimax.io/docs/api-reference/video-generation-i2v) |
+| FLUX or Wan | Use the selected family's generation or edit recipe. FLUX.2 ships a prompt upsampler. Wan2.2 exposes extension method, model and target language. Preserve ordered assets and motion timing when the video request uses them. [FLUX.2 upsampler](https://github.com/black-forest-labs/flux2/blob/main/docs/flux2_with_prompt_upsampling.md) · [Wan generator](https://github.com/Wan-Video/Wan2.2/blob/main/generate.py) |
+| TTS, SFX or music | For speech, enhance delivery instructions and pass the transcript through verbatim. For SFX, describe source, acoustic space and event timing. For music, expand arrangement, instrumentation and section progression, preserving supplied lyrics and duration. [Speech instructions](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create) · [Composition plans](https://elevenlabs.io/docs/eleven-api/guides/how-to/music/composition-plans) |
+
+For example, the image edit above might yield “Use image 1 as the base. Replace the autumn foliage with snow-covered branches. Preserve the squirrel's pose, the nuts, the crop and the direction of the light.” For a Hailuo shot with both approved stills, the same brief becomes “Hold the camera steady. Snow builds on the branches while the squirrel shifts its weight, settling into the pose in the final frame.” The profile can be extensive while the submitted prompt stays short.
+
+Record **original**, **submitted**, and **provider-revised** prompt separately when available. OpenAI's Responses image tool can rewrite a prompt, and Hailuo exposes its own optimizer. Keep those distinct from the optional js rewrite. `--enhance-only` may pay for a writer call and should print just the resulting prompt. `--dry-run` can show which writer would run without spending anything. [OpenAI Responses image tool](https://developers.openai.com/api/docs/guides/tools-image-generation) · [MiniMax video API](https://platform.minimax.io/docs/api-reference/video-generation-t2v)
+
+## 3. Distinctive workflows
+
+These are proposed js workflows, with a concrete precedent and the extra work each requires.
+
+| Workflow | A command one might want | What makes it worth building |
+| --- | --- | --- |
+| Audition a prompt across models | `js generate --compare models.txt --t2i -p 'A squirrel with big nuts' --contact-sheet picks.png` | Arrange models in columns and original/enhanced prompts in rows. Label each cell with its model, cost when known and output ID. Keep a winning image as the next reference. A common seed across different engines cannot guarantee a matched composition. [Variant generation](https://github.com/niieani/imagegen) · [OpenAI comparison guidance](https://developers.openai.com/api/docs/guides/image-prompting) |
+| Storyboard with replaceable shots | `js generate --storyboard shots.yaml --shot 3 --assemble trailer.mp4` | Generate stills, approve the anchors, animate shots independently, then assemble in order. Save the chosen last frame as the next first frame. Changing shot 3 can invalidate shot 4 if it uses that frame. Track that dependency explicitly. [Veo first/last frame](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-first-and-last-frames) · [Higgsfield explainer blocks](https://github.com/higgsfield-ai/cli#video-explainer) |
+| Draw a change at a timestamp | `js generate --v2v --video scene.mp4 --at 2.4 --markup arrows.png -p 'Follow this arc'` | Extract the frame, annotate where movement should go, and submit the source plus annotated frame. A backend with that workflow can do the heavy lifting. [Higgsfield draw-to-video workflow](https://github.com/higgsfield-ai/cli#workflows) |
+| Write motion before spending on video | `js generate --storyboard shots.yaml --enhance-only --save-prompt motion.json` | Have a vision model look at each approved still and draft just the action and camera movement. Edit the manifest, then submit only the chosen shots. This is particularly useful when a cheap still reveals something the original text missed. [fal-media-pipeline prompt editing](https://github.com/JChan2787/fal-media-pipeline#motion-prompt-editing-workflow) |
+| Regenerate one spoken line | `js generate --script scene.json --replace-line 7 --subtitles scene.srt` | Retain the neighboring context and voice, synthesize the pickup, splice it into the track, and shift later subtitle timestamps using alignment. Saves paying for and re-auditioning the rest of the performance. [ElevenLabs context](https://elevenlabs.io/docs/api-reference/text-to-speech/convert) · [Speech alignment](https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps) |
+| Hum a cue, score a scene | `js generate --music --melody-ref hum.wav -p 'Muted trumpet over brushed drums'` | Melody guidance is a single call on a compatible MusicGen checkpoint. A deeper workflow first drafts a section plan, renders alternatives, then mixes a chosen bed under dialogue with ducking and loopable room tone. [MusicGen melody conditioning](https://github.com/facebookresearch/audiocraft/blob/main/docs/MUSICGEN.md) · [ElevenLabs composition plans](https://elevenlabs.io/docs/eleven-api/guides/how-to/music/composition-plans) · [FFmpeg audio filters](https://ffmpeg.org/ffmpeg-filters.html#Audio-Filters) |
+| Reopen an image as a recipe | `js generate --replay hero.png --variant 'blue hour' -o hero-blue.png` | Read embedded parameters or the sibling manifest, recover references by hash, and rerun with one change. Report unavailable inputs or revisions. Comfy outputs can carry the graph that generated them. [Comfy workflow metadata](https://github.com/Comfy-Org/docs/blob/main/development/api-development/workflow-metadata.mdx) |
+| Shell pipelines and named workflows | `js generate --t2i -p 'A forest at dawn' -o - \| js generate --i2v --first-frame - -p 'Slow push in' -o forest.mp4` | The simple pipeline can work as soon as single-artifact stdin/stdout works. For branching, propose `--workflow FILE --input name=value --from-step ID` with named outputs, cached steps and durable job IDs. Replicate chains predictions and can scaffold code from a prediction. Comfy CLI already runs exported graphs. [Replicate CLI](https://github.com/replicate/cli) · [Comfy CLI](https://github.com/Comfy-Org/comfy-cli) |
+
+### Actual CLI patterns to borrow
+
+| Existing command | Design lesson |
+| --- | --- |
+| `genmedia run ENDPOINT --help` | Show the exact endpoint's flags on demand. This makes a very large option surface navigable. [fal genmedia CLI](https://github.com/fal-ai-community/genmedia-cli) |
+| `replicate model schema suno-ai/bark` | Inspect typed inputs, choices and output shapes before building a command. [Replicate CLI](https://github.com/replicate/cli#view-a-models-inputs-and-outputs) |
+| `comfy run --workflow ./workflow.json --where cloud` | A reusable graph and a job ID work across submission, waiting and retrieval. [Comfy CLI](https://github.com/Comfy-Org/comfy-cli) |
+| `sd-cli -m model.safetensors -p 'A lighthouse at dusk'` | A local runner can have the same one-line ergonomics as a hosted API. [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) |
+| `edge-tts --text 'Winter came early.' --write-media line.mp3 --write-subtitles line.srt` | Timing sidecars are useful even for a one-line voice command. [edge-tts](https://github.com/rany2/edge-tts) |
+| `elevenlabs music compose --json - --output bed.mp3` | A structured composition plan can come through stdin, while the audio goes straight to a named file. [ElevenLabs CLI](https://github.com/elevenlabs/cli/blob/main/reference.md) |
+
+**First cut I'd build:** one end-to-end image adapter using an existing login, the bare command, image edits with ordered refs and a mask, predictable files/pipes, model-specific help, dry run and typed provider parameters. Add model-aware enhancement with prompt-only output next. A direct image run, an edited still, and an enhanced version of the same prompt give three concrete tests of the interface before it grows. The next backend worth exercising is async video with two frames and recovery by job ID. Those two backends reveal most of the differences that matter for a shared command.
+
+Verification covered the js parser and installed SDK source, CLI repositories and provider documentation. No paid endpoint or local inference model was exercised.
