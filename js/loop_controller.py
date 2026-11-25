@@ -7,9 +7,9 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from . import command_line, messages as msgs, settings as _settings, snippets
+from .capped_process import descendants
 
 _DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
 
@@ -31,31 +31,8 @@ def child_argv(argv: list[str]) -> list[str]:
 
 
 def _detached_descendant_groups(root_pid: int) -> set[int]:
-    """Process groups currently below our child, including new sessions."""
-    children: dict[int, list[tuple[int, int]]] = {}
-    try:
-        entries = os.scandir("/proc")
-    except OSError:
-        return set()
-    with entries:
-        for entry in entries:
-            if not entry.name.isdecimal():
-                continue
-            try:
-                stat = Path(entry.path, "stat").read_text()
-                fields = stat[stat.rfind(")") + 2:].split()
-                parent, group = int(fields[1]), int(fields[2])
-            except (OSError, ValueError, IndexError):
-                continue
-            children.setdefault(parent, []).append((int(entry.name), group))
-    groups: set[int] = set()
-    pending = [root_pid]
-    while pending:
-        for pid, group in children.get(pending.pop(), ()):
-            pending.append(pid)
-            if group > 0 and group not in {root_pid, os.getpgrp()}:
-                groups.add(group)
-    return groups
+    own_group = os.getpgrp()
+    return {group for _, group in descendants(root_pid) if group > 0 and group not in (root_pid, own_group)}
 
 
 def _stop_child(child: subprocess.Popen) -> None:

@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import messages as msgs, network_display, snippets, usage as usage_mod
+from . import messages as msgs, network_display, provider_errors, snippets, usage as usage_mod
 from .toolkit.results import result_text
 
 SCHEMA_VERSION = 2
@@ -50,6 +50,7 @@ class JsonEvents:
         self.out = out
         self.errored = False
         self.final_text = ""
+        self.stop_reason: str | None = None
         self.session: dict[str, Any] | None = None
         self.result: dict[str, Any] = {}
         self.usage = usage_mod.UsageTotals()
@@ -72,6 +73,18 @@ class JsonEvents:
             self.emit("text", delta=payload.get("text", ""))
         elif event == "response":
             self.final_text = payload.get("text", "")
+        elif event == "turn_start":
+            self.stop_reason = None
+        elif event == "turn_end":
+            reason = payload.get("reason")
+            if reason == "max_iterations":
+                self.stop_reason = "max_turn_requests"
+            elif reason == "incomplete":
+                reasons = (payload.get("incomplete_reason"), payload.get("finish_reason"))
+                if any(provider_errors.is_max_output_incomplete(value) for value in reasons):
+                    self.stop_reason = "max_tokens"
+                elif any(value in {"content_filter", "refusal"} for value in reasons):
+                    self.stop_reason = "refusal"
         elif event == "tool_call":
             self.emit("tool_call", id=payload.get("id"), name=payload.get("name"),
                       arguments=_arguments(payload.get("arguments")))
@@ -177,6 +190,8 @@ def json_run(run: Callable[[], int], *, stream: bool = True) -> int:
         if opened is not None and opened.get("file"):
             payload["usage"] = usage_mod.totals(Path(opened["file"])).as_dict()
         payload.update(ok=code == 0, exit_code=code)
+        if events.stop_reason is not None:
+            payload["stop_reason"] = events.stop_reason
     if stream:
         events.emit("end", **payload)
     else:

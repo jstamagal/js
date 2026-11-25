@@ -640,6 +640,7 @@ SHORT_HELP = Message(
     '  js --verify                         Check agents and tool configuration.\n'
     '  js --bench AGENT                    Run an agent benchmark.\n'
     '  js generate --help                   Generate images, video, music and speech.\n'
+    '  js --acp                            Serve Agent Client Protocol over stdio.\n'
     '  js --commit                         Run the commit agent.\n'
     '  js -p "task" --json                  Print one final JSON object.\n'
     '  js -p "task" --json-stream           Stream JSON Lines during the run.\n'
@@ -784,6 +785,9 @@ OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, th
 OPT_LAST = Message("Resume the most recently used session for this agent.")
 OPT_LAST_PROMPT = Message("--last -p: run one prompt in the most recently used session for this agent.")
 LAST_PROMPT_WITH_PROMPT = Message("-lp already takes the prompt; drop -p")
+OPT_ACP = Message("Serve Agent Client Protocol over stdio.")
+ACP_UNSUPPORTED = Message("--acp cannot be combined with {option}.")
+ACP_HELP_UNSUPPORTED = Message("Run help separately from --acp.")
 OPT_JSON = Message("Print the completed run or listing as one JSON object.")
 OPT_JSON_STREAM = Message("Stream JSON Lines while the run executes.")
 OPT_LIST_SESSIONS = Message("List saved sessions; requires --json.")

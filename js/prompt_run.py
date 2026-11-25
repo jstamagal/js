@@ -14,6 +14,7 @@ import signal
 import sys
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from . import (
     events,
     headless,
     login_defaults,
+    mcp_config,
     memory as M,
     messages as msgs,
     network_display,
@@ -84,6 +86,17 @@ def _raise_keyboard_interrupt(*_args) -> None:
 
 
 @dataclass(frozen=True)
+class PromptClient:
+    """A protocol client supplies literal prompt text, session tools and approval."""
+
+    mcp_servers: dict
+    approve: events.Approve | None
+
+
+prompt_client: ContextVar[PromptClient | None] = ContextVar("prompt_client", default=None)
+
+
+@dataclass(frozen=True)
 class PromptInputs:
     """What one `-p` run is asked to do: the keywords of `run`. A
     ``prompt`` of None runs the agent's startup exchanges as the whole run:
@@ -110,6 +123,7 @@ class PromptInputs:
     caller_key: str | None = None
     events: headless.JsonEvents | None = None
     config_pins: bool = False
+    client: PromptClient | None = field(default_factory=prompt_client.get)
 
 
 @dataclass
@@ -183,7 +197,9 @@ def _asked(inputs: PromptInputs) -> tuple[str | None, list[str], str | None] | i
     # any jail, so `-p "@/tmp/prompt.txt"` needs no JAIL_BIND.
     prompt, attachments = inputs.prompt, []
     if prompt is not None:
-        prompt, named = attach.split_repl_attachments(prompt)
+        named = []
+        if inputs.client is None:
+            prompt, named = attach.split_repl_attachments(prompt)
         attachments = [*(inputs.files or []), *named]
         if not prompt.strip() and not attachments:
             msgs.warn(msgs.PROMPT_EMPTY)
@@ -206,6 +222,11 @@ def _open_session(inputs: PromptInputs, prompt: str | None, attachments: list[st
     try:
         cfg = run_assembly.from_env(inputs.session, save_session=inputs.save, sources=inputs.sources,
                                     agent_id=inputs.agent)
+        if inputs.client and inputs.client.mcp_servers and cfg.mcp is not None:
+            settings = dict(cfg.settings)
+            settings["MCP_SERVERS"] = {**(settings.get("MCP_SERVERS") or {}),
+                                       **inputs.client.mcp_servers}
+            cfg = replace(cfg, mcp=mcp_config.resolve(settings, cfg.agent_id))
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
@@ -352,6 +373,8 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
     if inputs.events is not None:
         turn_kwargs["event_sink"] = inputs.events.runtime_event
         telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(inputs.events))
+    if inputs.client is not None:
+        turn_kwargs["approve"] = inputs.client.approve
     if inputs.maxout is not None:
         turn_kwargs["max_output_override"] = inputs.maxout
     prepared.started_at = time.time()
@@ -499,6 +522,8 @@ def _finish(prepared: _PreparedRun) -> int:
     answer = _turn_answer(prepared.messages)
     stats_ok = _record_stats(prepared, answer)
     if not answer:
+        if inputs.client and inputs.events and inputs.events.stop_reason and stats_ok:
+            return 0
         with transcript_mod.transcript_stdio(telemetry):
             msgs.warn(msgs.NO_ANSWER)
         return 1

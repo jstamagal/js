@@ -284,18 +284,13 @@ def _main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
-    display_mod.blocking_stdio()
-    # Before anything reads or writes ~/.js: move the old locations in, once,
-    # then make sure every directory of the layout is there.
-    _home.migrate_once()
-    with contextlib.suppress(OSError):
-        _paths.ensure_home()
-    try:
-        _home.sweep_tmp()
-    except (OSError, ValueError) as exc:
-        msgs.warn(msgs.FAILED, error=exc)
-        return 2
-    if dispatch_argv[:1] == ["generate"]:
+    generate = dispatch_argv[:1] == ["generate"]
+    options_end = dispatch_argv.index("--") if "--" in dispatch_argv else len(dispatch_argv)
+    if not generate and "--acp" in dispatch_argv[:options_end]:
+        return _run_acp(dispatch_argv)
+    if (error := _startup()) is not None:
+        return error
+    if generate:
         from . import generate_cli
         dotenv.load()
         return generate_cli.main(dispatch_argv[1:])
@@ -358,6 +353,57 @@ def _main(argv: list[str] | None = None) -> int:
             if _json_run_requested(args):
                 return headless.json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
             return _run_args(args, dispatch_argv)
+    except (ValueError, OSError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
+
+
+def _startup() -> int | None:
+    display_mod.blocking_stdio()
+    # Before anything reads or writes ~/.js: move the old locations in, once,
+    # then make sure every directory of the layout is there.
+    _home.migrate_once()
+    with contextlib.suppress(OSError):
+        _paths.ensure_home()
+    try:
+        _home.sweep_tmp()
+    except (OSError, ValueError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
+    return None
+
+
+def _run_acp(dispatch_argv: list[str]) -> int:
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            parser = command_line.parser()
+            _refuse_glued_short_options(parser, dispatch_argv)
+            try:
+                args = parser.parse_args(dispatch_argv)
+            except SystemExit as exc:
+                if exc.code == 0:
+                    parser.error(msgs.ACP_HELP_UNSUPPORTED.text())
+                raise
+            for name in (
+                "cd", "prompt", "last_prompt", "files", "session", "session_key", "last", "no_save",
+                "json", "json_stream", "quiet", "debug", "debug_file", "stats_json", "stats_csv",
+                "verify", "bench", "loop", "lock", "commit", "compact", "migrate_config",
+                "login", "logout", "refresh_model_catalog", "list_sessions", "list_agents",
+                "list_models", "list_providers", "list_logins", "target",
+            ):
+                value = getattr(args, name)
+                if value not in (None, False, []):
+                    option = command_line.flag(name) if name != "target" else value
+                    parser.error(msgs.ACP_UNSUPPORTED.text(option=option))
+            if args.bare and args.agent is not None:
+                parser.error(msgs.BARE_WITH_AGENT.text())
+            if (error := _startup()) is not None:
+                return error
+            from . import acp_agent
+
+        options = command_line.words([arg for arg in command_line.read(dispatch_argv)
+                                      if arg.dest != "acp" and arg.words != ("--",)])
+        return acp_agent.run(options)
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2

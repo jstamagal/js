@@ -15,6 +15,8 @@ js --verify --json
 A prompt result includes `answer`, `session`, `provider`, `model`, `effort` and
 `usage`, plus the existing statistics payload (`agent`, `turns`). A failed run
 reports `ok: false` and an `exit_code`. `--no-save` leaves `session` null.
+When a turn reaches its output or round limit, or the provider refuses the
+request, `stop_reason` is `max_tokens`, `max_turn_requests` or `refusal`.
 
 A benchmark keeps its original `agent`, `model`, `provider` and `benchmarks`
 object. Each row adds `tools`: names in call order with repeats retained;

@@ -177,6 +177,15 @@ Sampling flags override `--extra`, agent sampling and jsrc: `--temperature`,
 The Continue line carries the effective model, effort, samplers, profile and
 prompt/tool switches. A resumed chat session keeps chat mode.
 
+## T3 Code
+
+Run `js --acp` to use js as a local Agent Client Protocol provider. In T3 Code,
+open **Settings → Providers → Add provider → Show more → Local ACP command**.
+Use the absolute path printed by `command -v js` as the executable, enter
+`--acp` as one argument, and name the provider `js`. Select it in a thread.
+The project's js configuration supplies the agent, model and tools.
+See [ACP sessions and launch options](docs/user-guide.md#agent-client-protocol).
+
 ## Provider Management
 
 `js --login` opens saved providers with their name, source, base URL, masked key,

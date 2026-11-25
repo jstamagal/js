@@ -24,6 +24,7 @@ dependencies = [
     # The jev tool.
     "typesafe-sdk>=0.7.5",
     "markdown-it-py>=3.0",
+    "agent-client-protocol>=1.0.0",
 ]
 
 [project.optional-dependencies]

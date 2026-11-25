@@ -256,6 +256,33 @@ class _StreamCapture:
                        path if self._spilled else None)
 
 
+def descendants(root_pid: int) -> list[tuple[int, int]]:
+    """Pids and process groups below a process, including children in new sessions."""
+    children: dict[int, list[tuple[int, int]]] = {}
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return []
+    with entries:
+        for entry in entries:
+            if not entry.name.isdecimal():
+                continue
+            try:
+                stat = Path(entry.path, "stat").read_bytes()
+                fields = stat[stat.rfind(b")") + 2:].split()
+                parent, group = int(fields[1]), int(fields[2])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(parent, []).append((int(entry.name), group))
+    found = []
+    pending = [root_pid]
+    while pending:
+        for pid, group in children.get(pending.pop(), ()):
+            found.append((pid, group))
+            pending.append(pid)
+    return found
+
+
 def _session_members(sid: int) -> list[int]:
     """Pids in session ``sid``, read from /proc (empty where there is none)."""
     found = []

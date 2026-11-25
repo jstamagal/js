@@ -152,7 +152,7 @@ pi retries once. Codex does not recover inside a normal turn.
 ## Entirely lacking
 
 - **Cost and cumulative token accounting** (done in js-1g1.19: `usage.py`, `/cost`, the status bar).
-- **Structured headless output.** `-p --json-stream` streams events (`headless.py`), while `--json` returns one final object; there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
+- **Structured headless output.** `-p --json-stream` streams events and `--json` returns one final object. Clients such as T3 Code can drive a conversation over JSON-RPC with `js --acp`.
 - **Branch, fork and rewind of history.** Branch done: the session picker branches a session at a message.
 - **An in-REPL picker, titles and search.** Done: `/session` opens the picker with `/` search, and `/name` titles a session.
 - **Plugins, or an in-process extension API** for registering tools or rewriting calls.

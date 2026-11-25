@@ -108,6 +108,7 @@ def parser() -> argparse.ArgumentParser:
     groups['MODELS & LOGINS'].add_argument("--list-logins", action="store_true", help=msgs.OPT_LIST_LOGINS.words())
     groups['MODELS & LOGINS'].add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_LIST_MODELS.words())
     groups['MODELS & LOGINS'].add_argument("--refresh-model-catalog", action="store_true", help=msgs.OPT_REFRESH_MODEL_CATALOG.words())
+    groups['MODES'].add_argument("--acp", action="store_true", help=msgs.OPT_ACP.words())
     groups['MODES'].add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.words())
     groups['MODES'].add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.words())
     groups['WHAT THE MODEL GETS'].add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",

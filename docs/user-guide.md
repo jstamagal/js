@@ -76,6 +76,33 @@ Use another prompt-directory agent:
 js --agent slim -p "inspect the runtime and report risks"
 ```
 
+## Agent Client Protocol
+
+`js --acp` speaks ACP v1 over stdin and stdout. T3 Code launches it on the
+machine hosting the selected environment. In **Settings → Providers → Add
+provider → Show more → Local ACP command**, enter the path from
+`command -v js` as the executable, `--acp` as an argument, and `js` as the
+display name. Open a thread in the project and select the js provider. Leave
+the picker on the js default to use the session or configured model, or select
+a `provider/model` from the profile's saved model list. The selection survives
+a reconnect.
+
+Each argument gets its own row. For example, to use the stock `slim` agent,
+enter `--acp`, `--agent` and `slim` in three rows. Add `--model` and your
+`provider/model` as two more rows to pin the model for that provider instance.
+The launcher needs `uv` on the T3 server's PATH. Use an absolute path for a
+custom `--home`. Provider logins, API keys and project settings come from the
+same sources as a terminal run.
+
+T3 supplies the working directory and any session MCP servers. Each ACP
+session has its own saved js conversation, so T3 can resume it after a
+reconnect. Text responses, reasoning and tool activity stream into the thread.
+When js requests permission for a tool, T3 applies the thread's permission
+mode. Cancelling a prompt stops the active turn. Each prompt runs in a fresh
+worker in the session directory. Conversation history and workspace files
+carry across prompts. In-memory shell, terminal and kernel handles last for
+the turn that opened them. The ACP input supports text and text resources.
+
 ## Interactive REPL
 
 ```bash
