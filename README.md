@@ -128,8 +128,8 @@ its line. Nothing from the environment, a login or the defaults goes in, every
 other line is left alone, and no backup copy is made.
 
 Everything js keeps outside a project lives in `~/.js/`: `jsrc`, `logins/`,
-saved sessions at `sessions/<start-dir>/<session>.jsonl`, filed by the
-directory js started in, each with a readable `.txt` transcript beside it,
+saved sessions at `sessions/<project>/<session>.jsonl`, filed by the
+project root (else the directory js started in), each with a readable `.txt` transcript beside it,
 global prompt-directory agents in `agents/`, skills in
 `skills/`, and per-agent runtime state in `state/`. On first start js moves its
 old XDG config and data directories in; `just migrate-home` previews that. Session memory is append-only JSONL

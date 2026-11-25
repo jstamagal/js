@@ -28,6 +28,8 @@ variables and of any filename convention:
 | `CURRENT_SESSION_AGENT` | Active agent id. |
 | `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
 | `JS_HOME` | Absolute home selected by `--home`, `JS_HOME` or `~/.js`; always set. |
+| `CURRENT_PROJECT` | The project's name: the last component of `CURRENT_PROJECT_ROOT`, e.g. `monorepo`. |
+| `CURRENT_PROJECT_ROOT` | Absolute project root: the project chain's root, else the directory js started in. Sessions are filed under it. |
 
 ```text
 This is session %%CURRENT_SESSION%% using %%CURRENT_SESSION_MODEL%%.

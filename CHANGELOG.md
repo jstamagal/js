@@ -36,6 +36,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--no-isolate` force or ignore it for one run. The REPL banner names the
   border, and `/save` writes the border layer's `jsrc`.
 
+- **Sessions are filed by project.** A run files its sessions under its
+  project root (the project chain's root), else under the directory it
+  started in: `~/monorepo` and `~/monorepo/packages/dingus` both use
+  `~/.js/sessions/-home-me-monorepo/`. Each start record still holds the
+  directory the run started in. `--session NAME` looks in the project's
+  folder, then in the start directory's own folder, where sessions filed
+  before this change stay, then everywhere; among several generated names
+  sharing a tail, the one started in this directory wins. Nothing is moved.
+  Prompts get `%%CURRENT_PROJECT%%` (the root's name) and
+  `%%CURRENT_PROJECT_ROOT%%` (its absolute path).
+
 - **Dependencies bumped; ruff is no longer held back.**
   - The lock moves to current releases, including:
     - ai 0.5.2 → 0.9.0

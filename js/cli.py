@@ -87,7 +87,7 @@ def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None,
     if name is None:
         return True
     try:
-        session_file = resolve_session_file(cfg.sessions_dir, name)
+        session_file = resolve_session_file(cfg.sessions_dir, name, start=cfg.project_dir)
     except ValueError:
         # No such session yet: the run starts it.
         return True

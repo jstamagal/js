@@ -267,7 +267,7 @@ def inherit_session_chat(session: str | None) -> bool:
     if not session:
         return False
     try:
-        path = resolve_session_file(session_store.folder_for(Path.cwd()), session)
+        path = resolve_session_file(session_store.project_folder(Path.cwd()), session)
         metadata = first_metadata(path)
     except (ValueError, OSError):
         return False

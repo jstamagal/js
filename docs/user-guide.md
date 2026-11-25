@@ -776,15 +776,16 @@ command string.
 
 ## Sessions And Memory
 
-Saved sessions are filed by the directory js started in:
+Saved sessions are filed by the project js started in:
 
 ```text
-~/.js/sessions/<start-dir>/<session>.jsonl   the record
-~/.js/sessions/<start-dir>/<session>.txt     a readable transcript
-~/.js/sessions/<start-dir>/<session>/        its subagent runs
+~/.js/sessions/<project>/<session>.jsonl   the record
+~/.js/sessions/<project>/<session>.txt     a readable transcript
+~/.js/sessions/<project>/<session>/        its subagent runs
 ```
 
-`<start-dir>` is the absolute path with `/` and `_` replaced by `-`. Use
+`<project>` is the project root (the nearest `.git`), else the start
+directory, as an absolute path with `/` and `_` replaced by `-`. Use
 `--session NAME` to continue a saved session from any directory, and `/name
 <text>` to title one. A bare `js --session`, or `/session` in the REPL, opens
 the session picker: every session, the one last written to first, with search. See [configuration-and-sessions.md](configuration-and-sessions.md).

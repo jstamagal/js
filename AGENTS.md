@@ -71,7 +71,7 @@ home included, and the nearest marker wins; outside a repository it is a
 root; `--isolate`/`--no-isolate` force or
 ignore it per run. Config layers
 `defaults/jsrc` < home `jsrc` < each chain `.js/jsrc` then `.js/jsrc.local` <
-presets < env < `--extra`; `set -KEY` falls back to the layer below. Sessions are append-only JSONL and
+presets < env < `--extra`; `set -KEY` falls back to the layer below. Sessions are filed by project root (`paths.project_namespace`; the start directory outside a project), are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
 guard; preserve it. Instructions: `JS.md`/`JS.local.md` from the home and
@@ -85,7 +85,8 @@ layers. Skills shadow whole directories by name. Only agents, skills, commands,
 toolbox, tools.yaml and jsrc use the project chain. Missing named setup is a hard error.
 `--home DIR` beats `JS_HOME`, then `~/.js`; the selected absolute directory holds
 all configuration, sessions, logs, state, cache and tmp. Prompts and shell commands
-receive `JS_HOME`; inline prompts also support `{{JS_HOME}}` and `%%JS_HOME%%`.
+receive `JS_HOME`; inline prompts also support `{{JS_HOME}}` and `%%JS_HOME%%`, and
+`%%CURRENT_PROJECT%%`/`%%CURRENT_PROJECT_ROOT%%` for the project.
 
 `--json` prints one final object; `--json-stream` streams typed JSON Lines.
 Use `--list-models` or `--list-agents` for text or JSON; `--list-sessions`,

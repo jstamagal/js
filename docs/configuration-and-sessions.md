@@ -351,7 +351,7 @@ project.
   logins/
     logins.toml
     models-cache.json
-  sessions/<start-dir>/   # the start directory, / and _ as - (~/js -> -home-me-js)
+  sessions/<project>/    # the project root, / and _ as - (~/js -> -home-me-js)
     <session>.jsonl      # the record, append-only
     <session>.txt        # its readable transcript
     <session>/           # its subagent runs
@@ -467,15 +467,26 @@ entries in `noun:modifier` form, and optional `model:`, `secondary_model:`,
 
 ## Session Resolution
 
-Sessions are filed by the directory js started in:
-`~/.js/sessions/<start-dir>/`, where the folder name is the absolute path with
-`/` and `_` replaced by `-`. An agent in `~/js/js/toolkit` greps
-`~/.js/sessions/-home-me-js-js-toolkit/*.txt`; a prefix glob
-(`-home-me-js*`) covers a tree.
+Sessions are filed by the project js started in:
+`~/.js/sessions/<project>/`, where `<project>` is the project root (the
+project chain's root: the nearest `.git`, lifted out of a submodule), else the
+directory js started in, as an absolute path with `/` and `_` replaced by
+`-`. A run in `~/js/js/toolkit` files its sessions in
+`~/.js/sessions/-home-me-js/`; each start record holds the directory the run
+started in (`cwd`).
+
+When the repository root is your home directory, sessions are filed by the
+start directory or its isolation border.
+
+`--session NAME` looks in the project's folder first, then in the start
+directory's own folder (sessions filed there before they were filed by
+project stay there, unmoved), then in every folder. A tail of a generated name
+that several sessions in one folder share resolves to the one started in this
+directory, when exactly one was.
 
 Prompt and pipe runs save by default. Without `--session`, a saved run reserves
 a new session named `YYYY-MM-DDTHHMM-xxxx` (local time, four hex digits) in the
-current directory's folder and prints a resume command after the answer. This
+project's folder and prints a resume command after the answer. This
 is the normal choice for an agent driver: use the same session for review and
 correction rounds so the model does not have to re-read all prior context.
 

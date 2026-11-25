@@ -78,10 +78,15 @@ _CODE_ENV: ContextVar[dict | None] = ContextVar("js_expansion_code_env", default
 
 
 def session_variables(cfg) -> dict[str, str]:
-    """Built-in values for the session and effective model in ``cfg``."""
+    """Built-in values for the session, effective model and project in ``cfg``.
+    The project is `paths.project_namespace` of the run's directory: its name
+    is the last component of its root."""
     path = Path(getattr(cfg, "session_file", os.devnull)).expanduser().absolute()
+    project = paths.project_namespace(Path(getattr(cfg, "project_dir", None) or Path.cwd()))
     return {
         "JS_HOME": str(paths.home()),
+        "CURRENT_PROJECT": project.name or str(project),
+        "CURRENT_PROJECT_ROOT": str(project),
         "CURRENT_SESSION": path.stem if path != Path(os.devnull) else "",
         "CURRENT_SESSION_FULLPATH": str(path),
         "CURRENT_SESSION_AGENT": getattr(cfg, "agent_id", ""),
