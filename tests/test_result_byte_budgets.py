@@ -6,7 +6,6 @@ import os
 import ai
 import ai.types.messages
 import pytest
-from PIL import Image
 from turn_driver import config, registry, run
 
 from js import media, result_caps, runtime, settings, tool_result_messages
@@ -80,14 +79,17 @@ def test_media_over_tool_media_max_is_replaced_by_a_line_naming_the_cap(monkeypa
 
 
 def _png(side: int, shade: int = 0) -> bytes:
+    image = pytest.importorskip("PIL.Image")
     out = io.BytesIO()
     # Uncompressed grayscale makes the PNG just over side * side bytes.
-    Image.new("L", (side, side), color=shade).save(out, format="PNG", compress_level=0)
+    image.new("L", (side, side), color=shade).save(out, format="PNG", compress_level=0)
     return out.getvalue()
 
 
 @pytest.mark.parametrize("side, count", [(400, 1), (800, 1), (400, 3)])
 def test_screenshots_reach_the_provider_under_the_stock_caps(side, count, tmp_path, monkeypatch):
+    image_module = pytest.importorskip("PIL.Image")
+
     def screenshot(index):
         return mcp_tool_result(CallToolResult.from_wire({"content": [
             {"type": "text", "text": f"Screen {index}"},
@@ -107,7 +109,7 @@ def test_screenshots_reach_the_provider_under_the_stock_caps(side, count, tmp_pa
     assert len(images) == count
     for i, part in enumerate(images):
         assert f"Screen {i}" in turn.received_results()[0][f"shot-{i}"]
-        with Image.open(io.BytesIO(part.data)) as image:
+        with image_module.open(io.BytesIO(part.data)) as image:
             assert image.size == (side, side)
             assert image.getextrema() == (i, i)
 
