@@ -361,10 +361,9 @@ def searched(rel: str | Path = "", roots: Iterable[Path] | None = None) -> str:
 
 
 # `find` of a path outside the project scopes, by the path, the stock and home
-# directories, the
-# start directory, --isolate and the modification time of the home directory
-# that would hold it. The stock copy never changes under a run, so a file the
-# home gains or loses changes the key.
+# directories, the start directory, --isolate and the modification time of the
+# home directory that would hold it. The stock copy never changes under a run,
+# so a file the home gains or loses changes the key.
 _FOUND: dict[tuple, Path | None] = {}
 
 
@@ -381,11 +380,16 @@ def find(rel: str | Path) -> Path | None:
     if path.parts and path.parts[0] not in _PROJECT_SCOPES and not path.is_absolute():
         selected = home()
         key = (str(path), str(defaults_dir()), str(selected), os.getcwd(), _ISOLATE, _mtime((selected / path).parent))
-        if key not in _FOUND:
-            if len(_FOUND) >= 256:
-                _FOUND.clear()
-            _FOUND[key] = next((root / path for root in reversed(_file_layers(path)) if (root / path).is_file()), None)
-        return _FOUND[key]
+        # Read once: another thread may clear the cache between a store and a lookup.
+        try:
+            return _FOUND[key]
+        except KeyError:
+            pass
+        found = next((root / path for root in reversed(_file_layers(path)) if (root / path).is_file()), None)
+        if len(_FOUND) >= 256:
+            _FOUND.clear()
+        _FOUND[key] = found
+        return found
     return next((root / rel for root in reversed(_file_layers(rel)) if (root / rel).is_file()), None)
 
 
