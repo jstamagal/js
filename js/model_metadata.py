@@ -18,7 +18,7 @@ import tempfile
 import time
 from contextlib import closing
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -127,8 +127,58 @@ def reset_caches() -> None:
     _checked.clear()
 
 
+_ROWS_VERSION = 1
+
+
+def _rows_stamp() -> list:
+    """What `_all_models` reads: the catalog database in use and the release
+    dates beside it, each by path, size and modification time."""
+    stamp: list = [_ROWS_VERSION]
+    for path in (modelsdotdev_data._database_path(), _custom_db_path()):
+        try:
+            stat = path.stat()
+            stamp.append([str(path), stat.st_size, stat.st_mtime_ns])
+        except OSError:
+            stamp.append([str(path), None, None])
+    return stamp
+
+
+def _rows_file() -> Path:
+    return paths.model_catalog_dir() / "rows.json"
+
+
+def _saved_rows(stamp: list) -> tuple[_ModelRow, ...] | None:
+    """The rows `_all_models` saved for the databases ``stamp`` names, or None."""
+    try:
+        saved = json.loads(_rows_file().read_text(encoding="utf-8"))
+        if saved["stamp"] != stamp:
+            return None
+        return tuple(_ModelRow(*row) for row in saved["rows"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_rows(stamp: list, rows: tuple[_ModelRow, ...]) -> None:
+    target = _rows_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
+                                         delete=False, encoding="utf-8") as staged:
+            json.dump({"stamp": stamp, "rows": [astuple(row) for row in rows]}, staged)
+        os.replace(staged.name, target)
+    except OSError:
+        pass
+
+
 @lru_cache(maxsize=1)
 def _all_models() -> tuple[_ModelRow, ...]:
+    """Every catalog model as the row js matches against. Reading the catalog
+    builds an object a model, so the rows are kept in the cache directory and
+    read back while the databases they came from are unchanged."""
+    stamp = _rows_stamp()
+    saved = _saved_rows(stamp)
+    if saved is not None:
+        return saved
     rows: list[_ModelRow] = []
     dates = _release_dates()
     for model in modelsdotdev.iter_models():
@@ -145,6 +195,7 @@ def _all_models() -> tuple[_ModelRow, ...]:
                 image_input=_takes_image(model),
             )
         )
+    _save_rows(stamp, tuple(rows))
     return tuple(rows)
 
 
@@ -236,9 +287,9 @@ def _image_inputs() -> dict[str, bool]:
     """Every catalog model's bare name, and whether any model by that name
     takes image input."""
     found: dict[str, bool] = {}
-    for model in modelsdotdev.iter_models():
-        name = _bare_model_name(model.id)
-        found[name] = found.get(name, False) or _takes_image(model)
+    for row in _all_models():
+        name = _bare_model_name(row.model_id)
+        found[name] = found.get(name, False) or row.image_input
     return found
 
 

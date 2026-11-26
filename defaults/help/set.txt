@@ -795,6 +795,10 @@ SPINNER_FRAMES
 SCROLLBACK_LINES_MAX
     Lines the full-screen view keeps in scrollback.
 
+SCREEN_REDRAWS_MAX
+    Times a second the full-screen view redraws at most, however fast text
+    arrives. 0 redraws on every change.
+
 WINDOW_MAX
     Windows open at once on the REPL screen, window 1 included. A subagent
     launched with this many open runs without one.

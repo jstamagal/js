@@ -1111,6 +1111,10 @@
 # Lines the full-screen view keeps in scrollback.
 #set SCROLLBACK_LINES_MAX 5000
 
+# Times a second the full-screen view redraws at most, however fast text
+# arrives. 0: redraw on every change.
+#set SCREEN_REDRAWS_MAX 30
+
 # Windows open at once on the REPL screen, window 1 included. A subagent
 # launched with this many open runs without one.
 #set WINDOW_MAX 9

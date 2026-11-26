@@ -45,7 +45,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -187,17 +187,23 @@ def theme_name() -> str:
     return _overrides.get(THEME) or defaults().get(THEME, "")
 
 
-def lookup(name: str, *, transform_default=None) -> str | None:
+def _layers() -> tuple[dict[str, str], dict[str, str]]:
+    """The theme's entries and the defaults, as they are now."""
+    stock = defaults()
+    return theme_entries(_overrides.get(THEME) or stock.get(THEME, "")), stock
+
+
+def lookup(name: str, *, transform_default=None, layers: tuple[dict[str, str], dict[str, str]] | None = None) -> str | None:
     """Entry ``name``'s value: the operator's, the theme's, else the default;
-    None when none of them sets it."""
+    None when none of them sets it. ``layers`` is a `_layers()` already read."""
     if name in _overrides:
         return _overrides[name]
     if name == THEME:
         return theme_name()
-    theme = theme_entries(theme_name())
+    theme, stock = layers or _layers()
     if name in theme:
         return theme[name]
-    value = defaults().get(name)
+    value = stock.get(name)
     return transform_default(value) if value is not None and transform_default is not None else value
 
 
@@ -331,24 +337,31 @@ def unset_entry(name: str) -> bool:
 # Colours
 # ---------------------------------------------------------------------------
 
-def hex_for(name: str, _depth: int = 0) -> str | None:
+def hex_for(name: str, _depth: int = 0, _read: tuple[dict[str, str], dict[str, str]] | None = None) -> str | None:
     """Colour entry ``name`` as `#rrggbb`, or None when it resolves to none."""
     if _depth > 8:
         return None
-    value = lookup(name) or ""
+    layers = _read or _layers()
+    value = lookup(name, layers=layers) or ""
     for part in value.split("|"):
         part = part.strip()
         if _HEX.fullmatch(part):
             return part.lower()
         if _SLOT.fullmatch(part):
-            found = hex_for(palette_name(int(part)), _depth + 1) if int(part) < PALETTE_SIZE else None
+            found = hex_for(palette_name(int(part)), _depth + 1, layers) if int(part) < PALETTE_SIZE else None
         elif part.startswith("$") and is_colour_name(part[1:]):
-            found = hex_for(part[1:], _depth + 1)
+            found = hex_for(part[1:], _depth + 1, layers)
         else:
             found = None
         if found is not None:
             return found
     return None
+
+
+def hexes(names: Iterable[str]) -> list[str | None]:
+    """`hex_for` of each of ``names``, from one read of the theme and the defaults."""
+    layers = _layers()
+    return [hex_for(name, 0, layers) for name in names]
 
 
 def _rgb(colour: str) -> str:

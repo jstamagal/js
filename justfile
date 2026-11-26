@@ -446,6 +446,13 @@ clean:
 swarmbench *args:
     uv run python bench/swarm/run.py "$@"
 
+# ── harness bench (bench/harness) ───────────────────────────────────────────
+
+# what startup, config, each tool, saves and a turn cost: just harnessbench tools turn
+[positional-arguments]
+harnessbench *args:
+    uv run python bench/harness/run.py "$@"
+
 # ── tool bench (bench/toolbench) ────────────────────────────────────────────
 
 # build the sandbox image: js wheel + rg/fd + python/node/go toolchains

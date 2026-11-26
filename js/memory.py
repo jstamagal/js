@@ -709,8 +709,12 @@ def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None
         elif isinstance(messages, _Snapshot) and messages.revision is not None:
             raise OSError(errno.ESTALE, "session removed; reload before saving", str(memory_file))
         common = _saved_prefix(memory_file, key, messages)
+        # What is not yet known to replay as it is: all of it, or what a
+        # remembered save does not cover.
+        unchecked = 0
         if common is not None:
             changed = bool(messages[common:])
+            unchecked = common
         else:
             persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
             comparable = _without_answer_reasoning_text(messages)
@@ -725,7 +729,7 @@ def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None
         for message in messages[common:]:
             _append_owned(memory_file, _message_record(message, stamp))
         revision = _stat_revision(memory_file)
-        if revision is not None and memory_file != Path(os.devnull) and _replays_as_is(messages):
+        if revision is not None and memory_file != Path(os.devnull) and _replays_as_is(messages[unchecked:]):
             _remember_saved(key, revision, messages)
         if isinstance(messages, _Snapshot) and memory_file.exists():
             with _open_locked(memory_file, "r") as stream:
@@ -774,7 +778,9 @@ def _saved_prefix(path: Path, key: str, messages: list[dict]) -> int | None:
 
 def _replays_as_is(messages: list[dict]) -> bool:
     """True when replay hands back ``messages`` unchanged: no tool call
-    without its result, no stray result (`_heal_orphaned_tool_calls`)."""
+    without its result, no stray result (`_heal_orphaned_tool_calls`). A
+    history that replays as it is still does with such messages after it, so
+    a remembered save's messages need no second look."""
     healed = _heal_orphaned_tool_calls(messages)
     return len(healed) == len(messages) and all(a is b for a, b in zip(healed, messages))
 

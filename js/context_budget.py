@@ -13,6 +13,7 @@ import functools
 import hashlib
 import json
 import math
+import operator
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -73,7 +74,19 @@ class _UsageAnchor:
     message_count: int
     system_tokens: int
     tool_tokens: int
-    prefix_fingerprint: str | None = None
+    # The messages the usage measured, as the objects the history held then.
+    prefix: tuple[Any, ...] | None = None
+
+    def measured(self, messages: list[Any] | tuple[Any, ...]) -> bool:
+        """Whether ``messages`` still starts with the messages this usage
+        measured. A history that holds the same objects does; one that holds
+        others in their place does when they say the same."""
+        if self.prefix is None:
+            return True
+        current = messages[: self.message_count]
+        if len(current) == len(self.prefix) and all(map(operator.is_, current, self.prefix)):
+            return True
+        return _messages_fingerprint(current) == _messages_fingerprint(self.prefix)
 
 
 def _as_nonnegative_int(value: Any) -> int:
@@ -312,11 +325,7 @@ class TokenState:
             message_count=max(0, int(message_count)),
             system_tokens=estimate_system_tokens(system, chars_per_token=self.chars_per_token),
             tool_tokens=estimate_tools_tokens(tools, chars_per_token=self.chars_per_token),
-            prefix_fingerprint=(
-                _messages_fingerprint(messages[: max(0, int(message_count))])
-                if messages is not None
-                else None
-            ),
+            prefix=tuple(messages[: max(0, int(message_count))]) if messages is not None else None,
         )
 
     @property
@@ -348,9 +357,7 @@ class TokenState:
         anchor = self._anchor
         if anchor is None or anchor.usage.total_tokens <= 0 or anchor.message_count > len(messages):
             return self.chars_per_token
-        if anchor.prefix_fingerprint is not None and (
-            _messages_fingerprint(messages[:anchor.message_count]) != anchor.prefix_fingerprint
-        ):
+        if not anchor.measured(messages):
             return self.chars_per_token
         estimated = estimate_request_tokens(
             system=system,
@@ -384,10 +391,8 @@ class TokenState:
         )
         if self._anchor is None or self._anchor.message_count > len(messages):
             return estimate.total_tokens, estimate, False
-        if self._anchor.prefix_fingerprint is not None:
-            current_fingerprint = _messages_fingerprint(messages[: self._anchor.message_count])
-            if current_fingerprint != self._anchor.prefix_fingerprint:
-                return estimate.total_tokens, estimate, False
+        if not self._anchor.measured(messages):
+            return estimate.total_tokens, estimate, False
 
         delta_messages = messages[self._anchor.message_count :]
         delta_tokens = estimate_messages_tokens(delta_messages, chars_per_token=self.chars_per_token)

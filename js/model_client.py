@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import importlib
+import threading
 import time
 import uuid
 import weakref
@@ -221,6 +223,18 @@ def _shared_http_client(sdk: str) -> Any:
             from anthropic import DefaultAsyncHttpxClient
         client = clients[sdk] = DefaultAsyncHttpxClient()
     return client
+
+
+def load_sdk_in_background(provider_id: str | None, provider_base_url: str | None) -> None:
+    """Start importing the provider SDK a call to this route goes through, on
+    a thread of its own. The import is a few hundred milliseconds the first
+    call would otherwise spend; a REPL has them while its operator types."""
+    try:
+        sdk = routing.resolve_wire(provider_id, base_url=provider_base_url).sdk
+    except Exception:  # noqa: BLE001 - the call itself reports a route that does not resolve
+        return
+    if sdk in ("openai", "anthropic"):
+        threading.Thread(target=importlib.import_module, args=(sdk,), daemon=True, name="sdk-import").start()
 
 
 async def close_shared_http_clients() -> None:

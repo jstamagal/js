@@ -645,4 +645,5 @@ _THEME_ROLES = {
 
 def theme() -> Theme:
     """The colours /fset gives now."""
-    return Theme(**{field: fset.hex_for(role) or "default" for field, role in _THEME_ROLES.items()})
+    colours = fset.hexes(_THEME_ROLES.values())
+    return Theme(**{field: colour or "default" for field, colour in zip(_THEME_ROLES, colours, strict=True)})

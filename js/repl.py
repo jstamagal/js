@@ -1064,6 +1064,7 @@ class Repl:
                     ))
                     if self.banner:
                         print(self.banner)
+                    model_client.load_sdk_in_background(cfg.provider_id, cfg.provider_base_url)
                     repl_state.emit_session_event(state, telemetry, cfg, "session_start")
                     _show_resume(state, telemetry, screen.ScreenLive(loop, scrollback, app).width())
                     keepalive_task = loop.create_task(keepalive.run())

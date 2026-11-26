@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Saving a session appends without re-reading the file when nothing else wrote to it; the `.txt` transcript and search index update at the end of a turn instead of after every tool batch.
   - The model catalog freshness check, tool description rendering and session path resolution are cached; a swarm's streamed text events are flushed in batches of up to 50 ms.
 
+- **The harness repeats less of its own work.** A pass over everything js does regularly, measured with `just harnessbench` (`bench/harness`); numbers and causes are in `docs/harness-performance.md`.
+  - A tool result is rendered once for the screen and once, without colour, for the transcript log; it was highlighted two or three times and the colour then thrown away. Only the rows a folded `read` shows are highlighted.
+  - `shell`, prompt `!sh` blocks and every other captured command wait on the process and its pipes instead of polling them, so a command that takes 2 ms returns in 2 ms, not 11.
+  - The REPL redraws at most `SCREEN_REDRAWS_MAX` times a second (30) while text streams; 0 redraws on every change, as before.
+  - Startup reads the model catalog once and keeps the rows it needs in the cache directory, loads `defaults/jsrc` without composing a confirmation line per setting, and the REPL imports the provider SDK in the background while the prompt is idle.
+  - A tool call's arguments are checked against a validator kept per schema; saving a session checks only the new messages for unanswered tool calls; the usage anchor compares histories by message, not by hashing the whole history each round.
+  - Colour and theme lookups, the lexer for a file name, skill indexes and layered setup lookups no longer re-read or re-walk what has not changed.
+
 - **Kernel and toolbox fixes from an agent-style shakedown.**
   - `toolbox load` and `save` refuse while a kernel cell is still running, instead of queueing behind it and interrupting it on their timeout.
   - A kernel result over `TOOL_RESULT_MAX` cuts the middle of the printed output, so the traceback, `IMAGE` lines and the `HANDLE`/`NAMESPACE` line survive.
