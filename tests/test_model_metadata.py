@@ -12,11 +12,6 @@ import pytest
 from js import model_metadata
 
 
-@pytest.fixture(autouse=True)
-def _no_prior_refresh_failure(monkeypatch):
-    monkeypatch.setattr(model_metadata, "_refresh_failure", None)
-
-
 @pytest.mark.parametrize("model_name,expected", [
     ("gpt-5.99", False),
     ("gpt-5-mini", False),
@@ -110,38 +105,68 @@ def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypat
     assert limits.max_output_tokens == 384_000
 
 
-def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypatch, tmp_path: Path, capsys):
-    old_time = datetime.now(tz=UTC) - timedelta(days=5)
-    new_time = datetime.now(tz=UTC)
+def _stale_bundle(monkeypatch, tmp_path: Path, new_time: datetime):
+    """A bundled catalog five days old, no catalog of js's own, and a
+    download that writes one generated at ``new_time``."""
     bundled = tmp_path / "bundled.sqlite"
     custom = tmp_path / "custom.sqlite"
     status_path = tmp_path / "status.json"
-    _write_metadata_db(bundled, generated_at=old_time.isoformat())
-
+    _write_metadata_db(bundled, generated_at=(datetime.now(tz=UTC) - timedelta(days=5)).isoformat())
     monkeypatch.delenv("MODELDOTDEV_DATABASE_PATH", raising=False)
     monkeypatch.setattr(model_metadata, "bundled_db_path", lambda: bundled)
     monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
     monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
+    monkeypatch.setattr(model_metadata, "_refresh_claim_path", lambda: tmp_path / "refresh.claim")
 
     def fake_generate_database(*, output: Path, source: str = model_metadata.modelsdotdev_sync.API_URL):
         _write_metadata_db(output, generated_at=new_time.isoformat(), source=source)
-        return 140, 5142
 
     monkeypatch.setattr(model_metadata, "_generate_database", fake_generate_database)
-    model_metadata.lookup_limits.cache_clear()
+    return bundled, custom, status_path
 
+
+def test_a_stale_catalog_is_used_as_it_is_while_one_refresher_is_started(monkeypatch, tmp_path: Path, capsys):
+    bundled, custom, _status_path = _stale_bundle(monkeypatch, tmp_path, datetime.now(tz=UTC))
+    started: list[float] = []
+    monkeypatch.setattr(model_metadata, "_start_refresher", started.append)
+
+    statuses = [model_metadata.ensure_fresh_catalog() for _ in range(3)]
+    model_metadata._checked.clear()
+    statuses.append(model_metadata.ensure_fresh_catalog())
+
+    assert all(status is not None and status.db_path == bundled for status in statuses)
+    assert not custom.exists()
+    assert len(started) == 1
+    assert os.environ["MODELDOTDEV_DATABASE_PATH"] == str(bundled)
+    assert capsys.readouterr().err == ""
+
+
+def test_the_refresher_writes_the_catalog_and_lookups_then_read_it(monkeypatch, tmp_path: Path):
+    new_time = datetime.now(tz=UTC)
+    bundled, custom, status_path = _stale_bundle(monkeypatch, tmp_path, new_time)
+    assert model_metadata.ensure_fresh_catalog().db_path == bundled
+    dropped: list[bool] = []
+    monkeypatch.setattr(model_metadata.lookup_limits, "cache_clear", lambda: dropped.append(True))
+
+    assert model_metadata.refresh_if_older(8 * 3600) is True
+    assert model_metadata.refresh_if_older(8 * 3600) is False
     status = model_metadata.ensure_fresh_catalog()
 
-    assert status is not None
-    assert status.db_path == custom
+    assert status is not None and status.db_path == custom
     assert status.generated_at == new_time
-    assert status.refreshed_at is not None
     assert os.environ["MODELDOTDEV_DATABASE_PATH"] == str(custom)
-    payload = json.loads(status_path.read_text(encoding="utf-8"))
-    assert payload["db_path"] == str(custom)
-    assert payload["generated_at"] == new_time.isoformat()
-    assert payload["refreshed_at"] is not None
-    assert capsys.readouterr().err  # the refresh is announced
+    assert json.loads(status_path.read_text(encoding="utf-8"))["refreshed_at"] is not None
+    assert dropped
+
+
+def test_a_refresher_that_finds_another_at_work_leaves_it_to_it(monkeypatch, tmp_path: Path):
+    import fcntl
+
+    _bundled, custom, _status_path = _stale_bundle(monkeypatch, tmp_path, datetime.now(tz=UTC))
+    with open(tmp_path / "refresh.claim", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert model_metadata.refresh_if_older(8 * 3600) is False
+    assert not custom.exists()
 
 
 def test_ensure_fresh_catalog_keeps_recent_custom_db_without_refresh(monkeypatch, tmp_path: Path, capsys):
@@ -178,69 +203,19 @@ def test_ensure_fresh_catalog_keeps_recent_custom_db_without_refresh(monkeypatch
     assert capsys.readouterr().err == ""
 
 
-def test_ensure_fresh_catalog_warns_and_keeps_current_on_refresh_failure(monkeypatch, tmp_path: Path, capsys):
-    old_time = datetime.now(tz=UTC) - timedelta(days=5)
-    custom = tmp_path / "custom.sqlite"
-    status_path = tmp_path / "status.json"
-    _write_metadata_db(custom, generated_at=old_time.isoformat())
-    status_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "db_path": str(custom),
-                "generated_at": old_time.isoformat(),
-                "refreshed_at": old_time.isoformat(),
-                "source": "https://models.dev/api.json",
-                "provider_count": 140,
-                "model_count": 5142,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    monkeypatch.delenv("MODELDOTDEV_DATABASE_PATH", raising=False)
-    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
-    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
+def test_a_failed_download_leaves_the_catalog_in_use_and_a_forced_refresh_raises(monkeypatch, tmp_path: Path):
+    _bundled, custom, _status_path = _stale_bundle(monkeypatch, tmp_path, datetime.now(tz=UTC))
 
     def fail_refresh(**_kwargs):
-        raise RuntimeError("offline")
+        raise OSError("offline")
 
     monkeypatch.setattr(model_metadata, "_generate_database", fail_refresh)
-
-    status = model_metadata.ensure_fresh_catalog()
-
-    assert status is not None
-    assert status.db_path == custom
-    assert "RuntimeError: offline" in capsys.readouterr().err
-
-
-def test_failed_refresh_is_tried_once_per_process(monkeypatch, tmp_path: Path, capsys):
-    old_time = datetime.now(tz=UTC) - timedelta(days=5)
-    custom = tmp_path / "custom.sqlite"
-    _write_metadata_db(custom, generated_at=old_time.isoformat())
-    monkeypatch.delenv("MODELDOTDEV_DATABASE_PATH", raising=False)
-    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
-    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: tmp_path / "status.json")
-    attempts: list[str] = []
-
-    def fail_refresh(**_kwargs):
-        attempts.append("try")
-        raise OSError("[Errno -3] Temporary failure\nin name resolution")
-
-    monkeypatch.setattr(model_metadata, "_generate_database", fail_refresh)
-
-    statuses = [model_metadata.ensure_fresh_catalog() for _ in range(3)]
-
-    assert attempts == ["try"]
-    assert all(status is not None and status.db_path == custom for status in statuses)
-    # The failure reaches stderr once, with its two-line error on one line.
-    reports = [line for line in capsys.readouterr().err.splitlines() if "Temporary failure" in line]
-    assert len(reports) == 1
-    assert "in name resolution" in reports[0]
-
-    # An explicit refresh still tries.
-    model_metadata.ensure_fresh_catalog(force=True)
-    assert attempts == ["try", "try"]
+    with pytest.raises(OSError):
+        model_metadata.refresh_if_older(8 * 3600)
+    with pytest.raises(OSError):
+        model_metadata.ensure_fresh_catalog(force=True)
+    assert not custom.exists()
+    assert model_metadata.ensure_fresh_catalog() is not None
 
 
 def test_catalog_refresh_retains_release_dates(monkeypatch, tmp_path):

@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Startup reads the model catalog once and keeps the rows it needs in the cache directory, loads `defaults/jsrc` without composing a confirmation line per setting, and the REPL imports the provider SDK in the background while the prompt is idle.
   - A tool call's arguments are checked against a validator kept per schema; saving a session checks only the new messages for unanswered tool calls; the usage anchor compares histories by message, not by hashing the whole history each round.
   - Colour and theme lookups, the lexer for a file name, skill indexes and layered setup lookups no longer re-read or re-walk what has not changed.
+  - A stale models.dev catalog no longer holds up a start. The catalog there is gets used, and a detached process downloads the new one without printing anything; `--refresh-model-catalog` still refreshes in the foreground. The `CATALOG_UPDATE_FAILED` fset entry is gone with the message.
   - `js --help` prints its usage in 0.06 s instead of 0.8 s: the command starts in `js.entry`, and `js.cli` imports the REPL, `--bench`, `--commit`, `--verify` and `--loop` only for the mode that runs them.
   - Helpers that existed in two or more copies have one: the list pickers' application and search keys, the served context-window lookup, MCP redaction, the session config stamp, jail path resolution and the file stamp caches key on.
 

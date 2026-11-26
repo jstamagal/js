@@ -871,7 +871,7 @@ ENDPOINT_DEFAULT_KEY
     API key for an endpoint URI that names none.
 
 MODEL_CATALOG_AUTO_REFRESH
-    on: a stale model catalog is refreshed at startup.
+    on: a stale model catalog is refreshed by a background process.
 
 MODEL_CATALOG_AGE_MAX
     Seconds before the model catalog counts as stale.

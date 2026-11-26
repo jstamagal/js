@@ -1194,7 +1194,7 @@
 # API key for an endpoint URI that names none.
 #set ENDPOINT_DEFAULT_KEY sk-dummy-key
 
-# on: a stale model catalog is refreshed at startup.
+# on: a stale model catalog is refreshed by a background process.
 #set MODEL_CATALOG_AUTO_REFRESH on
 
 # Seconds before the model catalog counts as stale.

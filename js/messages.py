@@ -999,8 +999,6 @@ NET_OUTAGE_STOP = Message("{failure} Stopped after {n} retries; try again later 
 NET_OUTAGE_ACTION = Message("{failure} Try again later or choose another provider.")
 NET_FAILURE_REPEATED = Message("{failure} (repeated {count} times)", banner=False)
 NET_RETRY_RECOVERED = Message("Recovered after {count} repeated failures.")
-CATALOG_UPDATING = Message("Updating the models.dev cache.")
-CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}")
 
 # --- Login -------------------------------------------------------------------
 

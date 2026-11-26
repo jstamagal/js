@@ -749,8 +749,8 @@ reasoning tokens. `input_tokens` counts every prompt token, cache reads and
 writes included, for every provider.
 
 A call's cost comes from the models.dev catalog js caches (a lookup of a
-provider that is not built in refreshes a stale catalog, as any provider
-lookup does): fresh input, cache reads, cache writes and output each at
+provider that is not built in starts the background refresh of a stale
+catalog, as any provider lookup does): fresh input, cache reads, cache writes and output each at
 their own rate per million tokens, cache rates falling back to the input rate,
 and the price tier whose `min_context` the prompt reaches. A call that names a
 provider is priced only from that provider's catalog row, so a local
