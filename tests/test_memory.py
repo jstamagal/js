@@ -214,3 +214,74 @@ def test_the_history_a_compaction_mark_leaves_is_the_history_replay_rebuilds(tmp
     assert [m.get("content") for m in after] == [
         "<compaction-summary>\nS\n</compaction-summary>", "files", "u2", "a2"]
     assert "reasoning_parts" not in after[-1] and "reasoning_parts" in live[-1]
+
+
+def _records(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_a_save_that_only_appends_does_not_replay_the_file(tmp_path: Path, monkeypatch):
+    f = tmp_path / "s.jsonl"
+    live = [{"role": "user", "content": "go"}, _assistant_toolcall("tc1")]
+    live.append({"role": "tool", "tool_call_id": "tc1", "content": "ok"})
+    M.persist_messages(f, live)
+    replays = []
+    real = M.load_replay_messages
+    monkeypatch.setattr(M, "load_replay_messages", lambda path: replays.append(path) or real(path))
+
+    live.append({"role": "assistant", "content": "done"})
+    M.persist_messages(f, live)
+
+    assert replays == []
+    assert list(real(f)) == live
+    assert [r["kind"] for r in _records(f)] == ["message"] * 4
+
+
+def test_a_message_replaced_in_its_slot_is_written_as_a_rollback(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = [{"role": "user", "content": "go"}, {"role": "assistant", "content": "first"}]
+    M.persist_messages(f, live)
+
+    live[1] = {"role": "assistant", "content": "second"}
+    M.persist_messages(f, live)
+
+    assert list(M.load_replay_messages(f)) == live
+    assert any(r.get("marker") == "rollback_to:1" for r in _records(f))
+
+
+def test_a_file_another_writer_appended_to_is_replayed_before_saving(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = [{"role": "user", "content": "go"}]
+    M.persist_messages(f, live)
+    M.append_message(f, {"role": "assistant", "content": "from elsewhere"})
+
+    live.append({"role": "assistant", "content": "mine"})
+    M.persist_messages(f, live)
+
+    assert list(M.load_replay_messages(f)) == live
+
+
+def test_an_unanswered_tool_call_saved_mid_history_replays_healed(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = [{"role": "user", "content": "go"}, _assistant_toolcall("tc1")]
+    M.persist_messages(f, live)
+
+    live.append({"role": "user", "content": "next"})
+    M.persist_messages(f, live)
+
+    replayed = list(M.load_replay_messages(f))
+    assert [m["role"] for m in replayed] == ["user", "assistant", "tool", "user"]
+    assert replayed[2]["tool_call_id"] == "tc1"
+
+
+def test_a_save_that_skipped_the_transcript_is_caught_up_by_the_next_one(tmp_path: Path):
+    from js import session_store
+
+    f = tmp_path / "s.jsonl"
+    live = [{"role": "user", "content": "first words"}]
+    M.persist_messages(f, live, refresh_text=False)
+    assert not session_store.text_path(f).exists()
+
+    M.persist_messages(f, live)
+
+    assert "first words" in session_store.text_path(f).read_text()

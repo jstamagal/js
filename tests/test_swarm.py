@@ -868,3 +868,34 @@ def test_what_an_agent_writes_to_stderr_is_tagged_and_kept_in_its_own_file(tmp_p
     assert "[a] trouble in a" in err and "[b] trouble in b" in err
     for name in ("a", "b"):
         assert (tmp_path / "bus" / name / "stderr").read_text(encoding="utf-8") == f"trouble in {name}\n"
+
+
+def test_a_swarm_is_spread_over_one_process_per_sixteen_agents_up_to_the_cpus(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 8)
+    assert [swarm_run.processes_for(n, 0) for n in (1, 16, 17, 100, 500)] == [1, 1, 2, 7, 8]
+    assert swarm_run.processes_for(100, 1) == 1
+    assert swarm_run.processes_for(3, 12) == 3  # never more runners than agents
+    assert swarm_run.processes_for(100, 0, slots=2) == 2  # each runner holds a slot
+
+
+def test_a_sharded_spec_deals_every_agent_out_once_and_shares_the_slots():
+    raw = {"root": "/tmp/bus", "slots": 6, "agents": [{"name": f"a{i}"} for i in range(10)]}
+    shards = swarm_run._shard_specs(raw, 3)
+    names = [a["name"] for shard in shards for a in shard["agents"]]
+    assert sorted(names) == sorted(a["name"] for a in raw["agents"])
+    assert all(shard["processes"] == 1 and shard["root"] == "/tmp/bus" for shard in shards)
+    assert [shard["slots"] for shard in shards] == [2, 2, 2]
+    assert all("slots" not in s or s["slots"] == 0 for s in swarm_run._shard_specs({**raw, "slots": 0}, 3))
+
+
+def test_a_sharded_run_relays_every_runner_and_ends_once(tmp_path):
+    # An agent dir that does not exist fails each agent at configure, in its
+    # own runner process; the parent relays their events and ends the run.
+    agents = [{"name": f"a{i}", "agent": "no-such-agent", "opener": "go", "cwd": str(tmp_path)} for i in range(3)]
+    out = io.StringIO()
+
+    assert swarm_run.run_sharded(_spec(tmp_path, agents), 3, out=out) == 1
+    events = _events(out)
+    assert sorted(e["agent"] for e in events if e["type"] == "agent_end") == ["a0", "a1", "a2"]
+    assert [e["type"] for e in events].count("run_end") == 1 and events[-1]["agents"] == ["a0", "a1", "a2"]
+    assert not list((tmp_path / "bus" / ".runners").iterdir())

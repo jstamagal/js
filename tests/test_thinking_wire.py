@@ -170,12 +170,7 @@ class _Wire:
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(self.respond))
-        get_provider = model_client.ai.get_provider
-
-        def with_transport(*args, **kwargs):
-            return get_provider(*args, **kwargs, client=client)
-
-        monkeypatch.setattr(model_client.ai, "get_provider", with_transport)
+        monkeypatch.setattr(model_client, "_shared_http_client", lambda _sdk: client)
 
 
 def _send(monkeypatch, *, provider: str, model: str, effort: str | None,

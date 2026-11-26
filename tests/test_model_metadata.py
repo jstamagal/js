@@ -368,3 +368,20 @@ def test_capability_lookup_uses_the_callers_catalog_refresh(monkeypatch):
     monkeypatch.setattr(model_metadata, "lookup_limits", lambda *args: SimpleNamespace(context_window=1234))
     assert model_metadata.context_window("model", refresh=lambda: refreshes.append(True)) == 1234
     assert refreshes == [True]
+
+
+def test_the_catalog_check_is_reused_until_its_files_change(monkeypatch, tmp_path: Path):
+    custom, status_path = tmp_path / "models.db", tmp_path / "status.json"
+    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: custom)
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: status_path)
+    model_metadata.reset_caches()
+    checks = []
+    monkeypatch.setattr(model_metadata, "_ensure_fresh_catalog", lambda *, force: checks.append(force))
+
+    model_metadata.ensure_fresh_catalog()
+    model_metadata.ensure_fresh_catalog()
+    assert checks == [False]
+    status_path.write_text("{}")
+    model_metadata.ensure_fresh_catalog()
+    model_metadata.ensure_fresh_catalog(force=True)
+    assert checks == [False, False, True]

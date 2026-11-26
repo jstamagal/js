@@ -611,13 +611,14 @@ its best-matching row.
 
 The list and the search read `~/.js/cache/sessions.sqlite`: each session's
 summary and an FTS5 table of its text. Every write to a session updates its
-entry. On open, a file whose size or mtime differs from its entry is read
+entry (a turn's saves between tool batches wait for the turn's end). On open, a file whose size or mtime differs from its entry is read
 again, an entry whose file is gone is dropped, and a missing or unreadable
 index is built again from the sessions.
 
 ## The `.txt` Transcript
 
-Every write to a session's `.jsonl` brings the `.txt` beside it up to date:
+Every write to a session's `.jsonl` brings the `.txt` beside it up to date, except
+the saves after each tool batch inside a turn: the turn's end catches those up.
 
 ```text
 agent: defaultagent   dir: /home/me/js   mode: repl

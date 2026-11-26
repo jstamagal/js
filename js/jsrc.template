@@ -344,6 +344,10 @@
 # time. 0: no limit.
 #set SWARM_ACTIVE_MAX 0
 
+# How many processes a swarm's agents are spread over. 0: one per 16 agents,
+# up to one per CPU. 1: every agent in one process.
+#set SWARM_PROCESSES 0
+
 
 ################################################################################
 #  TOOL OUTPUT SIZES  --  how much a tool result can hand the model

@@ -1,6 +1,6 @@
-"""Every agent of a swarm in one process: ``python -m js.swarm run SPEC.json``.
+"""The agents of a swarm on one loop per runner process: ``python -m js.swarm run SPEC.json``.
 
-SPEC = {"root": ROOT, "slots": 0,
+SPEC = {"root": ROOT, "slots": 0, "processes": 0,
         "agents": [{"name": "kivu", "agent": "troop", "model": "cpa/deepseek-v4.1-flash",
                     "effort": "low", "opener": "You are kivu ...", "session": "troop-1-kivu",
                     "cwd": "/path", "seat_file": "/path/kivu.seat.md", "opts": {"limits.x": "1"}}]}
@@ -10,6 +10,8 @@ session and tool context, the bus tools on its surface, its inbox drained at
 every tool boundary, the turn persisted and the compaction trigger run before
 every sleep, and the sleep an await on the inbox. ``slots`` caps how many agents
 are mid-turn at once; 0 is no cap. ``recruit`` adds an agent to this loop.
+``processes`` (else SWARM_PROCESSES) spreads the agents over that many runner
+processes (`run_sharded`); 0 is one per AGENTS_PER_PROCESS, up to the CPUs.
 
 Two message kinds are the runner's, not the agent's (``swarm.RUNNER_KINDS``):
 ``cancel`` sent to an agent cancels its current turn, saved as it stands, and
@@ -22,7 +24,7 @@ either is dropped.
 Events go to stdout as JSON lines, every one carrying ``agent``; ``agent_start``,
 ``agent_end``, ``turn_cancelled``, ``restart``, ``dropped`` and ``run_end`` are
 the runner's own. What an agent writes to stderr goes to stderr as
-``[name] line`` and to ROOT/<name>/stderr (`AgentStderr`). The process ends
+``[name] line`` and to ROOT/<name>/stderr (`AgentStderr`). A runner ends
 when every agent has stopped or retired. SIGTERM and SIGINT end it like ^C:
 every session is persisted and the exit code is 130.
 """
@@ -36,6 +38,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -46,6 +49,8 @@ from . import (
     compaction,
     headless,
     messages as msgs,
+    model_client,
+    paths,
     run_assembly,
     runtime,
     settings as _settings,
@@ -140,7 +145,11 @@ class AgentStderr:
 
 
 class AgentEvents(headless.JsonEvents):
-    """One agent's event stream, every line stamped with its name, sharing the run's lock."""
+    """One agent's event stream, every line stamped with its name, sharing the
+    run's lock. A swarm streams many replies at once, so text and reasoning
+    deltas are flushed with the next event or within `headless.DELTA_FLUSH_S`."""
+
+    coalesce_deltas = True
 
     def __init__(self, out: TextIO, lock: threading.Lock, agent: str) -> None:
         super().__init__(out)
@@ -228,6 +237,7 @@ class Runner:
         finally:
             watcher.cancel()
             sys.stderr = stderr
+            await model_client.close_shared_http_clients()
         AgentEvents(self.out, self.lock, "").emit("run_end", agents=[s.name for s in self.specs],
                                                    exit_code=self.code)
         return self.code
@@ -409,8 +419,128 @@ def run(path: str | os.PathLike[str], out: TextIO | None = None, *, configure=No
     return asyncio.run(runner.run())
 
 
+# Agents per runner process when SWARM_PROCESSES is 0.
+AGENTS_PER_PROCESS = 16
+
+
+def processes_for(agents: int, setting: Any, slots: int = 0) -> int:
+    """How many runner processes a swarm of ``agents`` is spread over:
+    SWARM_PROCESSES, or with 0 one per AGENTS_PER_PROCESS agents up to a
+    process per CPU; never more than one per agent, nor than ``slots`` when
+    the swarm has a cap, so each process holds a slot of it."""
+    try:
+        wanted = max(0, int(setting))
+    except (TypeError, ValueError):
+        wanted = 0
+    if wanted == 0:
+        wanted = min(os.cpu_count() or 1, -(-agents // AGENTS_PER_PROCESS))
+    if slots > 0:
+        wanted = min(wanted, slots)
+    return max(1, min(agents, wanted))
+
+
+def _shard_specs(raw: dict, count: int) -> list[dict]:
+    """The spec split into ``count`` specs that each run in one process:
+    the agents dealt out in turn, and a ``slots`` cap dealt out the same way."""
+    agents = list(raw.get("agents") or [])
+    slots = int(raw.get("slots") or 0)
+    specs = []
+    for i in range(count):
+        spec = {**raw, "agents": agents[i::count], "processes": 1}
+        if slots > 0:
+            spec["slots"] = slots // count + (1 if i < slots % count else 0)
+        specs.append(spec)
+    return specs
+
+
+def _is_delta(line: str) -> bool:
+    return line.endswith(('"type": "text"}\n', '"type": "reasoning"}\n'))
+
+
+def run_sharded(path: str | os.PathLike[str], count: int, out: TextIO | None = None, *,
+                raw: dict | None = None) -> int:
+    """Run the spec's agents over ``count`` runner processes, each one
+    ``python -m js.swarm run`` on its share. Their events come out on this
+    process's stdout as they are written, and one ``run_end`` for the whole
+    swarm; their stderr is this process's. SIGINT and SIGTERM go to every
+    runner. The exit code is 130 when any runner was interrupted, else the
+    highest a runner returned. ``raw`` is the spec to split; None reads it
+    from ``path``."""
+    import subprocess
+
+    out = out or sys.stdout
+    if raw is None:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    root, _agents, _slots = load_spec(path)
+    shards = root / ".runners"
+    shards.mkdir(parents=True, exist_ok=True)
+    lock = threading.Lock()
+    # The spec's agents and every one a runner started besides (a recruit).
+    names: list[str] = [str(a.get("name")) for a in raw.get("agents") or []]
+    children: list[subprocess.Popen] = []
+    for i, spec in enumerate(_shard_specs(raw, count)):
+        shard = shards / f"{os.getpid()}-{i}.json"
+        shard.write_text(json.dumps(spec), encoding="utf-8")
+        children.append(subprocess.Popen([sys.executable, "-m", "js.swarm", "run", str(shard)],
+                                         stdout=subprocess.PIPE, text=True, encoding="utf-8"))
+
+    flushed = [0.0]
+
+    def relay(child: subprocess.Popen) -> None:
+        for line in child.stdout:
+            # Only the runner's own events are read; the rest pass through.
+            event = None
+            if '"run_end"' in line or '"agent_start"' in line:
+                with contextlib.suppress(ValueError):
+                    event = json.loads(line)
+            if isinstance(event, dict):
+                if event.get("type") == "run_end":
+                    continue
+                if event.get("type") == "agent_start":
+                    names.append(str(event.get("agent")))
+            with lock:
+                out.write(line)
+                now = time.monotonic()
+                if not _is_delta(line) or now - flushed[0] >= headless.DELTA_FLUSH_S:
+                    out.flush()
+                    flushed[0] = now
+
+    readers = [threading.Thread(target=relay, args=(child,), daemon=True) for child in children]
+    for reader in readers:
+        reader.start()
+
+    def forward(signum: int, _frame: Any) -> None:
+        for child in children:
+            with contextlib.suppress(OSError):
+                child.send_signal(signum)
+
+    previous = {sig: signal.signal(sig, forward) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        codes = [child.wait() for child in children]
+        for reader in readers:
+            reader.join()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        for child in children:
+            with contextlib.suppress(OSError):
+                Path(child.args[-1]).unlink()
+    code = 130 if 130 in codes or any(c < 0 for c in codes) else max(codes)
+    AgentEvents(out, lock, "").emit("run_end", agents=list(dict.fromkeys(names)), exit_code=code)
+    return code
+
+
 def main(path: str) -> int:
     try:
+        paths.configure_home()
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        slots = raw.get("slots")
+        if slots is None:
+            slots = _settings.live_value("SWARM_ACTIVE_MAX")
+        count = processes_for(len(raw.get("agents") or []), raw["processes"] if "processes" in raw
+                              else _settings.live_value("SWARM_PROCESSES"), int(slots or 0))
+        if count > 1:
+            return run_sharded(path, count, raw={**raw, "slots": int(slots or 0)})
         return run(path)
     except (OSError, ValueError) as exc:
         print(msgs.SWARM_RUN_FAILED.format(exc=exc), file=sys.stderr)

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Swarms use every core, and each agent costs less.** Numbers and causes are in `docs/swarm-performance.md`; `just swarmbench` measures it against a fake model.
+  - `python -m js.swarm run` spreads its agents over runner processes: `SWARM_PROCESSES` (or the spec's `"processes"`), default one per 16 agents up to one per CPU; 1 is the old single process.
+  - Model calls on one event loop share one HTTP client, so connections are reused and TLS setup is not repeated per call.
+  - Saving a session appends without re-reading the file when nothing else wrote to it; the `.txt` transcript and search index update at the end of a turn instead of after every tool batch.
+  - The model catalog freshness check, tool description rendering and session path resolution are cached; a swarm's streamed text events are flushed in batches of up to 50 ms.
+
 - **Kernel and toolbox fixes from an agent-style shakedown.**
   - `toolbox load` and `save` refuse while a kernel cell is still running, instead of queueing behind it and interrupting it on their timeout.
   - A kernel result over `TOOL_RESULT_MAX` cuts the middle of the printed output, so the traceback, `IMAGE` lines and the `HANDLE`/`NAMESPACE` line survive.

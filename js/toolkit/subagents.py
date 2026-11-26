@@ -16,6 +16,7 @@ from .. import (
     config,
     login_defaults,
     output,
+    owning_loop,
     paths,
     session_store,
     settings as _settings,
@@ -411,7 +412,7 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
             return_exceptions=True,
         )
 
-    for (idx, _item), res in zip(indexed_items, asyncio.run(_gather())):
+    for (idx, _item), res in zip(indexed_items, owning_loop.run_owning_loop(_gather())):
         if isinstance(res, snippets.SnippetError):
             raise res
         results[idx - 1] = (

@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 from contextlib import closing
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -123,6 +124,7 @@ def reset_caches() -> None:
     accepts_image_input.cache_clear()
     _image_inputs.cache_clear()
     _probe_answers.clear()
+    _checked.clear()
 
 
 @lru_cache(maxsize=1)
@@ -569,7 +571,35 @@ def record_refreshed(db_path: Path, *, refreshed_at: datetime | None = None) -> 
 _refresh_failure: str | None = None
 
 
+# The last catalog found fresh, by what decided it: the catalog and status
+# files as they stood and the refresh settings. Every model call asks several
+# times; for CATALOG_CHECK_S the answer is reused instead of opening the
+# database again.
+_checked: dict[tuple, tuple[float, CatalogStatus | None]] = {}
+CATALOG_CHECK_S = 60.0
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return info.st_mtime_ns, info.st_size
+
+
 def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
+    key = (str(_custom_db_path()), _file_stamp(_custom_db_path()), _file_stamp(_status_file_path()),
+           _policy("MODEL_CATALOG_AUTO_REFRESH"), _policy("MODEL_CATALOG_AGE_MAX"))
+    checked = _checked.get(key)
+    if not force and checked is not None and time.monotonic() - checked[0] < CATALOG_CHECK_S:
+        return checked[1]
+    status = _ensure_fresh_catalog(force=force)
+    _checked.clear()
+    _checked[key] = (time.monotonic(), status)
+    return status
+
+
+def _ensure_fresh_catalog(*, force: bool) -> CatalogStatus | None:
     global _refresh_failure
     current = current_catalog_status()
     if current is not None:

@@ -110,7 +110,8 @@ class Conversation:
             if started is not None:
                 started()
             await run(self.cfg, self.system, self.messages, self.telemetry, **{
-                "tool_registry": self.registry, "tool_context": self.context, "checkpoint": self.save, **kwargs})
+                "tool_registry": self.registry, "tool_context": self.context, "checkpoint": self.checkpoint,
+                **kwargs})
         finally:
             self.save()
 
@@ -145,6 +146,11 @@ class Conversation:
     def save(self) -> None:
         """Append what the session file does not have yet."""
         memory.persist_messages(self.cfg.session_file, self.messages, stamp=self.stamp)
+
+    def checkpoint(self) -> None:
+        """`save` in the middle of a turn: the session's `.txt` and index
+        catch up when the turn ends."""
+        memory.persist_messages(self.cfg.session_file, self.messages, stamp=self.stamp, refresh_text=False)
 
 
 _MODE_PLACES = {"repl": 'in interactive chat', "-p": 'as a one-shot run'}

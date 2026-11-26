@@ -439,6 +439,13 @@ clean:
     -find . -type d -name '*.egg-info' -exec rm -rf {} +
     @echo "cleaned."
 
+# ── swarm bench (bench/swarm) ───────────────────────────────────────────────
+
+# js's own cost per agent against a fake model: just swarmbench swarm 100
+[positional-arguments]
+swarmbench *args:
+    uv run python bench/swarm/run.py "$@"
+
 # ── tool bench (bench/toolbench) ────────────────────────────────────────────
 
 # build the sandbox image: js wheel + rg/fd + python/node/go toolchains

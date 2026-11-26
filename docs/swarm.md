@@ -1,14 +1,15 @@
 # Swarm bus
 
-`python -m js.swarm run SPEC.json` runs every agent of a swarm on one asyncio
-loop in one process, each agent on a bus rooted at `ROOT`; the agents talk to
-each other through the bus while they work. The bus is `js/swarm.py`, the
-runner `js/swarm_run.py` (see [Every agent in one process](#every-agent-in-one-process)).
+`python -m js.swarm run SPEC.json` runs the agents of a swarm on asyncio loops
+in a few runner processes (one per 16 agents, up to one per CPU), each agent
+on a bus rooted at `ROOT`; the agents talk to each other through the bus while
+they work. The bus is `js/swarm.py`, the runner `js/swarm_run.py` (see
+[The runner](#the-runner)).
 A program outside js reads and posts on the bus through `js.swarm.Room`.
 
 ```bash
 ROOT=/tmp/troop-42
-python -m js.swarm run spec.json &               # kivu and twig, every agent in one process
+python -m js.swarm run spec.json &               # kivu and twig, both in one runner process
 python -m js.swarm send $ROOT steer '*' "new evidence: the leak is in the writer"
 python -m js.swarm members $ROOT                 # kivu asleep holds parser / twig working
 python -m js.swarm cells $ROOT                   # the work board
@@ -143,7 +144,7 @@ decide what each one reacts to. `subscribe` is how a disposition is wired;
 `claim` is how two agents avoid the same file; `recruit` and `retire` are how
 the troop changes shape without a runner's say-so.
 
-## Every agent in one process
+## The runner
 
 ```json
 {"root": "/tmp/troop-42", "slots": 0,
@@ -159,11 +160,20 @@ resolved like `-m` and `-r`, a session under its own `cwd`'s session folder
 named by `session`, its own tool context with the bus tools on the surface,
 the inbox drained at every tool boundary, the turn persisted and the
 compaction trigger run before every sleep. The sleep is an `await` on the
-inbox, so a hundred idle agents cost one process and no model calls.
+inbox, so a hundred idle agents cost a few processes and no model calls.
+
+The agents are dealt out over runner processes: `SWARM_PROCESSES`, or the
+spec's `"processes"`, says how many; 0 (the default) is one per 16 agents, up
+to one per CPU, and 1 runs every agent in one process. One process runs every
+agent on one core, so a large swarm queues behind itself there: each runner is
+a `python -m js.swarm run` of its share, and the one started relays their
+events, sends `SIGINT` and `SIGTERM` on to each, and ends with one `run_end`.
+The bus is files, so agents in different runners talk as agents in one do.
 
 `slots` caps how many agents may be mid-turn at once; the rest wait for a
 slot before starting their next turn. Unset, it is the registered setting
-`SWARM_ACTIVE_MAX`; 0 is no cap. `recruit` adds an agent to the loop with the
+`SWARM_ACTIVE_MAX`; 0 is no cap. Over several runners the cap is dealt out
+like the agents, and there are never more runners than slots. `recruit` adds an agent to the recruiter's loop with the
 recruiter's agent, model and settings and a session named
 `<parent session>-<name>`.
 

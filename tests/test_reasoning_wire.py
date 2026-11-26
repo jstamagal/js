@@ -48,12 +48,7 @@ def test_reasoning_reaches_http_in_the_endpoint_field(monkeypatch, provider, bas
 
     async def drive():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as client:
-            get_provider = model_client.ai.get_provider
-
-            def with_transport(*args, **kwargs):
-                return get_provider(*args, **kwargs, client=client)
-
-            monkeypatch.setattr(model_client.ai, "get_provider", with_transport)
+            monkeypatch.setattr(model_client, "_shared_http_client", lambda _sdk: client)
             result = await model_client.stream_model_async(
                 model_id=model, provider_id=provider, provider_base_url=base,
                 provider_api_key="fixture", messages=messages, tools=None,
