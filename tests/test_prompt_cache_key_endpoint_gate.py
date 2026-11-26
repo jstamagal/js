@@ -22,6 +22,7 @@ def _accepts(provider_id: str, base_url: str | None) -> bool:
         provider_name=provider.id.lower(),
         sdk_provider_name=(provider.effective_sdk_provider_id or "").lower(),
         base_url=base_url if base_url is not None else provider.default_base_url,
+        transport=provider.transport,
     )
 
 
@@ -56,4 +57,19 @@ def test_a_local_server_does_not_get_the_key():
 def test_a_url_that_does_not_parse_is_treated_as_foreign():
     assert not accepts_prompt_cache_key(
         provider_name="openai", sdk_provider_name="openai", base_url="http://[::1",
+    )
+
+
+def test_cliproxyapi_takes_the_key_wherever_it_runs():
+    # CLIProxyAPI reads the key as the conversation's session, on any address.
+    assert _accepts("cliproxyapi", "http://vader:8999/v1")
+    assert _accepts("cliproxyapi", "http://127.0.0.1:8317/v1")
+
+
+def test_a_cliproxyapi_shaped_login_takes_the_key():
+    # A saved login of the cliproxyapi shape keeps its own name but rides the
+    # cliproxyapi transport.
+    assert accepts_prompt_cache_key(
+        provider_name="cpa", sdk_provider_name="openai",
+        base_url="http://vader:8999/v1", transport="cliproxyapi",
     )
