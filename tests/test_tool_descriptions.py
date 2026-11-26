@@ -123,7 +123,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     # poll, wait and kill of a background handle take neither tasks nor agent_id.
     assert task.required == ()
-    assert set(task.params) == {"tasks", "agent_id", "session_id", "model", "background", "action",
+    assert set(task.params) == {"tasks", "agent_id", "session_id", "model", "reasoning", "background", "action",
                                 "handle", "timeout"}
 
 
