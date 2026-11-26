@@ -145,8 +145,9 @@ def _coerce_strings(key: str, raw: Any) -> tuple[str, ...]:
     return tuple(raw)
 
 
-def _template_entries(text: str) -> list[str]:
-    """Split top-level commas while preserving JSON containers and strings."""
+def split_entries(text: str, *, containers: str = "[]{}") -> list[str]:
+    """``text`` cut at each ',' that is outside a JSON string and outside the
+    JSON containers whose brackets ``containers`` lists."""
     entries = []
     start = depth = 0
     quoted = escaped = False
@@ -160,9 +161,9 @@ def _template_entries(text: str) -> list[str]:
                 quoted = False
         elif char == '"':
             quoted = True
-        elif char in "[{":
+        elif char in "[{" and char in containers:
             depth += 1
-        elif char in "]}":
+        elif char in "]}" and char in containers:
             depth = max(0, depth - 1)
         elif char == "," and depth == 0:
             entries.append(text[start:index])
@@ -178,7 +179,7 @@ def parse_template_kwargs(text: str) -> dict[str, Any]:
     Raises ValueError naming the first entry that is not ``key=value`` or a
     key given twice."""
     out: dict[str, Any] = {}
-    for entry in _template_entries(text):
+    for entry in split_entries(text):
         key, sep, raw = entry.partition("=")
         key, raw = key.strip(), raw.strip()
         if not sep or not key or not raw:

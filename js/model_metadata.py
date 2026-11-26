@@ -34,6 +34,7 @@ from . import (
     model_matching,
     paths,
     providers,
+    served_limits,
     settings as _settings,
     stream_transport,
 )
@@ -55,22 +56,6 @@ _STATUS_VERSION = 1
 _LOCAL_PROBE_MAX_S = 3.0
 _LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai", "openai"}
 _OPENAI_PROBE_TRANSPORTS = {"openai_compatible", "custom_openai", "openai"}
-_CONTEXT_WINDOW_KEYS = {
-    "context_length",
-    "context_window",
-    "max_context_length",
-    "max_context_window",
-    "max_model_len",
-    "max_model_length",
-    "max_position_embeddings",
-    "max_seq_len",
-    "max_sequence_length",
-    "max_input_tokens",
-    "n_ctx",
-    "num_ctx",
-}
-
-
 @dataclass(frozen=True)
 class ModelLimits:
     provider_id: str | None
@@ -302,45 +287,9 @@ def _bare_model_name(model_id: str) -> str:
     return name.replace(":", "-").replace("_", "-").replace(".", "")
 
 
-def _positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, float):
-        return int(value) if value.is_integer() and value > 0 else None
-    if isinstance(value, str):
-        normalized = value.strip().replace("_", "")
-        if normalized.isdigit():
-            parsed = int(normalized)
-            return parsed if parsed > 0 else None
-    return None
-
-
-def _context_key_matches(key: Any) -> bool:
-    lowered = str(key).lower()
-    return lowered in _CONTEXT_WINDOW_KEYS or any(
-        lowered.endswith(f".{suffix}") for suffix in _CONTEXT_WINDOW_KEYS
-    )
-
-
-def _extract_context_window(payload: Any) -> int | None:
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if _context_key_matches(key):
-                parsed = _positive_int(value)
-                if parsed is not None:
-                    return parsed
-        for value in payload.values():
-            parsed = _extract_context_window(value)
-            if parsed is not None:
-                return parsed
-    elif isinstance(payload, list):
-        for item in payload:
-            parsed = _extract_context_window(item)
-            if parsed is not None:
-                return parsed
-    return None
+def _served_context_window(payload: Any) -> int | None:
+    """The context window a server's model payload states, wherever in it."""
+    return served_limits.find_positive_int(payload, served_limits.SERVED_CONTEXT_KEYS)
 
 
 def _join_url(base_url: str, suffix: str) -> str:
@@ -375,13 +324,13 @@ def _models_payload_for_model(payload: Any, model_id: str) -> Any:
 
 def _probe_openai_context_window(base_url: str, model_id: str) -> int | None:
     payload = _request_json("GET", _join_url(base_url, "models"))
-    parsed = _extract_context_window(_models_payload_for_model(payload, model_id))
+    parsed = _served_context_window(_models_payload_for_model(payload, model_id))
     if parsed is not None:
         return parsed
 
     model_path = quote(model_id, safe="")
     payload = _request_json("GET", _join_url(base_url, f"models/{model_path}"))
-    return _extract_context_window(payload)
+    return _served_context_window(payload)
 
 
 def _probe_ollama_context_window(base_url: str, model_id: str) -> int | None:
@@ -390,13 +339,13 @@ def _probe_ollama_context_window(base_url: str, model_id: str) -> int | None:
         _join_url(_server_root_url(base_url), "api/show"),
         json_body={"model": model_id},
     )
-    return _extract_context_window(payload)
+    return _served_context_window(payload)
 
 
 def _probe_llamacpp_context_window(base_url: str, model_id: str) -> int | None:
     url = _join_url(_server_root_url(base_url), f"props?model={quote(model_id, safe='')}")
     payload = _request_json("GET", url)
-    return _extract_context_window(payload)
+    return _served_context_window(payload)
 
 
 _PROBES = {
@@ -630,16 +579,8 @@ _checked: dict[tuple, tuple[float, CatalogStatus | None]] = {}
 CATALOG_CHECK_S = 60.0
 
 
-def _file_stamp(path: Path) -> tuple[int, int] | None:
-    try:
-        info = path.stat()
-    except OSError:
-        return None
-    return info.st_mtime_ns, info.st_size
-
-
 def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
-    key = (str(_custom_db_path()), _file_stamp(_custom_db_path()), _file_stamp(_status_file_path()),
+    key = (str(_custom_db_path()), paths.file_stamp(_custom_db_path()), paths.file_stamp(_status_file_path()),
            _policy("MODEL_CATALOG_AUTO_REFRESH"), _policy("MODEL_CATALOG_AGE_MAX"))
     checked = _checked.get(key)
     if not force and checked is not None and time.monotonic() - checked[0] < CATALOG_CHECK_S:

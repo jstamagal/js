@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from .protocol import JSONRPCPeer, PeerClosedError, RequestHandler, TransportFactory
+from .redaction import redact_value
 from .types import (
     LATEST_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -521,18 +522,7 @@ class MCPClient:
         return redacted
 
     def _redact_value(self, value: Any) -> Any:
-        if isinstance(value, str):
-            return self._redact_text(value)
-        if isinstance(value, dict):
-            return {
-                self._redact_text(key) if isinstance(key, str) else key: self._redact_value(item)
-                for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [self._redact_value(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(self._redact_value(item) for item in value)
-        return value
+        return redact_value(value, self._redact_text)
 
     def _redact_exception_message(self, exc: BaseException) -> str:
         return self._redact_text(str(exc)) or type(exc).__name__

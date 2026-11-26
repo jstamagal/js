@@ -168,7 +168,7 @@ async def type_line(cfg, messages, line, during=None):
 
 def persist_turn(cfg, messages):
     """Write the turn's messages to the session as the REPL does after a turn."""
-    M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
+    M.persist_messages(cfg.session_file, messages, stamp=M.config_stamp(cfg))
 
 
 async def summary_fault(mode):

@@ -86,7 +86,7 @@ class Conversation:
     @property
     def stamp(self) -> dict:
         """The stamp each assistant message this Conversation saves carries."""
-        return memory.stamp_for(self.cfg.model, self.cfg.provider_id, self.cfg.reasoning_effort)
+        return memory.config_stamp(self.cfg)
 
     async def ask(self, text: str, **kwargs: Any) -> str:
         """Run one turn on ``text``, then the between-turn check; returns the

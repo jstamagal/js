@@ -617,3 +617,13 @@ def legacy_homes() -> dict[str, Path]:
         "data": _xdg_base("XDG_DATA_HOME", Path(".local") / "share") / "js",
         "inbox": user_home() / "inbox" / "agents" / "js",
     }
+
+
+def file_stamp(path: str | os.PathLike[str]) -> tuple[int, int] | None:
+    """A file's size and modification time, the pair a cache of what was read
+    from it is keyed by; None when it cannot be statted."""
+    try:
+        info = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return info.st_size, info.st_mtime_ns

@@ -8,7 +8,7 @@ This is the architecture guide for contributors and agents working on `js`.
 
 ```toml
 [project.scripts]
-js = "js.cli:main"
+js = "js.entry:main"
 ```
 
 `js/__main__.py` delegates to the same CLI path.

@@ -185,3 +185,51 @@ def test_the_screen_redraw_cap_follows_its_setting():
         fset.bind_settings(None)
     assert capped is not None and 0 < capped <= 0.1
     assert uncapped is None
+
+
+def test_a_parameter_description_is_what_its_file_says_now(tmp_path, monkeypatch):
+    from js.toolkit import descriptions
+
+    page = tmp_path / "thing.md"
+    monkeypatch.setattr(descriptions, "_description_path", lambda name: page)
+    page.write_text(f"The tool.\n{descriptions._PARAMETERS}\n### first\none\n\n### second\ntwo\n")
+    assert descriptions.load_parameter_description("thing", "first") == "one"
+    assert descriptions.load_parameter_description("thing", "second") == "two"
+    with pytest.raises(ValueError):
+        descriptions.load_parameter_description("thing", "third")
+    page.write_text(f"The tool.\n{descriptions._PARAMETERS}\n### second\nchanged now\n")
+    assert descriptions.load_parameter_description("thing", "second") == "changed now"
+    with pytest.raises(ValueError):
+        descriptions.load_parameter_description("thing", "first")
+    page.write_text("")
+    assert descriptions.load_parameter_description("thing", "second") == ""
+
+
+def test_file_stamp_changes_with_the_file_and_is_none_without_it(tmp_path):
+    from js import paths
+
+    target = tmp_path / "f"
+    assert paths.file_stamp(target) is None
+    target.write_text("a")
+    first = paths.file_stamp(target)
+    target.write_text("ab")
+    assert first is not None and paths.file_stamp(str(target)) != first
+
+
+def _modules_after(code: str) -> set[str]:
+    done = subprocess.run(
+        [sys.executable, "-c", f"import sys\ntry:\n    {code}\nexcept SystemExit:\n    pass\n"
+                               "print('\\n'.join(m for m in sys.modules if m.startswith('js.')), file=sys.stderr)"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True)
+    return set(done.stderr.split())
+
+
+def test_help_alone_does_not_load_the_run_modules():
+    loaded = _modules_after("from js.entry import main; main(['--help'])")
+    assert "js.command_line" in loaded
+    assert "js.cli" not in loaded
+
+
+def test_the_command_line_loads_no_mode_it_does_not_run():
+    loaded = _modules_after("import js.cli")
+    assert not loaded & {"js.repl", "js.bench", "js.commit_cli", "js.verify", "js.migrate_config", "js.loop_controller"}

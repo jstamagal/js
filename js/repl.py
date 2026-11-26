@@ -316,15 +316,9 @@ def _repl_history(cfg: Config) -> prompt_history.PromptHistory:
     )
 
 
-def _session_stamp(cfg: Config) -> dict:
-    """The stamp for assistant messages a turn on `cfg` writes."""
-    return M.stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
-                       getattr(cfg, "reasoning_effort", None))
-
-
 def _persist_turn_messages(cfg: Config, messages: list[dict]) -> None:
     """Persist the turn; `cfg` is the one the turn ran on, so its stamp is the turn's model."""
-    M.persist_messages(cfg.session_file, messages, stamp=_session_stamp(cfg))
+    M.persist_messages(cfg.session_file, messages, stamp=M.config_stamp(cfg))
 
 
 def _turn_user_index(messages: list[dict], user_message: dict) -> int | None:

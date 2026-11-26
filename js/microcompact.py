@@ -101,12 +101,6 @@ def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger:
         raise
 
 
-def cfg_stamp(cfg: Config) -> dict:
-    """The stamp of the conversation's model, for assistant messages written here."""
-    return M.stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
-                       getattr(cfg, "reasoning_effort", None))
-
-
 @contextmanager
 def flight_recording(flight: CompactionFlight, system: str, messages: list[dict]):
     token = ACTIVE_FLIGHT.set(flight)
@@ -145,7 +139,7 @@ def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_rece
     flight.record("cleared_results", results=changed, cleared=cleared,
                   reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=_MICROCOMPACT_MIN_CHARS)
     if cleared:
-        stamp = cfg_stamp(flight.cfg)
+        stamp = M.config_stamp(flight.cfg)
         M.persist_messages(flight.cfg.session_file, before, stamp=stamp)
         M.persist_messages(flight.cfg.session_file, messages, stamp=stamp)
     return cleared, reclaimed

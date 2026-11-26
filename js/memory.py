@@ -682,6 +682,13 @@ def _append_owned(memory_file: Path, rec: Record) -> None:
         _owned_records.setdefault((os.getpid(), _file_key(memory_file)), set()).add(linked["id"])
 
 
+def config_stamp(cfg: Any) -> dict:
+    """The `stamp_for` of the model a turn on ``cfg`` runs, for the assistant
+    messages it writes."""
+    return stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
+                     getattr(cfg, "reasoning_effort", None))
+
+
 def stamp_for(model: str | None, provider: str | None, reasoning: str | None) -> dict:
     """The stamp an assistant message is written under."""
     return {"model": model, "provider": provider, "reasoning": reasoning}

@@ -120,7 +120,7 @@ def _default_hides() -> tuple[str, ...]:
     return tuple(settings.default_value("JAIL_HIDE") or ())
 
 
-def _real(path: Path) -> Path:
+def real_path(path: Path) -> Path:
     """``path`` with symlinks resolved, or as given when it cannot be."""
     try:
         return path.resolve()
@@ -156,9 +156,9 @@ def reach(path: Path) -> list[Path]:
 
 def operator_homes() -> list[Path]:
     """The operator's home, by $HOME and by the password database."""
-    homes = [_real(paths.user_home())]
+    homes = [real_path(paths.user_home())]
     with contextlib.suppress(KeyError, OSError):
-        homes.append(_real(Path(pwd.getpwuid(os.getuid()).pw_dir)))
+        homes.append(real_path(Path(pwd.getpwuid(os.getuid()).pw_dir)))
     return list(dict.fromkeys(homes))
 
 
@@ -325,7 +325,7 @@ def _toolchain_homes(home: Path) -> list[Path]:
     """Trees a PATH shim reads its toolchains from: rustup's ``cargo`` and
     ``rustc`` in /usr/bin find theirs under RUSTUP_HOME, ~/.rustup by default."""
     rustup = Path(os.environ.get("RUSTUP_HOME") or home / ".rustup")
-    return [_real(rustup)] if rustup.is_dir() else []
+    return [real_path(rustup)] if rustup.is_dir() else []
 
 
 def _is_dir(path: Path) -> bool:
@@ -388,7 +388,7 @@ class Jail:
     def hides(self, hide: object = None) -> list[Path]:
         """The `JAIL_HIDE` paths as the host resolves them; None is the
         `defaults/jsrc` list. Invalid entries are skipped; `/set` refuses them."""
-        out = [_real(path) for path in self._hide_entries(hide)]
+        out = [real_path(path) for path in self._hide_entries(hide)]
         # The same directory where another mount shows it (a home on a btrfs
         # subvolume, a bind mount elsewhere) is hidden there too.
         mounts = _mounts()
@@ -411,8 +411,8 @@ class Jail:
     def hidden_test(self, hide: object = None) -> Callable[[Path], bool]:
         """`hidden` with the `JAIL_HIDE` paths read once, for a tool that
         asks about every entry of a walk."""
-        own = [_real(self.private), _real(paths.tool_results_dir())]
-        named = [_real(entry.parent) / entry.name for entry in self._hide_entries(hide)]
+        own = [real_path(self.private), real_path(paths.tool_results_dir())]
+        named = [real_path(entry.parent) / entry.name for entry in self._hide_entries(hide)]
         hidden = [*self.hides(hide), *named]
         return lambda real: (any(_under(real, h) for h in hidden)
                              and not any(_under(real, area) for area in own))
@@ -427,19 +427,19 @@ class Jail:
     def hidden_under(self, root: Path, hide: object = None) -> list[Path]:
         """The `JAIL_HIDE` paths inside host directory ``root``, for a tool
         that walks it on the host."""
-        real_root = _real(root)
+        real_root = real_path(root)
         return [h for h in self.hides(hide) if h != real_root and _under(h, real_root)]
 
     def _areas(self, setting: object) -> list[Bind]:
         """Every tree a file tool may reach, as the host sees it."""
         explicit = [Bind(self.root, True), *self.binds(setting)]
         areas = [Bind(self.root, True), Bind(self.private, True)]
-        areas += [Bind(_real(b.path), b.rw) for b in self.binds(setting)]
-        areas.append(Bind(_real(paths.tool_results_dir()), False))
+        areas += [Bind(real_path(b.path), b.rw) for b in self.binds(setting)]
+        areas.append(Bind(real_path(paths.tool_results_dir()), False))
         # A PATH directory inside DIR or a bind is not bound back read-only by
         # `argv` (its `covered` check), so it keeps that bind's access here too.
         areas += [Bind(p, False) for p in self._path_dirs(os.environ.get("PATH", ""))
-                  if not any(_under(p, _real(b.path)) for b in explicit)]
+                  if not any(_under(p, real_path(b.path)) for b in explicit)]
         return list({area.path: area for area in areas}.values())
 
     def _path_dirs(self, path_value: str) -> list[Path]:
@@ -450,7 +450,7 @@ class Jail:
         for entry in path_value.split(os.pathsep):
             if not entry or not os.path.isabs(entry):
                 continue
-            real = _real(Path(entry))
+            real = real_path(Path(entry))
             if real.is_dir() and (any(_under(real, h) for h in hidden) or Path("/tmp") in real.parents):
                 out.append(real)
         return list(dict.fromkeys(out))
@@ -471,7 +471,7 @@ class Jail:
         js_tmp = paths.home() / "tmp"
         if _under(path, js_tmp):
             return self.js_tmp / path.relative_to(js_tmp)
-        if any(_under(path, b.path) or _under(path, _real(b.path))
+        if any(_under(path, b.path) or _under(path, real_path(b.path))
                for b in [Bind(self.root), *self.binds(setting)]):
             return path
         # A hidden tree stays hidden even where it sits under /tmp.
@@ -479,7 +479,7 @@ class Jail:
             return path
         if _under(path, Path("/tmp")):
             # A PATH directory under the host /tmp is bound over the private one.
-            if any(_under(_real(path), d) for d in self._path_dirs(os.environ.get("PATH", ""))):
+            if any(_under(real_path(path), d) for d in self._path_dirs(os.environ.get("PATH", ""))):
                 return path
             return self.tmp / path.relative_to("/tmp")
         return path
@@ -490,7 +490,7 @@ class Jail:
         operator's home spelled out. The inverse of `host_path` for those two
         trees."""
         views: dict[str, str] = {}
-        for private in dict.fromkeys([self.private, _real(self.private)]):
+        for private in dict.fromkeys([self.private, real_path(self.private)]):
             # Under a /tmp bind the private one shows only at its own path.
             if not self.tmp_covered:
                 views[str(private / "tmp")] = "/tmp"
@@ -526,7 +526,7 @@ class Jail:
             current = Path("/") if target.is_absolute() else current.parent
             pending.extendleft(reversed(target.parts[1:] if target.is_absolute() else target.parts))
         resolved = self.host_path(current, setting)
-        real = _real(resolved) if follow else _real(resolved.parent) / resolved.name
+        real = real_path(resolved) if follow else real_path(resolved.parent) / resolved.name
         areas = self._areas(setting)
         # The innermost area containing the path decides, as the innermost
         # mount does inside the jail.
@@ -557,8 +557,8 @@ class Jail:
 
     def bound(self, path: Path, setting: object = ()) -> bool:
         """Whether ``path`` lies in DIR, a `JAIL_BIND` entry or an /add bind."""
-        real = _real(path)
-        return any(_under(real, _real(b.path)) for b in [Bind(self.root), *self.binds(setting)])
+        real = real_path(path)
+        return any(_under(real, real_path(b.path)) for b in [Bind(self.root), *self.binds(setting)])
 
     def add(self, bind: Bind) -> None:
         """Show ``bind`` from the next command on (/add). A path added again
@@ -610,16 +610,16 @@ class Jail:
         explicit = [Bind(self.root, True), *self.binds(setting), *(Bind(Path(p), True) for p in extra_rw)]
 
         def covered(path: Path) -> bool:
-            return any(_under(path, _real(b.path)) for b in explicit)
+            return any(_under(path, real_path(b.path)) for b in explicit)
 
         implicit = [Bind(p, False) for p in self._path_binds(env_path)]
-        implicit.append(Bind(_real(paths.tool_results_dir()), False))
+        implicit.append(Bind(real_path(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for p in _toolchain_homes(home)]
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
         # What a JAIL_HIDE path may not cover: js's own binds (spilled tool
         # results, this command's kernel paths), never DIR, a JAIL_BIND or
         # /add entry, or a PATH directory.
-        candidates = [Bind(_real(paths.tool_results_dir()), False),
+        candidates = [Bind(real_path(paths.tool_results_dir()), False),
                       *(Bind(p, False) for extra in extra_ro for p in reach(Path(extra))),
                       *(Bind(Path(p), True) for p in extra_rw)]
         # The host /tmp is replaced by the private one, so a path under it is
@@ -641,8 +641,8 @@ class Jail:
         # A read-only bind over /tmp (`"/tmp"` in JAIL_BIND, to read files the
         # operator left there) covers the private one; temp files go to the
         # private one where it still shows, under the private directory.
-        over_tmp = [b for b in explicit if _under(Path("/tmp"), _real(b.path))]
-        self.tmp_covered = bool(over_tmp) and not max(over_tmp, key=lambda b: len(_real(b.path).parts)).rw
+        over_tmp = [b for b in explicit if _under(Path("/tmp"), real_path(b.path))]
+        self.tmp_covered = bool(over_tmp) and not max(over_tmp, key=lambda b: len(real_path(b.path).parts)).rw
         if self.tmp_covered:
             out += ["--setenv", "TMPDIR", str(self.tmp)]
         if not _binds_whole_root(network):
@@ -680,15 +680,15 @@ class Jail:
         for bind in binds:
             # A bind inside a hidden path would show it again, DIR included
             # (`enter` refuses a DIR inside one).
-            if any(_under(_real(bind.path), h) for h in hides):
+            if any(_under(real_path(bind.path), h) for h in hides):
                 continue
             src = str(bind.path)
             ops.append((len(bind.path.parts), 1, ["--bind-try" if bind.rw else "--ro-bind-try", src, src]))
 
         def area(path: Path) -> Bind | None:
             """The innermost bind showing host path ``path``, or None."""
-            holders = [b for b in binds if _under(path, _real(b.path))]
-            return max(holders, key=lambda b: len(_real(b.path).parts)) if holders else None
+            holders = [b for b in binds if _under(path, real_path(b.path))]
+            return max(holders, key=lambda b: len(real_path(b.path).parts)) if holders else None
 
         def views(real: Path) -> list[tuple[Path, bool]]:
             """Where in the jail host path ``real`` shows, and whether it is
@@ -699,7 +699,7 @@ class Jail:
             if holder is not None or not any(_under(real, tree) for tree in replaced):
                 out_views[real] = holder is not None and holder.rw
             for bind in binds:
-                at, real_at = Path(os.path.abspath(bind.path)), _real(bind.path)
+                at, real_at = Path(os.path.abspath(bind.path)), real_path(bind.path)
                 if at != real_at and _under(real, real_at):
                     out_views.setdefault(at / real.relative_to(real_at), bind.rw)
             return list(out_views.items())
@@ -730,7 +730,7 @@ class Jail:
                 placeholders.setdefault(at, parent)
             # A bind of the hidden path itself, through a symlink, is blanked at the link.
             for bind in binds:
-                at, real_at = Path(os.path.abspath(bind.path)), _real(bind.path)
+                at, real_at = Path(os.path.abspath(bind.path)), real_path(bind.path)
                 if at != real_at and _under(real_at, hidden) and exists:
                     direct.append(at)
         hidden_set = set(hides)
@@ -790,11 +790,11 @@ class Jail:
         if direct and not empty.exists():
             empty.touch(mode=0o444)
         for target in sorted(dict.fromkeys(direct), key=lambda p: len(p.parts)):
-            out += (["--tmpfs", str(target)] if _real(target).is_dir()
+            out += (["--tmpfs", str(target)] if real_path(target).is_dir()
                     else ["--ro-bind", str(empty), str(target)])
         blanked = [*direct, *(h for h in hides)]
         for bind in sorted(dict.fromkeys(candidates), key=lambda b: len(b.path.parts)):
-            real_bind = _real(bind.path)
+            real_bind = real_path(bind.path)
             if any(real_bind != b and _under(real_bind, b) for b in blanked) or any(
                     _under(real_bind, p) for p in placeholders.values()):
                 src = str(bind.path)
@@ -873,7 +873,7 @@ def hider(context: object) -> Callable[[Path], bool]:
     if jail is None:
         return lambda path: False
     test = jail.hidden_test(getattr(context, "jail_hide", None))
-    return lambda path: test(_real(Path(path)))
+    return lambda path: test(real_path(Path(path)))
 
 
 def hidden_under(root: Path, context: object) -> list[Path]:
@@ -940,7 +940,7 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
     The self-test builds the jail with the run's `JAIL_BIND` (``setting``) and
     `JAIL_HIDE` (``hide``; None is the `defaults/jsrc` list)."""
     global ACTIVE
-    root = _real(Path(directory).expanduser())
+    root = real_path(Path(directory).expanduser())
     if not root.is_dir():
         raise JailError(msgs.JAIL_SETTING_C_TARGET_IS_NOT_A_DIRECTORY.format(directory=directory))
     if root == Path("/"):

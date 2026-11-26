@@ -349,7 +349,7 @@ async def compact_now(
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
-        M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
+        M.persist_messages(cfg.session_file, messages, stamp=M.config_stamp(cfg))
         M.append_mark(cfg.session_file, marker)
         messages[:] = after
         owner = context or T.STOCK_CONTEXT
