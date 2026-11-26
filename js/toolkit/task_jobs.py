@@ -1,6 +1,11 @@
 """Background `task` runs: a handle the model polls, waits on, or kills, and a
-note for the next user message when one finishes without the model having
-read its result.
+note carrying the result when one finishes without the model having read it.
+
+A foreground `task` call of the main agent runs as a job too and waits for it;
+it hands back the job's handle instead when the operator types to the main
+agent or SUBAGENT_WAIT passes (``subagents.task_async``). The note for a
+finished job rides the main agent's next tool boundary, the next user message,
+or a turn of its own (`listener`, SUBAGENT_WAKE).
 
 A background run is the same fan-out a foreground `task` call runs. Under the
 REPL supervisor it is one "subagent" job on the REPL's loop, so it outlives the
@@ -25,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths, snippets, supervisor
+from ..text_bytes import cap_text
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5
@@ -82,6 +88,10 @@ class TaskJob:
 _JOBS: dict[str, TaskJob] = {}
 _JOBS_LOCK = threading.Lock()
 _SEQ = 0
+
+# Called with each job once it has settled, from whichever thread settled it.
+# The REPL sets it to wake the main agent for a result nobody has read.
+listener: Callable[[TaskJob], None] | None = None
 
 
 def _next_id() -> str:
@@ -154,6 +164,9 @@ def _settle(job: TaskJob, outcome: concurrent.futures.Future | asyncio.Future,
     if on_done is not None:
         with contextlib.suppress(Exception):
             on_done()
+    if listener is not None:
+        with contextlib.suppress(Exception):
+            listener(job)
     _prune()
 
 
@@ -168,11 +181,13 @@ def start(
     on_done: Callable[[], None] | None = None,
     on_loop: bool = False,
     schedule: Callable | None = None,
+    label: str = "",
 ) -> TaskJob:
     """Start the fan-out in the background and return its job at once.
 
     ``on_loop`` means the caller is a coroutine on the supervisor's loop;
-    otherwise the caller is a thread off any loop.
+    otherwise the caller is a thread off any loop. ``label`` names its
+    supervisor job; "task tN (background)" by default.
     """
     job_id = _next_id()
     result_path = paths.tool_results_dir() / f"task-{job_id}-{secrets.token_hex(4)}.txt"
@@ -197,7 +212,7 @@ def start(
 
     with _JOBS_LOCK:
         _JOBS[job.id] = job
-    label = f"task {job.id} (background)"
+    label = label.replace("{id}", job.id) if label else f"task {job.id} (background)"
     if schedule is not None:
         cancel = schedule(run_all(), label, lambda done: _settle(job, done, on_done))
         job.set_cancel(cancel)
@@ -241,14 +256,23 @@ def start(
     return job
 
 
-def started_text(job: TaskJob) -> str:
+def started_text(job: TaskJob, *, why: str = "", pollable: bool = True) -> str:
+    """What a call that hands back ``job`` running returns. ``why`` says why
+    a foreground call stopped waiting; ``pollable`` says the caller has the
+    `task` tool to poll it with."""
     plural = 'task' if job.count == 1 else 'tasks'
-    return "\n".join([
-        f'task running in the background (handle {job.id}): {job.count} {plural} for agent `{job.agent_id}`. It keeps running while you work.',
-        f'Poll it with action="poll", handle="{job.id}", action="wait", handle="{job.id}", timeout=N to block for it, or action="kill", handle="{job.id}" to stop it.',
-        f'When it finishes its result is written to {job.result_path}, and the next user message says so unless you have read it by then.',
+    head = (f'task moved to the background (handle {job.id}) after {job.elapsed():.0f}s: {why}. '
+            f'{job.workers_done} of {job.count} {plural} for agent `{job.agent_id}` done; the rest keep running while you work.'
+            if why else
+            f'task running in the background (handle {job.id}): {job.count} {plural} for agent `{job.agent_id}`. It keeps running while you work.')
+    lines = [head]
+    if pollable:
+        lines.append(f'Poll it with action="poll", handle="{job.id}", action="wait", handle="{job.id}", timeout=N to block for it, or action="kill", handle="{job.id}" to stop it.')
+    lines += [
+        f'When it finishes its result is written to {job.result_path}, and it comes to you in a <js-reminder> unless you have read it by then.',
         f'HANDLE {job.id} RUNNING',
-    ])
+    ]
+    return "\n".join(lines)
 
 
 # How long a kill waits for the cancelled workers to wind down.
@@ -294,9 +318,44 @@ async def wait_async(job: TaskJob, timeout: float | None) -> None:
             raise
 
 
-def completion_notes(owner: str) -> list[str]:
+def jobs(owner: str) -> list[TaskJob]:
+    """``owner``'s jobs that are still kept, oldest first."""
+    with _JOBS_LOCK:
+        return [job for job in _JOBS.values() if job.owner == owner]
+
+
+def _unread(job: TaskJob, owner: str) -> bool:
+    return job.owner == owner and job.depth == 0 and not job.delivered and not job.noted
+
+
+def outstanding(owner: str) -> list[TaskJob]:
+    """``owner``'s depth-0 jobs whose result the model has not had: running,
+    or finished with no note sent yet."""
+    with _JOBS_LOCK:
+        return [job for job in _JOBS.values() if _unread(job, owner)]
+
+
+def unread(owner: str) -> bool:
+    """True when a depth-0 job of ``owner`` has finished and its note is due."""
+    return any(not job.running() for job in outstanding(owner))
+
+
+def wait_any(owner: str, poll_s: float = 0.5) -> None:
+    """Block until one of ``owner``'s outstanding jobs has finished, or none
+    is left running. Waits in short steps so ^C reaches the caller."""
+    while True:
+        jobs = outstanding(owner)
+        if not jobs or any(not job.running() for job in jobs):
+            return
+        concurrent.futures.wait([job.future for job in jobs], timeout=poll_s,
+                                return_when=concurrent.futures.FIRST_COMPLETED)
+
+
+def completion_notes(owner: str, result_max: int = 0) -> list[str]:
     """One reminder per job ``owner`` started at depth 0 that has finished
-    since the last call and whose result the model has not read."""
+    since the last call and whose result the model has not read. Each carries
+    the result, cut at ``result_max`` bytes when that is above 0; the result
+    file holds all of it."""
     notes: list[str] = []
     with _JOBS_LOCK:
         jobs = [job for job in _JOBS.values() if job.owner == owner]
@@ -309,10 +368,14 @@ def completion_notes(owner: str) -> list[str]:
         if job.cancelled():
             notes.append(f'<js-reminder>Background task {job.id} (agent `{job.agent_id}`) was cancelled after {job.elapsed():.0f}s and has no result.</js-reminder>')
             continue
-        where = (f'Its result is at {job.result_path}' if job.saved
+        where = (f'Its result is also at {job.result_path}' if job.saved
                  else 'Its result could not be saved to a file')
+        result = job.result()
+        if result_max > 0:
+            result = cap_text(result, result_max, f"\n[truncated: TOOL_RESULT_MAX ({result_max}) reached; the whole result is in the file]")
+        job.delivered = True
         notes.append(
-            snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id)
+            snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id, RESULT=result)
         )
     _prune()
     return notes

@@ -388,6 +388,10 @@ class ToolContext(_turn_settings.ContextSettings):
     # Names this context as the owner of the background tasks it starts; only
     # the owner can poll, wait on or kill them.
     task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)
+    # Set (an asyncio.Event on the REPL's loop) when the operator types to
+    # the main agent during its turn: a foreground task call then hands back
+    # its handle. None where nobody types to this context.
+    subagent_detach: Any = field(default=None, repr=False)
 
     def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
                      follow: bool = True) -> Path:

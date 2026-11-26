@@ -678,12 +678,15 @@ async def task_async(
     context: ToolContext | None = None,
     reasoning: str = "",
     launch: str = "task",
+    detach: bool = True,
 ) -> str:
     """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
     dispatch thread. The runtime routes fan-out calls here
     (see ``turn_dispatch.dispatch_batch``). ``launch`` is "agent" for a
-    named-agent tool's call."""
+    named-agent tool's call. With ``detach`` the main agent's foreground
+    call can hand back a handle (:func:`_detachable`); a caller that shows
+    the result itself passes False."""
     assert context is not None
     action = _job_action(action)
     if action != "run":
@@ -711,10 +714,63 @@ async def task_async(
     indexed_items, coro_factory = prepared
     if _flag(background):
         return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=True)
+    wait_s = _subagent_wait(context)
+    if detach and context.task_depth == 0 and (context.subagent_detach is not None or wait_s > 0):
+        return await _detachable(indexed_items, coro_factory, agent_id, session_id, context, wait_s)
     async with subagent_gate.lend_slot():
         results = await _fan_out_async(indexed_items, coro_factory)
     context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)
+
+
+def _subagent_wait(context: ToolContext) -> int:
+    """SUBAGENT_WAIT as ``context`` has it: seconds a foreground call waits
+    before handing back its handle, 0 for no limit."""
+    return int_or_default(getattr(context, "subagent_wait_seconds", 0), 0, minimum=0)
+
+
+async def _detachable(indexed_items, coro_factory, agent_id: str, session_id: str | None,
+                      context: ToolContext, wait_s: int) -> str:
+    """A foreground call of the main agent: its workers run as a task job and
+    the call waits for the job. It returns the result when the job ends, or
+    the job's handle once ``context.subagent_detach`` is set (the operator
+    typed) or ``wait_s`` seconds pass, and the job keeps running. Cancelling
+    the call before then kills the job."""
+    job = task_jobs.start(
+        indexed_items, coro_factory,
+        lambda results: _assemble_task_results(results, agent_id, session_id),
+        agent_id=agent_id, depth=context.task_depth, owner=context.task_owner,
+        on_done=context.invalidate_search_cache, on_loop=True, label="task {id}",
+    )
+    loop = asyncio.get_running_loop()
+    ended = asyncio.Event()
+    job.future.add_done_callback(lambda _done: loop.call_soon_threadsafe(ended.set))
+    waits = {asyncio.ensure_future(ended.wait())}
+    signal = context.subagent_detach
+    if signal is not None:
+        waits.add(asyncio.ensure_future(signal.wait()))
+    try:
+        await asyncio.wait(waits, timeout=wait_s or None, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        # The turn that waited is cancelled with it: nobody is owed a note.
+        job.delivered = True
+        job.kill()
+        await task_jobs.wait_async(job, task_jobs.KILL_GRACE_S)
+        raise
+    finally:
+        for waiting in waits:
+            waiting.cancel()
+    if not job.running():
+        job.delivered = True
+        if job.cancelled():
+            return f"ERROR task {job.id} was cancelled"
+        return job.result()
+    why = ("the operator wrote to you; read their message, the subagents carry on"
+           if signal is not None and signal.is_set()
+           else f"SUBAGENT_WAIT ({wait_s}s) passed")
+    registry = context.tool_registry
+    pollable = registry is not None and registry.resolve("task") is not None
+    return task_jobs.started_text(job, why=why, pollable=pollable)
 
 
 def is_fan_out_handler(handler: Any) -> bool:

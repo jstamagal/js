@@ -336,3 +336,175 @@ def test_background_task_accepts_its_scheduler(monkeypatch):
     assert len(scheduled) == 1
     assert job.result() == "WORK"
     assert job.result_path.read_text() == "WORK"
+
+
+def _on_loop(loop, coro, timeout: float = 10):
+    return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
+
+
+def _detach_event(loop) -> asyncio.Event:
+    async def make() -> asyncio.Event:
+        return asyncio.Event()
+
+    return _on_loop(loop, make())
+
+
+def test_typing_hands_back_a_waiting_foreground_call_and_the_workers_carry_on(workers, ctx, loop_sup):
+    loop, _sup = loop_sup
+    ctx.subagent_detach = _detach_event(loop)
+    call = asyncio.run_coroutine_threadsafe(
+        subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx), loop)
+    assert workers.started.wait(5)
+    assert not call.done()
+    loop.call_soon_threadsafe(ctx.subagent_detach.set)
+    handed = call.result(timeout=5)
+    handle = _handle(handed)
+    job = _job(handle, ctx)
+    assert job.running() and not workers.cancelled.is_set()
+
+    workers.release.set()
+    job.future.result(timeout=5)
+    [note] = _notes(ctx)
+    assert handle in note and "result of alpha" in note
+
+
+def test_a_foreground_call_that_finishes_first_returns_the_result_and_leaves_no_note(workers, ctx, loop_sup):
+    loop, _sup = loop_sup
+    ctx.subagent_detach = _detach_event(loop)
+    workers.release.set()
+    assert _on_loop(loop, subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx)) == "result of alpha"
+    assert _notes(ctx) == []
+
+
+def test_subagent_wait_hands_back_the_handle_when_it_passes(workers, ctx, loop_sup):
+    loop, _sup = loop_sup
+    ctx.subagent_wait_seconds = 1
+    began = time.monotonic()
+    handed = _on_loop(loop, subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx))
+    assert 0.9 <= time.monotonic() - began < 5
+    assert _job(_handle(handed), ctx).running()
+
+
+def test_cancelling_a_waiting_foreground_call_kills_its_workers(workers, ctx, loop_sup):
+    loop, _sup = loop_sup
+    ctx.subagent_detach = _detach_event(loop)
+    holder: list[asyncio.Task] = []
+
+    async def start() -> None:
+        holder.append(asyncio.ensure_future(
+            subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx)))
+
+    _on_loop(loop, start())
+    assert workers.started.wait(5)
+    loop.call_soon_threadsafe(holder[0].cancel)
+    assert workers.cancelled.wait(5)
+
+    async def ended() -> bool:
+        await asyncio.wait(holder, timeout=5)
+        return holder[0].cancelled()
+
+    assert _on_loop(loop, ended())
+    assert _notes(ctx) == []
+
+
+def test_a_subagents_own_call_waits_whatever_subagent_wait_says(workers, ctx, loop_sup):
+    loop, _sup = loop_sup
+    child = _subagent_ctx()
+    child.subagent_wait_seconds = 1
+    threading.Timer(1.5, workers.release.set).start()
+    assert _on_loop(loop, subagents.task_async(tasks=["alpha"], agent_id="worker", context=child)) == "result of alpha"
+
+
+def test_an_idle_repl_wakes_the_agent_with_a_finished_result(workers, ctx, monkeypatch, tmp_path):
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+
+    async def lines(_on_line) -> None:
+        subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+        workers.release.set()
+        deadline = time.monotonic() + 10
+        while not turns and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+
+    run_repl(monkeypatch, cfg, lines)
+    [turn] = turns
+    sent = str(turn.messages[-1]["content"])
+    assert "result of alpha" in sent
+
+
+def test_an_idle_repl_with_subagent_wake_off_waits_for_the_next_line(workers, ctx, monkeypatch, tmp_path):
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+
+    async def lines(on_line) -> None:
+        await on_line("/set SUBAGENT_WAKE off")
+        started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+        workers.release.set()
+        await asyncio.wait_for(asyncio.wrap_future(_job(_handle(started), ctx).future), 5)
+        await asyncio.sleep(0.2)
+        assert turns == []
+        await on_line("next")
+
+    run_repl(monkeypatch, cfg, lines)
+    [turn] = turns
+    sent = str(turn.messages[-1]["content"])
+    assert sent.startswith("next") and "result of alpha" in sent
+
+
+def test_a_prompt_run_gives_the_agent_each_background_result_before_it_ends(workers, ctx):
+    from js import prompt_run
+
+    sent: list[dict] = []
+
+    class Chat:
+        context = ctx
+
+        async def turn(self, message, *, started=None, **_kwargs):
+            if started is not None:
+                started()
+            sent.append(message)
+
+    prepared = types.SimpleNamespace(cfg=types.SimpleNamespace(settings={}),
+                                     inputs=types.SimpleNamespace(save=False))
+    subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+    threading.Timer(0.2, workers.release.set).start()
+    prompt_run._background_turns(prepared, Chat(), None, None, False, {})
+    [message] = sent
+    assert "result of alpha" in message["content"]
+    assert task_jobs.outstanding(ctx.task_owner) == []
+
+
+def test_a_line_typed_during_a_waiting_task_call_is_read_without_waiting_on_it(workers, ctx, monkeypatch, tmp_path):
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        if "handed" in seen:
+            return
+        seen["handed"] = await subagents.task_async(tasks=["alpha"], agent_id="worker",
+                                                    context=runtime.T.STOCK_CONTEXT)
+        seen["running"] = _job(_handle(seen["handed"]), runtime.T.STOCK_CONTEXT).running()
+        seen["steered"] = await kwargs["steer"]()
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+
+    async def lines(on_line) -> None:
+        await on_line("go")
+        while not workers.started.is_set():
+            await asyncio.sleep(0.01)
+        await on_line("/set STEER_MODE now")
+        await on_line("are you there?")
+        deadline = time.monotonic() + 10
+        while "steered" not in seen and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        workers.release.set()
+
+    run_repl(monkeypatch, cfg, lines)
+    assert seen["running"]
+    assert "are you there?" in str(seen["steered"]["content"])

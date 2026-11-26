@@ -138,7 +138,7 @@ class SubagentWindow:
         try:
             with self.writing():
                 result = await subagents.task_async(tasks=[text], agent_id=self.agent,
-                                                    context=self._owner.parent_context())
+                                                    context=self._owner.parent_context(), detach=False)
                 if not adopted:
                     msgs.warn(msgs.FAILED, error=result)
         except Exception as exc:  # noqa: BLE001 - shown in its window like a REPL turn's

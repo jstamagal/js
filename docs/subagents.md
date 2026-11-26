@@ -2,7 +2,9 @@
 
 Subagents in `js` are implemented by the `task` tool and generated
 prompt-directory tools. They are parallel worker turns. A `task` call waits for
-them, or with `background=true` returns a handle at once.
+them, or with `background=true` returns a handle at once. The main agent's
+waiting call hands back the handle too when the operator types or
+`SUBAGENT_WAIT` passes, and a finished result comes back to it on its own.
 
 Agents are created using prompt directories under `defaults/agents/` (for bundled agents)
 or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
@@ -170,9 +172,23 @@ What exists today:
 
 ## Foreground And Background
 
-A foreground `task` call blocks until all child futures complete. One task
+A foreground `task` call waits until all children complete. One task
 returns the worker's text verbatim; a fan-out returns one `TASK_RESULTS` string
 with the results numbered in task order.
+
+The main agent's foreground call (depth 0, the `task` tool or a named-agent
+tool) runs its children as a task job and waits on the job
+(`subagents._detachable`). It stops waiting and returns the job's handle, with
+the children still running, when:
+
+- the operator types a line to the main agent during the turn at
+  `STEER_MODE now` (the REPL sets `ToolContext.subagent_detach`); the line is
+  the next thing the model reads, so typing never waits on subagents;
+- `SUBAGENT_WAIT` seconds pass, when it is above 0 (default 0: no limit).
+
+^C before then cancels the turn and kills the job, as before. A window's
+subagent launched with `/window new` never hands back; subagents' own calls
+(depth 1 and below) always wait.
 
 `background=true` starts the same fan-out and returns at once:
 
@@ -198,17 +214,31 @@ main agent and each subagent see, poll, wait on and kill only their own runs.
 Under the REPL the run is one `subagent` job on the REPL's loop
 (`js/toolkit/task_jobs.py`), so it outlives the turn that started it, shows in
 `/jobs`, and `/cancel <id>` stops it. Without a supervisor (`-p`) it runs on a
-private loop in a daemon thread and ends with the process.
+private loop in a daemon thread; with `SUBAGENT_WAKE` off it ends with the
+process.
 
 When a run started by the main agent finishes and the model has not read its
-result through poll, wait or kill, the next user message carries a
-`<js-reminder>` naming the handle and the result file (`repl._take_pending_notes`).
+result through poll, wait or kill, a `<js-reminder>` hands the model the
+result (cut at `TOOL_RESULT_MAX`; the file holds all of it), whichever comes
+first:
+
+- the main agent's next tool boundary, if a turn is running (the REPL's and
+  `-p`'s `steer`);
+- the next user message (`repl._take_pending_notes`);
+- with `SUBAGENT_WAKE` on (default), a turn of its own: in the REPL, when the
+  main agent is idle and nothing is queued (`task_jobs.listener`, the
+  consumer's `_WAKE`); in `-p`, the run waits for every outstanding task after
+  the prompt's turn and runs one turn per batch of results
+  (`prompt_run._background_turns`), so the run's answer is the last of them.
+
 A run a subagent started gets no reminder; that subagent polls it itself.
+`/jobs` lists the main agent's task handles with their progress.
 
 Children run through the same `_prepare_fan_out` as a foreground call, so they
 get the same inherited context and, under `-C`, the same jail.
 
-Direct agent tools have no background form.
+Direct agent tools have no `background` argument; their main-agent calls hand
+back a handle the same way a `task` call does.
 
 Not implemented:
 

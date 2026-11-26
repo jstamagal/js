@@ -64,9 +64,9 @@ Parallelism:
   returns them numbered under a `TASK_RESULTS` header.
 
 Background:
-- A call blocks until every worker finishes. With `background=true` it returns
-  at once with a handle instead, and the workers keep running while you do
-  other work:
+- A call waits for its workers, unless the operator writes to you while it
+  waits or `SUBAGENT_WAIT` seconds pass: then it returns their handle and the
+  workers keep running. With `background=true` it returns the handle at once:
 
       task running in the background (handle t1): ...
       HANDLE t1 RUNNING
@@ -77,13 +77,13 @@ Background:
   stops it. `handle` defaults to your most recent running task. You see only
   the tasks you started. `tasks` and
   `agent_id` are needed only to start one.
-- The finished result is also written to the file the handle names. If you have
-  not polled it by then, the next user message carries a `<js-reminder>` that
-  names that file.
-- In a one-shot run (`js -p`) a background task still running when the run ends
-  is stopped with it; wait for it before your final answer.
-- Use it for slow, independent work you do not need before your next step.
-  When the next step depends on the result, run it in the foreground.
+- When a task you have not polled finishes, its result comes to you in a
+  `<js-reminder>`: at your next tool call, with the next user message, or, if
+  you are idle, in a message of its own. The result is also written to the
+  file the handle names.
+- Use it for slow, independent work you do not need before your next step:
+  start it, carry on, and use the result when it arrives. When the next step
+  depends on the result, run it in the foreground.
 
 Prompting guidance:
 - Include the expected output shape.

@@ -333,6 +333,18 @@
 # A subagent waiting on its own subagents does not count.
 #set SUBAGENT_WORKERS_MAX 8
 
+# How long the main agent's task call waits for its subagents before handing
+# the model a handle and letting it get on with other work. The subagents
+# keep running; their result comes back when they finish. 0 waits for them.
+# Typing to the main agent during its turn hands the call back either way.
+#   example:  set SUBAGENT_WAIT 60
+#set SUBAGENT_WAIT 0
+
+# When background subagents finish while the main agent sits idle, start a
+# turn that hands it their result, instead of waiting for your next line.
+# In js -p the run keeps going until every background result is in.
+#set SUBAGENT_WAKE on
+
 # Subagents run on your current model instead of the one their own agent
 # names.
 #set SUBAGENT_INHERIT_MODEL off

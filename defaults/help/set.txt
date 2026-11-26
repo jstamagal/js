@@ -205,6 +205,19 @@ SUBAGENT_WORKERS_MAX
     from every task call; minimum 1. A subagent waiting on its own subagents
     does not count.
 
+SUBAGENT_WAIT
+    Seconds the main agent's task call waits for its subagents before
+    returning a handle; 0 waits for them to finish. The subagents keep
+    running, and their result reaches the main agent when they end. In the
+    REPL a line typed to the main agent during its turn returns the handle
+    at once, so the line is read without waiting on subagents.
+
+SUBAGENT_WAKE
+    on: a background task that finishes while the REPL's main agent is idle
+    starts a turn carrying its result; in js -p the run waits for every
+    background task and gives the agent its result before it ends. off: the
+    result rides the next line you type.
+
 SWARM_ACTIVE_MAX
     How many agents of an in-process swarm may be mid-turn at once; 0 is no
     cap. Spread over several runner processes, each holds its share of it.
