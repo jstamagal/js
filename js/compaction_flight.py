@@ -64,7 +64,7 @@ def _diagnostic(value):
     if isinstance(value, Path):
         value = str(value)
     if isinstance(value, str):
-        return _URL.sub(_diagnostic_url, value)
+        return _URL.sub(_diagnostic_url, value) if "://" in value else value
     if isinstance(value, dict):
         return {key: _diagnostic(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

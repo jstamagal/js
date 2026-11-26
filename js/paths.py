@@ -203,7 +203,9 @@ def _scanned(current: Path) -> tuple[Path, ...]:
     for directory in (current, *current.parents):
         if directory == user:
             break
-        if directory in homes or (directory / ".js").resolve(strict=False) in homes:
+        # ``directory`` is resolved, so its `.js` resolves elsewhere only as a symlink.
+        layer = directory / ".js"
+        if directory in homes or layer in homes or (layer.is_symlink() and layer.resolve(strict=False) in homes):
             continue
         found.append(directory)
     return tuple(found)
@@ -358,8 +360,36 @@ def searched(rel: str | Path = "", roots: Iterable[Path] | None = None) -> str:
     return ", ".join(str(root / rel) for root in (_file_layers(rel) if roots is None else roots))
 
 
+# `find` of a path outside the project scopes, by the path, the stock and home
+# directories, the start directory, --isolate and the modification time of the
+# home directory that would hold it. The stock copy never changes under a run,
+# so a file the home gains or loses changes the key.
+_FOUND: dict[tuple, Path | None] = {}
+
+
+def _mtime(directory: Path) -> int | None:
+    try:
+        return directory.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def find(rel: str | Path) -> Path | None:
     """The highest layer's file at ``rel``, including a zero-byte file."""
+    path = Path(rel)
+    if path.parts and path.parts[0] not in _PROJECT_SCOPES and not path.is_absolute():
+        selected = home()
+        key = (str(path), str(defaults_dir()), str(selected), os.getcwd(), _ISOLATE, _mtime((selected / path).parent))
+        # Read once: another thread may clear the cache between a store and a lookup.
+        try:
+            return _FOUND[key]
+        except KeyError:
+            pass
+        found = next((root / path for root in reversed(_file_layers(path)) if (root / path).is_file()), None)
+        if len(_FOUND) >= 256:
+            _FOUND.clear()
+        _FOUND[key] = found
+        return found
     return next((root / rel for root in reversed(_file_layers(rel)) if (root / rel).is_file()), None)
 
 

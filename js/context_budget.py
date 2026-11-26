@@ -9,6 +9,7 @@ compact?".
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -125,7 +126,12 @@ def estimate_text_tokens(text: Any, *, chars_per_token: float = 4.0) -> int:
     s = str(text)
     if not s:
         return 0
-    ratio = chars_per_token if chars_per_token > 0 else 4.0
+    return _estimate_str(s, chars_per_token if chars_per_token > 0 else 4.0)
+
+
+# The same system prompt and tool schemas are estimated on every turn.
+@functools.lru_cache(maxsize=256)
+def _estimate_str(s: str, ratio: float) -> int:
     char_floor = math.ceil(len(s) / ratio)
     lexical = 0
     for match in _TOKENISH_RE.finditer(s):

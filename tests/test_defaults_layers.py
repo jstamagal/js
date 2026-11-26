@@ -34,6 +34,24 @@ def test_find_uses_files_and_preserves_empty_override(tmp_path, monkeypatch):
     assert paths.find('absent') is None
 
 
+def test_find_answers_when_its_cache_is_cleared_under_it(tmp_path, monkeypatch):
+    # Another thread clearing the full cache right after this one stores its
+    # answer must not turn the lookup into a KeyError.
+    class ClearedAfterStore(dict):
+        def __setitem__(self, key, value):
+            super().__setitem__(key, value)
+            self.clear()
+
+    stock, own = tmp_path / 'stock', tmp_path / 'own'
+    monkeypatch.setattr(paths, 'defaults_dir', lambda: stock)
+    monkeypatch.setattr(paths, 'home', lambda: own)
+    monkeypatch.setattr(paths, '_FOUND', ClearedAfterStore())
+    monkeypatch.chdir(tmp_path)
+    _write(stock / 'themes/stock', '00 black')
+
+    assert paths.find('themes/stock') == stock / 'themes/stock'
+
+
 def test_a_home_default_agent_replaces_the_stock_one_whole(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     own = paths.home()
