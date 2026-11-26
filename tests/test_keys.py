@@ -27,6 +27,11 @@ DEFAULTS = {
     "scroll_down": (("pagedown",),),
     "complete": (("tab",),),
     **{f"window_{n}": (("c-w", str(n)),) for n in range(1, 10)},
+    "window_next": (("c-w", "n"),),
+    "window_previous": (("c-w", "p"),),
+    "window_back": (("c-w", "b"),),
+    "window_hide": (("c-w", "h"),),
+    "window_kill": (("c-w", "k"),),
 }
 
 

@@ -522,11 +522,21 @@ Parameters:
 
 ### `skill`
 
-Loads a local skill document by name from known skill paths.
+Loads a skill's instructions by name. The tool publishes an `<available_skills>`
+block and a name enum when they fit within 8 KiB. For larger catalogs, look up
+descriptions with `tool_discovery` and `kind="skill"`. With no skill to load,
+the tool is left off the turn. The result is a `<skill_content>` block:
+the body without frontmatter, `Skill directory: <dir>` (relative paths in the
+body resolve against it), a `<skill_resources>` list of the other files under
+the directory (the first 50), and which declared tools were loaded or are
+unavailable. Microcompaction does not clear a `<skill_content>` result.
 A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
-the tool refuses it and the user loads it with `/skill <name>` in the REPL.
-The built-in skills in `defaults/skills/` are the lowest layer. A skill named in
-`SKILLS_DISABLED` is not in the catalog: the tool refuses it like an unknown name.
+it is not listed, the tool refuses it and the user loads it with `/skill <name>`
+in the REPL. The built-in skills in `defaults/skills/` are the lowest layer. A
+skill named in `SKILLS_DISABLED` is not listed and the tool refuses it like an
+unknown name. A skill's `name` should be lowercase letters, digits and single
+hyphens, at most 64 characters, and match its directory; one that breaks either
+rule loads with a warning.
 
 A skill whose frontmatter sets `paths:` (a list of globs, or one string of
 comma-separated globs) is path-scoped. Globs may be unquoted (`paths: *.rs`,
@@ -575,8 +585,7 @@ session.
 `kernel` and `toolbox` are the other side of js from the curated tool surface:
 instead of handing an agent forty fixed tools, hand it a stateful Python REPL and
 let it build its own. They do not replace the hardened tools, do not wrap them,
-and do not import their rails. The shipped `twotool` agent
-(`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
+and do not import their rails.
 
 An agent has them when its agent.yaml lists them, like any other tool. Both
 need `jupyter_client` and `ipykernel`, the `kernel` extra: `just install` and
@@ -855,7 +864,6 @@ project `.js/agents/` become tools named after the directory. Files layer per re
 - `commit`
 - `defaultagent`
 - `slim`
-- `twotool`
 
 Direct agent tools take `tasks` (required), and optional `model` and
 `reasoning`:

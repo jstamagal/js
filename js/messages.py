@@ -447,18 +447,36 @@ REPL_ONLY = Message("{command} is unavailable outside the REPL.")
 NO_JOBS = Message("No running jobs.")
 JOB_ROW = Message("[{id}] {kind}{label}", banner=False)
 
-# Windows on the REPL screen (`js.subagent_windows`). `state` is a
-# WINDOW_STATE_* entry's words, `mark` "" or WINDOW_MARK_* words.
-WINDOW_ROW = Message("{number}{mark}  {name}  {state}", banner=False)
+# Windows on the REPL screen (`js.subagent_windows`, `/window`). `state` is
+# a WINDOW_STATE_* entry's words, `mark` "" or WINDOW_MARK_* words, `where`
+# WINDOW_VISIBLE's words or "".
+WINDOW_ROW = Message("{number}{mark}  {name}  {agent}  {state}{where}", banner=False)
 WINDOW_MAIN = Message("main", banner=False)
 WINDOW_STATE_RUNNING = Message("running", banner=False)
 WINDOW_STATE_FINISHED = Message("finished", banner=False)
+WINDOW_STATE_NEW = Message("new: the next line starts it", banner=False)
 WINDOW_MARK_CURRENT = Message("*", banner=False)
 WINDOW_MARK_ACTIVE = Message("+", banner=False)
+WINDOW_VISIBLE = Message("  (on screen)", banner=False)
 WINDOW_QUEUED = Message("Queued for {agent}'s next model call.")
 NO_SUCH_WINDOW = Message("No window {number}.")
 WINDOW_MAIN_STAYS = Message("Window 1 is the main conversation; it stays.")
-WINDOW_STILL_RUNNING = Message("Window {number} still runs {agent}. Ctrl-C there cancels it.")
+WINDOW_FULL = Message("WINDOW_MAX ({max}) windows are open; kill one first.")
+WINDOW_LAST_ON_SCREEN = Message("Window {number} is the only window on screen.")
+WINDOW_NOT_ON_SCREEN = Message("Window {number} is not on screen.")
+WINDOW_NO_BACK = Message("There is no window to go back to.")
+WINDOW_NUMBER_ONE = Message("Window 1 is the main conversation's number.")
+WINDOW_NAME_TAKEN = Message("Window {number} is already named {name}.")
+WINDOW_NAME_DIGITS = Message("A window name cannot be all digits: {name}")
+WINDOW_UNKNOWN_OP = Message("No /window op {op}. Ops: {ops}")
+WINDOW_AMBIGUOUS_OP = Message("/window {op} could be {ops}.")
+WINDOW_OP_NEEDS = Message("/window {op} takes {what}.")
+WINDOW_ARG_WINDOW = Message("a window number or name", banner=False)
+WINDOW_ARG_NUMBER = Message("a number", banner=False)
+WINDOW_ARG_NAME = Message("a name, or - to clear it", banner=False)
+WINDOW_ARG_AGENT = Message("an agent name", banner=False)
+WINDOW_AGENT_MAIN = Message("Window 1 runs the main conversation; /agent changes its agent.")
+WINDOW_AGENT_BUSY = Message("Window {number} still runs {agent}; kill it or wait.")
 NO_JOB_TO_CANCEL = Message("No matching job to cancel.")
 CANCELLING = Message("Cancelling {jobs}")
 NO_SUCH_SKILL = Message("No skill named {name!r}.")
@@ -565,7 +583,7 @@ CMD_SESSION = Message("Open the session picker. Words after it start a search.")
 CMD_NAME = Message("Pin a title on this session, or print the one it has.")
 CMD_JOBS = Message("List running turns and subagents.")
 CMD_CANCEL = Message("Cancel a job by id, or the active turn.")
-CMD_WINDOW = Message("List the windows, show window N, or close a finished subagent's window.")
+CMD_WINDOW = Message("ircII's /window: new, kill, hide, show, swap, next, back, name, split sizes; ops chain.")
 CMD_FLUSH = Message("Drop all prompts queued behind the active turn.")
 CMD_COMPACT = Message("Append a compaction summary mark.")
 CMD_COMPACT_AUTO = Message("Turn auto-compaction on or off.")
@@ -935,7 +953,7 @@ SUBAGENT_STARTED = Message(
     "Subagent {index} of {total} started: {agent} ({kind})  {route}  effort {effort}  {tools} tools  "
     "session {session}{window}")
 SUBAGENT_WINDOW = Message("  window {number}", banner=False)
-SUBAGENT_NO_WINDOW = Message("  no window: windows 2-{last} are open", banner=False)
+SUBAGENT_NO_WINDOW = Message("  no window: WINDOW_MAX ({max}) windows are open", banner=False)
 SUBAGENT_FINISHED = Message("Subagent {index} of {total} {outcome}: {agent}  {elapsed}{tokens}")
 SUBAGENT_KIND_TASK = Message("task", banner=False)
 SUBAGENT_KIND_AGENT = Message("named agent", banner=False)
@@ -1175,6 +1193,8 @@ DESCRIPTION_UNBALANCED = Message("{label}unbalanced {{{{#if}}}}/{{{{#unless}}}} 
 SKILL_SKIPPED = Message("Skill {path} skipped: {error}")
 SKILL_DUPLICATE = Message("Skill {path} skipped: {root} already has a skill named {name!r} at {prior}")
 SKILL_OVERRIDES = Message("Skill {name!r} at {path} is used in place of {prior}")
+SKILL_NAME_OFF_SPEC = Message("Skill {path}: name {name!r} is not lowercase letters, digits and single hyphens, at most 64 characters; loaded anyway")
+SKILL_NAME_NOT_DIRECTORY = Message("Skill {path}: name {name!r} does not match its directory {directory!r}; loaded anyway")
 ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.")
 DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}")
 # Why a directive was not expanded: the {error} hole of DIRECTIVE_NOT_EXPANDED.
@@ -1664,6 +1684,16 @@ KEY_ACTION_SCROLL_DOWN = Message("Scroll the output down a page.", banner=False)
 KEY_ACTION_COMPLETE = Message("Complete the word at the cursor, or cycle completions.", banner=False)
 
 KEY_ACTION_WINDOW = Message("Show window {n}; window 1 is the main conversation.", banner=False)
+
+KEY_ACTION_WINDOW_NEXT = Message("Show the next window.", banner=False)
+
+KEY_ACTION_WINDOW_PREVIOUS = Message("Show the previous window.", banner=False)
+
+KEY_ACTION_WINDOW_BACK = Message("Go back to the window that was current before this one.", banner=False)
+
+KEY_ACTION_WINDOW_HIDE = Message("Hide the current window from a split screen.", banner=False)
+
+KEY_ACTION_WINDOW_KILL = Message("Kill the current window and stop what runs in it.", banner=False)
 
 KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
 

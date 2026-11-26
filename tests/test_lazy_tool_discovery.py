@@ -157,16 +157,16 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     skills_found = json.loads(surface.discover(kind="skill"))["results"]
     assert [item["id"] for item in skills_found] == ["skill:inspect"]
     assert skills_found[0]["loadable"] is True
-    loaded = json.loads(surface.discover(load="skill:inspect"))
-    assert loaded["instructions"] == "Open the page and report visual defects.\n"
-    assert loaded["loaded"] == ["browser_probe"]
+    loaded = surface.discover(load="skill:inspect")
+    assert loaded.startswith('<skill_content name="inspect">\n')
+    assert "Open the page and report visual defects." in loaded
+    assert "browser_probe" in loaded
     assert surface.resolve("browser_probe") is not None
 
     forbidden = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
-    denied = json.loads(forbidden.discover(load="skill:inspect"))
-    assert denied["instructions"] == "Open the page and report visual defects.\n"
-    assert denied["loaded"] == []
-    assert denied["denied_tools"] == ["browser_probe"]
+    denied = forbidden.discover(load="skill:inspect")
+    assert "\nOpen the page and report visual defects.\n" in denied
+    assert "policy-denied: browser_probe" in denied
     assert forbidden.resolve("browser_probe") is None
 
 
@@ -202,7 +202,9 @@ def test_turn_and_skill_tool_use_supplied_catalog(tmp_path, monkeypatch):
         tool_registry=registry, tool_context=context, skill_catalog=catalog,
         suppress_output=True,
     )
-    assert [m["content"] for m in messages if m["role"] == "tool"] == [instructions]
+    [content] = [m["content"] for m in messages if m["role"] == "tool"]
+    assert content.startswith('<skill_content name="inspect">\n')
+    assert instructions in content
     assert len(calls) == 2
 
 
@@ -231,11 +233,11 @@ def test_skill_load_distinguishes_denied_and_missing_requirements(tmp_path):
     )
     surface = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
 
-    loaded = json.loads(surface.discover(load="skill:inspect"))
+    loaded = surface.discover(load="skill:inspect")
 
-    assert loaded["loaded"] == []
-    assert loaded["denied_tools"] == ["browser_probe"]
-    assert loaded["missing_tools"] == ["tool_that_does_not_exist"]
+    assert "Tools loaded for this skill" not in loaded
+    assert "policy-denied: browser_probe" in loaded
+    assert "unknown: tool_that_does_not_exist" in loaded
 
 
 def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path):
@@ -245,8 +247,8 @@ def test_skill_catalog_is_metadata_only_and_instructions_load_from_disk(tmp_path
     path.write_text("---\ndescription: Take notes\n---\nOriginal body.\n", encoding="utf-8")
     surface = build_default_registry().select(["skill:lazy"]).lazy_surface(tmp_path)
     path.write_text("---\ndescription: Take notes\n---\nUpdated body.\n", encoding="utf-8")
-    loaded = json.loads(surface.discover(load="skill:notes"))
-    assert loaded["instructions"] == "Updated body.\n", "instructions must load from disk on demand"
+    loaded = surface.discover(load="skill:notes")
+    assert "\nUpdated body.\n" in loaded, "instructions must load from disk on demand"
 
 
 def test_explicit_skill_kind_is_not_hijacked_by_mcp_query_word(tmp_path, monkeypatch):

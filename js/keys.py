@@ -61,6 +61,11 @@ ACTIONS: tuple[Action, ...] = (
     # key is still prompt_toolkit's delete-word-before-the-cursor.
     *(Action(f"window_{n}", SCREEN, (("c-w", str(n)),), msgs.KEY_ACTION_WINDOW.words(n=n))
       for n in range(1, 10)),
+    Action("window_next", SCREEN, (("c-w", "n"),), msgs.KEY_ACTION_WINDOW_NEXT.words()),
+    Action("window_previous", SCREEN, (("c-w", "p"),), msgs.KEY_ACTION_WINDOW_PREVIOUS.words()),
+    Action("window_back", SCREEN, (("c-w", "b"),), msgs.KEY_ACTION_WINDOW_BACK.words()),
+    Action("window_hide", SCREEN, (("c-w", "h"),), msgs.KEY_ACTION_WINDOW_HIDE.words()),
+    Action("window_kill", SCREEN, (("c-w", "k"),), msgs.KEY_ACTION_WINDOW_KILL.words()),
 )
 ACTION_BY_NAME: dict[str, Action] = {action.name: action for action in ACTIONS}
 

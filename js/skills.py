@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -15,9 +17,18 @@ import yaml
 from . import messages as msgs, output, paths, snippets
 from .cli_options import current
 
+# A name outside this set is unusable (it lands in ids, tags and /skill
+# lines), so the skill is skipped.
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
+# The Agent Skills spec's name: lowercase letters, digits and single hyphens,
+# at most 64 characters. A usable name outside it loads with a warning, as the
+# spec's client guide asks.
+_SPEC_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SPEC_NAME_MAX = 64
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
-_MAX_DESCRIPTION = 500
+_MAX_DESCRIPTION = 1024
+# Bundled files listed when a skill loads; the listing stops here.
+_RESOURCES_MAX = 50
 # Discovery runs on every turn; each distinct warning prints once per process.
 _WARNED: set[str] = set()
 # The skills js ships, vendored as defaults/skills/<name>/SKILL.md.
@@ -84,17 +95,69 @@ class LoadedSkill:
     instructions: str
     activation: ToolActivationResult = ToolActivationResult()
 
-    def render(self) -> str:
+    def render(self, public_name: Callable[[str], str] | None = None) -> str:
+        """The ``<skill_content>`` block the model gets when it loads the skill;
+        ``public_name`` maps a loaded tool to the name the model calls it by."""
+        notes = []
+        if self.activation.activated:
+            named = map(public_name or str, self.activation.activated)
+            notes.append('Tools loaded for this skill: ' + ", ".join(named))
         problems = []
         if self.activation.denied:
             problems.append('policy-denied: ' + ", ".join(self.activation.denied))
         if self.activation.missing:
             problems.append('unknown: ' + ", ".join(self.activation.missing))
-        if not problems:
-            return self.instructions
-        report = 'Skill tool requirements unavailable: ' + "; ".join(problems)
-        separator = "" if self.instructions.endswith("\n") else "\n"
-        return f"{self.instructions}{separator}\n{report}"
+        if problems:
+            notes.append('Skill tool requirements unavailable: ' + "; ".join(problems))
+        return skill_content(self.metadata, self.instructions, notes)
+
+
+def skill_content(metadata: SkillMetadata, instructions: str, notes: Iterable[str] = ()) -> str:
+    """A loaded skill as the Agent Skills spec frames it: the body, the skill's
+    directory (relative paths in the body resolve against it), the files
+    bundled with it, and ``notes``."""
+    directory = metadata.path.parent
+    lines = [f'<skill_content name="{metadata.name}">',
+             f"Skill directory: {directory}",
+             "Relative paths in this skill are relative to the skill directory."]
+    resources, more = skill_resources(directory)
+    if resources:
+        lines.append("<skill_resources>")
+        lines += [f"<file>{escape(item, quote=False)}</file>" for item in resources]
+        if more:
+            lines.append(f"<!-- {more} more files not listed -->")
+        lines.append("</skill_resources>")
+    lines += list(notes)
+    lines += ["", instructions.strip("\n")]
+    lines.append("</skill_content>")
+    return "\n".join(lines)
+
+
+def skill_resources(directory: Path) -> tuple[tuple[str, ...], int]:
+    """The files under a skill's directory, relative to it, SKILL.md and
+    dot-entries left out: the first ``_RESOURCES_MAX`` in sorted order, and
+    how many more there are."""
+    found: list[str] = []
+    for top, dirs, files in os.walk(directory):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d != "__pycache__")
+        relative = Path(top).relative_to(directory)
+        for name in sorted(files):
+            if name.startswith(".") or (top == str(directory) and name == "SKILL.md"):
+                continue
+            found.append((relative / name).as_posix())
+    return tuple(found[:_RESOURCES_MAX]), max(0, len(found) - _RESOURCES_MAX)
+
+
+def catalog_block(skills: Iterable[SkillMetadata]) -> str:
+    """The ``<available_skills>`` listing of each skill's name and description,
+    or "" when there are none."""
+    entries = [
+        f"<skill>\n<name>{skill.name}</name>\n<description>{escape(skill.description, quote=False)}</description>\n</skill>"
+        for skill in skills
+    ]
+    if not entries:
+        return ""
+    return "<available_skills>\n" + "\n".join(entries) + "\n</available_skills>"
 
 
 @dataclass(frozen=True)
@@ -210,7 +273,7 @@ def load_skill(
     return LoadedSkill(metadata=metadata, instructions=body, activation=activation)
 
 
-_USER_SKILL_BLOCK_RE = re.compile(r'<skill name="([^"]+)">\n')
+_USER_SKILL_BLOCK_RE = re.compile(r'<skill_content name="([^"]+)">\n')
 
 
 def user_invoked_skill(content: Any) -> str | None:
@@ -256,14 +319,10 @@ def expand_user_invocation(catalog: SkillCatalog, text: str, *, command: str = "
     if loaded is None:
         raise SkillInvocationError(msgs.NO_SUCH_SKILL.said(name=name))
     metadata = loaded.metadata
-    header = [f'Base directory for this skill: {metadata.path.parent}']
+    notes = []
     if metadata.tools:
-        header.append(
-            snippets.render('skill-tools-header')
-            + ", ".join(metadata.tools)
-        )
-    body = loaded.instructions.strip("\n")
-    block = f'<skill name="{metadata.name}">\n' + "\n".join(header) + f'\n\n{body}\n</skill>'
+        notes.append(snippets.render('skill-tools-header') + ", ".join(metadata.tools))
+    block = skill_content(metadata, loaded.instructions, notes)
     return f"{block}\n\n{request}" if request else block
 
 
@@ -391,6 +450,10 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
     derived_name = path.parent.name
     name = _string_field(manifest, "name") or derived_name
     _validate_name(name)
+    if not _SPEC_NAME_RE.fullmatch(name) or len(name) > _SPEC_NAME_MAX:
+        _warn_once(msgs.SKILL_NAME_OFF_SPEC.said(path=path, name=name))
+    if name != derived_name:
+        _warn_once(msgs.SKILL_NAME_NOT_DIRECTORY.said(path=path, name=name, directory=derived_name))
     description = _string_field(manifest, "description")
     if not description:
         description = _derive_description(body, name)
