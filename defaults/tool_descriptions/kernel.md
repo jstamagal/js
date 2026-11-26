@@ -1,166 +1,100 @@
-Execute Python in a persistent IPython kernel (Jupyter). State survives between calls.
-
-One kernel runs for the whole session. Everything a cell defines — functions,
-classes, imports, open connections, loaded dataframes — is still there on the
-next call and every call after it. A helper defined now is callable twenty
-turns later.
+Run Python in a stateful Jupyter (IPython) kernel. State persists across
+calls: this is one long-lived process for the whole session, not a fresh
+program per call. Every function, class, import, connection and value a cell
+defines is still there on the next call and every call after it, so define a
+thing once and use its name from then on.
 
 Parameters:
-- `code`: the Python to run. Empty `code` runs nothing and just reports the
-  current namespace.
-- `action`: `run` (default) submits `code`; `poll` returns what a submitted cell
-  has produced since it was last read; `interrupt` SIGINTs the cell; `wait`
-  blocks for it.
-- `handle`: the id of the cell a `poll`, `interrupt`, or `wait` acts on.
-  Defaults to the cell that is running, or the one submitted last.
-- `timeout` (default `120` seconds): the longest one call blocks — both the wait
-  when a cell is submitted and the block an explicit `wait` performs.
-- `restart` (default `false`): kill and restart the kernel. This DESTROYS every
-  definition and every value in the namespace. Only use it when the kernel is
-  reported dead, or when you deliberately want a clean slate.
-- `verbosity`: `quiet`, `normal`, or `verbose` for the operator's terminal view
-  of this one call. It changes nothing about what you receive.
+- `code`: the Python to run. Empty `code` just reports the namespace.
+- `action`: `run` (default) submits `code`; `poll`, `wait` and `interrupt` act
+  on a cell that is still running.
+- `handle`: the cell a `poll`, `wait` or `interrupt` acts on. Defaults to the
+  running cell, or the last one submitted.
+- `timeout` (default `120` seconds): the longest one call blocks.
+- `restart`: kill the kernel and start a fresh one. Every definition and value
+  is destroyed. Use it when the result says the kernel died, or when a cell
+  will not stop on `interrupt`.
+- `verbosity`: `quiet`, `normal` or `verbose`, for the operator's terminal view.
 
-A cell does not have to finish before you get an answer. `kernel` submits it and
-waits a few seconds; a cell that finishes inside that window comes back whole,
-and a cell still running comes back as a handle:
+A cell still running after a few seconds comes back as `HANDLE <id> RUNNING`.
+`action="poll"` returns what it has printed since the last read,
+`action="wait"` blocks for the rest, and `action="interrupt"` stops it. A
+`wait` that runs out its `timeout` interrupts the cell too. An interrupt is
+Ctrl-C in a notebook: the cell gets a `KeyboardInterrupt` and the namespace
+survives. New `code` submitted while a cell runs is refused, so poll, wait or
+interrupt first.
 
-    cell 3 is still running after 5.0s (handle 3). Poll it with action="poll" ...
-    HANDLE 3 RUNNING
+If the kernel process dies (a segfault, `os._exit`, the OOM killer), the result
+says so and names the cell; everything defined is gone. A kernel that died
+between calls is replaced by the next call, which opens with `kernel started`
+and says the previous kernel died.
 
-Then `action="poll", handle="3"` returns what it produced since the last read
-and whether it is still running, `action="wait", handle="3", timeout=120` blocks
-for the rest, and `action="interrupt", handle="3"` stops it. Output produced
-while you are off doing something else is kept and delivered on the next poll.
+Every finished cell ends with `NAMESPACE`, the functions and classes the
+session has defined, and `DEFINED`, what this cell added. `NAMESPACE` is read
+from the live kernel, so it is the record of what you have built even when the
+turns that built it are gone from your context. Name your functions: a named
+function is listed there and stays callable, a pasted block is neither.
 
-Every result for a finished cell ends with a `NAMESPACE` line listing the
-functions and classes the session defined (`NAMESPACE (none)` when it defined
-none), and a `DEFINED` line for anything this cell added — functions, imports,
-and values alike. That listing is re-derived from the kernel itself whenever
-it is idle; polling an older cell while another runs keeps the last completed
-listing. It stays available even when the conversation that defined a function is no
-longer in your context; it is the record of what the session has built.
-A cell that is still running ends with `HANDLE <id> RUNNING` instead, and
-a new `code` submitted while it runs is refused rather than queued behind it:
+Output: stdout, stderr, the last expression's `repr` and full tracebacks come
+back. Figures are written under `~/.js/state/kernel/` and reported as
+`IMAGE <path>`. A large result is previewed within `TOOL_RESULT_MAX` and
+spills to a file above `TOOL_RESULT_INLINE_MAX`; the preview cuts printed
+output first, so the traceback, `IMAGE` lines and the closing `HANDLE` or
+`NAMESPACE` line still arrive. Print what you want and let the cap trim it.
 
-    ERROR: the previous cell is still running (<first line>); interrupt it or wait
-
-Output behavior:
-- stdout, stderr, `repr` results, and tracebacks all come back. A cell that
-  raises returns the real traceback, not a summary.
-- Images produced by matplotlib and friends are written to files under
-  `~/.js/state/kernel/` and reported as `IMAGE <path>`.
-- Large results are previewed within `TOOL_RESULT_MAX` and spill to a file
-  above `TOOL_RESULT_INLINE_MAX`. The preview cuts printed output first to
-  make room for the traceback, `IMAGE` lines and final `HANDLE` or `NAMESPACE`.
-
-Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`
-that ran out of time, from `action="interrupt"`, or from Ctrl-C on the turn that
-submitted the cell — stops the cell exactly like Ctrl-C in a notebook: the
-namespace and everything in it survive, and the result carries the traceback.
-A cell body runs ON the loop, so a cell that blocks waiting for that same loop
-to finish something never completes. `run_coroutine_threadsafe(coro, loop)
-.result()` is the usual shape, and a nested `loop.run_until_complete(...)` under
-a loop patch is the same mistake: the thread that would run `coro` is the thread
-you just blocked. This is not a slow call and not a timeout you can raise your
-way out of — an instant `async def q(): return 7` hangs exactly as long as a
-60-second download, and `.result(timeout=n)` reports `TimeoutError` after `n`
-seconds whatever the coroutine does. `await` is the only form that runs: it
-yields the loop instead of blocking it. A sync wrapper around an async client
-fails here for this reason even when the server is healthy, so call the async
-method directly rather than reaching for the library's sync shim.
-
-The tool stays usable throughout: the submitting call returns a handle, the next
-`code` is refused with `the previous cell is still running`,
-`action="interrupt"` stops the blocked cell, and the next cell's `await` is
-served normally.
-The one cell SIGINT cannot stop is one blocked in a syscall that ignores it, a
-network call stuck on a dead resolver being the usual case; only
-`restart=true` clears that, and a later call reports the cell as still running
-instead of queueing behind it and waiting out its timeout.
-
-If the kernel process actually dies (a segfault, an `os._exit`, the OOM killer)
-the result says so plainly and names the cell. That is the one case where
-everything is gone and `restart=true` plus a rebuild is the answer. A kernel
-that died while you were away is replaced by the next call, which opens with
-`kernel started` and says the previous kernel died.
+Async: a cell runs on a live event loop. Use top-level `await` and call async
+methods directly. `asyncio.run(...)` and `loop.run_until_complete(...)` raise
+`This event loop is already running`, and anything that blocks the cell on its
+own loop, such as `run_coroutine_threadsafe(coro, loop).result()` or a
+library's sync wrapper around an async client, hangs however fast the
+coroutine is. Build an async client inside the function that uses it and
+`await client.aclose()` in a `finally`; one left open prints `Unclosed client
+session` into later results.
 
 Calling js tools from a cell: the namespace holds `tools`, and
-`tools.<name>(...)` calls the js tool `<name>` and returns its result as a
-Python value, so a loop over files or a filter over search hits runs in the
-cell and only what you print comes back.
+`tools.<name>(...)` calls a js tool and returns its text as a Python value, so
+a loop over files or a filter over search hits runs in the cell and only what
+you print comes back. `<name>` is the tool's short js name, such as
+`tools.read` or `tools.fs_search`, whatever longer or prefixed names your tool
+schema shows. `tools.names()` lists the names a cell can use.
 
 {{#if read}}
     src = tools.read("setup.py", show_line_numbers=False)
-    print(len(src.splitlines()))
 {{/if}}
 {{#if fs_search}}
     hits = tools.fs_search(pattern="TODO", output_mode="files_with_matches")
-    print(hits.splitlines()[:5])
 {{/if}}
 
-- Keyword arguments are the tool's parameters, as in a direct call. Positional
-  arguments fill them in the order the tool's schema lists them.
-- The value is the text a direct call returns, whole: the result caps apply to
-  what the cell prints, not to what a tool returns into it.
-- A refusal or failure raises `tools.ToolError` with the `ERROR` text.
-{{#if read}}
-  File content from `read` is a value even when it starts with `ERROR`.
-{{/if}}
-- Each call runs as a direct call would: only tools you can call yourself, with
-  the same argument checks, path limits, read-before-write rule, and
-  `on tool_call` hooks, which can refuse it.
+- Arguments are the tool's parameters, by keyword or in schema order. The
+  value is the whole text a direct call returns, uncapped.
+- A refusal or failure raises `tools.ToolError` carrying the `ERROR` text.
+- A call runs as a direct call does: same argument checks, path limits,
+  read-before-write rule and hooks.
 {{#if patch}}
-  A file a cell reads counts as read for a later `patch`.
+  A file read in a cell counts as read for a later edit of it.
 {{/if}}
-- A relative path in a tool argument resolves against js's working
-  directory, as in a direct call, not against the cell's `os.getcwd()`. After
-  an `os.chdir` in a cell, pass absolute paths.
-- `tools.names()` lists what a cell can call. `kernel`, `toolbox`, subagent
-  tools, and MCP tools are not callable from a cell; call them directly.
-- Interrupting a cell does not stop the tool call it is waiting on. The tool
-  runs to its end, and the cell's next tool call waits for it.
-- A cell left running in the background keeps calling tools while you make
-  direct calls, and its writes are not ordered against yours.
+- Relative paths resolve against js's working directory, not the cell's
+  `os.getcwd()`; after an `os.chdir`, pass absolute paths.
+- `kernel`, the toolbox tool, subagent tools and MCP tools are not in
+  `tools`; call them directly.
+- Interrupting a cell does not stop the tool call it is waiting on; that call
+  runs to its end.
 
-Practical notes:
-- Intermediate state survives here and not in a one-shot script.
-- A named function shows up in `NAMESPACE` and stays callable; a pasted block
-  does not.
-- Cells run inside a live asyncio event loop. `await` works at cell top level,
-  so `async def` helpers are awaited directly; `asyncio.run(...)` and
-  `loop.run_until_complete(...)` raise `RuntimeError: This event loop is already
-  running` there, and `await` is the fix. Patch nothing: loop-patching libraries
-  are not needed, and `import nest_asyncio` fails in a cell.
-- Close the async clients you open. Construct the client inside the function,
-  wrap the work in `try`/`finally`, and `await client.aclose()` in the `finally`.
-  A client left open keeps printing `Unclosed client session` onto kernel stderr,
-  and that reaches you in a later result.
-- Cells run in the interpreter that runs js: the js checkout's project venv,
-  under both the `js` on PATH and `just run`. Modules installed in some other
-  project's venv are not importable here, so check `sys.executable` in a cell
-  and install into that one: `uv pip install --python <that path> <package>`.
-  `!pip install` and other IPython magics reach the same environment. A package
-  added that way stays until `just sync`, which removes what uv.lock does not
-  list.
+Packages: cells run in the interpreter that runs js. To add a package, install
+into that interpreter: `uv pip install --python <sys.executable> <package>`.
+It stays until the next `just sync`.
 
 {{#if shell}}
-Use `shell` instead for builds, tests, git, package managers, and anything that
-is really a command rather than Python. `shell` gets you a fresh process every
-time; this tool gets you a process that remembers.
+Use the shell tool for what is really a command: builds, tests, git, package
+managers. A shell call is a fresh process each time; this one remembers.
 {{/if}}
-
 {{#if toolbox}}
-This tool does not persist anything past the session. `toolbox` is the layer
-that does: `toolbox action=load` pulls previously saved tools into this kernel's
-namespace, and `toolbox action=save name=<fn>` promotes a function you defined
-here to disk with provenance. Anything not saved dies with the session.
-Until `toolbox action=load` has run, none of the saved tools are in this
-namespace.
+The kernel ends with the session; the toolbox tool is what lasts. Call it with
+`action=load` at the start to bring saved tools into this namespace; none of
+them are here until it has run. When a function you wrote here works, save it
+then: the toolbox tool with `action=save name=<fn>`.
 {{/if}}
 {{#unless toolbox}}
-Nothing here survives the session. When this session ends the kernel is torn
-down and every definition in it is gone. Write code accordingly: if something
-must outlive the session, write it to a file.
+The kernel ends with the session. Write what must outlive it to a file.
 {{/unless}}
-When js runs with `-C DIR`, the kernel runs in the same jail as `shell`.
+Under `-C DIR` the kernel runs in the same jail as the shell tool.

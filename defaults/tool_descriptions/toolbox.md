@@ -1,81 +1,88 @@
 Tools that outlive the session: save a function to disk, load it back, keep its
-revision history and its provenance.
+revision history and who wrote each revision.
 
 {{#if kernel}}
-The `kernel` tool gives you state for one session. This gives you state forever.
-A function you write and save today is loadable by whatever model runs here
-tomorrow, which can then refine it and save a new revision on top. The file
-records who wrote each revision and why.
+The kernel tool gives you state for one session. This gives you state for
+good. A function saved today is loadable by whatever model works here
+tomorrow, which can refine it and save a new revision on top.
 {{/if}}
 
+Build tools here, and build them specialized. A tool that knows this project's
+log format, this API's pagination and rate-limit quirks, this repo's release
+steps in order, or the query that answers the question the owner keeps asking
+is the point of the toolbox. It does not need to be general or reusable
+elsewhere; a tool that does one job for one project and gets it right is
+worth more than a general one that needs re-explaining every session.
+
+A workflow is a tool too. A saved tool may call js tools through
+`tools.<name>(...)`, using the short js names that `tools.names()` lists in a
+cell, so one function can run a project's steps in order, shell commands and
+file edits included, and check each one.
+
+Save the first time something works. If you wrote a function and it did its
+job, save it in the same turn, before moving on. Saving is cheap and never
+destructive, and the next session refines a rough `r1` far faster than it
+rediscovers the edge cases from nothing. Load at the start of every session
+and use what is there before writing anything new; when a saved tool is wrong
+or incomplete, fix it and save the next revision.
+
 Parameters:
-- `action` (required): `list`, `load`, `save`, `history`, or `restore`.
-- `name`: the tool's name, for `save`, `history`, and `restore`. It must be a
-  plain Python identifier and it must match the name of the definition.
-- `note`: for `save` — one line on what changed and why. It is the history
-  entry the next model reads before trusting or rewriting the revision.
-- `scope`: `global` (default, available in every project) or `project` (stored
-  under `.js/toolbox/` and only visible here). A project tool shadows a global
-  tool of the same name.
-- `revision`: for `restore` — the revision number to roll back to.
-- `source`: for `save` — the definition text. Pass it when the kernel lacks
-  the source, such as a definition created with `exec(src)`.
-- `verbosity`: `quiet`, `normal`, or `verbose` for the operator's terminal view.
+- `action` (required): `list`, `load`, `save`, `history` or `restore`.
+- `name`: the tool's name, for `save`, `history` and `restore`. A plain Python
+  identifier that matches the name of the definition.
+- `note`: for `save`, one line on what this revision does or changes, and why.
+- `scope`: for `save`. `project` writes to the project's `.js/toolbox`, which
+  is where a tool that knows this project belongs, so pass `scope=project`
+  for those. `global` is for tools that are useful in any project, and is
+  what an omitted `scope` means. When both hold a tool of the same name, the
+  project one wins.
+- `revision`: for `restore`, the revision number to roll back to.
+- `source`: for `save`, the definition text, when the function is not in the
+  kernel namespace.
+- `verbosity`: `quiet`, `normal` or `verbose`, for the operator's terminal view.
 
-`list` shows every saved tool with its current revision, its scope, and the
-chain of models that have worked on it. A file that will not parse is listed as
-`BROKEN` with the reason rather than being hidden.
+Make a tool findable. `list` and `load` print one line per tool: its name,
+revision, scope and the models that have worked on it. The name is what the
+next model sees first, so make it say what the tool is for:
+`parse_acme_access_log`, not `parse_log`. Give every tool a docstring whose
+first line says what it does and when to reach for it, then the arguments and
+what comes back; after a `load`, `help(<name>)` shows it.
 
-A fresh box is not empty: `js` ships one example tool, `word_frequencies`, and
-the first `list` or `load` copies it into the global toolbox. It is an ordinary
-tool from then on — edit it, refine it, or delete it. Nothing overwrites a copy
-that already exists, including a reinstall.
+The `note` is the history line the next model reads before trusting or
+rewriting a revision. "fixed it" tells it nothing; "off-by-one on the last
+chunk when the file has no trailing newline" does.
+
+`load` execs every tool file into the kernel namespace and reports what
+arrived. Nothing saved is in the namespace until it has run. Each file is
+exec'd separately into one shared namespace, so a tool may call another saved
+tool, and a file that fails is listed `BROKEN` with the reason while the rest
+still load. A fresh toolbox holds one shipped example, `word_frequencies`.
 
 `load` and `save` run in the kernel, so they need it idle: while a cell is
-still running they return an ERROR naming its handle instead of queueing
+still running they return an `ERROR` naming its handle instead of queueing
 behind it.
 
-`load` execs every healthy tool file into the kernel namespace, then reports
-what arrived. Each file is exec'd separately, so one broken tool costs you that
-tool and nothing else. Until it has run, the kernel namespace has none of the
-saved tools in it.
+`save` reads the named definition out of the live kernel, carries its imports
+into the file (including the module and alias of a `from` import), and writes
+it as the next revision: `r1`, then `r2`, and so on.
+It never overwrites. The previous revision is archived and stays restorable,
+so saving over an existing tool is safe.
 
-Every file lands in one shared namespace, so a tool may call a sibling. A file
-whose module-level code needs a sibling that has not loaded yet is retried after
-the rest are in, so what a tool is named never decides whether it loads.
+A saved file has to stand alone, so `save` refuses a definition that reads a
+name the file would not carry: a session constant, a client built in an
+earlier cell, an unsaved helper. The `ERROR`
+lists every such name and nothing is written. Fix it by taking the value as a
+parameter, building it inside the function, or saving the helper as its own
+tool first. Calling another saved tool is fine.
 
-`save` reads the named definition out of the live kernel and writes it as the
-next revision. It never overwrites: the previous revision is archived first and
-stays restorable forever. A first save is `r1`; a save over an existing tool is
-`r2`, `r3`, and so on, with your model name and note appended to the history.
-What is worth saving: a parser, a fetcher, a report formatter — a function
-that would otherwise be rewritten next session.
+A tool that needs a secret reads it from the environment when it is called,
+`os.environ["ACME_TOKEN"]`, so the file carries the variable's name and never
+the value.
 
-Before writing, `save` carries the definition's imports into the file,
-including the module and alias used by a `from` import. It refuses the save
-if the definition still reads a name the file would not carry, such as a
-session constant, a client built in an earlier cell, or an unsaved helper.
-Calling another saved tool works because the files share a namespace at load,
-and so does calling js tools through `tools.<name>(...)`, which every kernel
-has, so a saved tool can be a whole workflow.
-The error names the missing bindings. Save those as their own tools,
-inline them, or pass a complete definition in `source`. Nothing is written and
-no revision is bumped by a refused save. The same check runs on an explicit
-`source`.
+A tool that uses an async client builds it inside the function and closes it:
+`try`/`finally` with `await client.aclose()`. One left open prints `Unclosed
+client session` into later kernel results.
 
 `history` prints every revision of one tool: date, model, note, and which
-revisions can be restored.
-
-`restore` rolls a tool back to an earlier revision. The old body is written as a
-NEW revision rather than replacing the current one, so nothing is ever lost and
-the rollback itself shows up in the history.
-
-What belongs in the toolbox: self-contained functions and classes with clear
-inputs and outputs. What does not: throwaway one-liners, anything holding a
-credential, and anything whose behaviour depends on state left in one particular
-session's namespace.
-
-A saved tool that uses an async client owns closing it. Construct the client
-inside the function, wrap the body in `try`/`finally`, and `await
-client.aclose()` in the `finally`; a client left open keeps printing `Unclosed
-client session` onto kernel stderr, which lands in a later result.
+revisions can be restored. `restore` writes an earlier body as a new revision,
+so the rollback is itself in the history and nothing is lost.
