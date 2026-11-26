@@ -1,19 +1,22 @@
 """Dynamic model capability lookup backed by models.dev data.
 
 js keeps its own writable mirror of the models.dev catalog under ~/.js/cache.
-The bundled DB from the installed package is only the seed. On lookup we check
-whether the active catalog exceeds MODEL_CATALOG_AGE_MAX (8 hours by default);
-when MODEL_CATALOG_AUTO_REFRESH is on, we refresh it into
-js's own DB and record when that happened. A forced refresh is available from
-js CLI/REPL commands.
+The bundled DB from the installed package is only the seed. A lookup uses the
+catalog there is. When that one is older than MODEL_CATALOG_AGE_MAX (8 hours
+by default) and MODEL_CATALOG_AUTO_REFRESH is on, a detached process
+(`js.catalog_refresh`) downloads a new one, and lookups read it once it is
+in place. A forced refresh is available from js CLI/REPL commands.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 from contextlib import closing
@@ -36,7 +39,6 @@ from . import (
     providers,
     served_limits,
     settings as _settings,
-    stream_transport,
 )
 
 _policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", default=None)
@@ -565,22 +567,32 @@ def record_refreshed(db_path: Path, *, refreshed_at: datetime | None = None) -> 
     return status
 
 
-# Set when an automatic refresh fails. A process makes one automatic attempt:
-# later stale checks reuse the current catalog without a retry or another
-# warning. A forced refresh (/refresh-model-catalog) always tries.
-_refresh_failure: str | None = None
+# The catalog database the lookups held were read from: when another process
+# replaces it, they are dropped.
+_seen_db: list = []
 
-
-# The last catalog found fresh, by what decided it: the catalog and status
-# files as they stood and the refresh settings. Every model call asks several
-# times; for CATALOG_CHECK_S the answer is reused instead of opening the
-# database again.
+# The last catalog check, by what decided it: the catalog and status files as
+# they stood and the refresh settings. Every model call asks several times;
+# for CATALOG_CHECK_S the answer is reused instead of opening the database
+# again.
 _checked: dict[tuple, tuple[float, CatalogStatus | None]] = {}
 CATALOG_CHECK_S = 60.0
 
+# Seconds a background refresh has to itself before another may be started.
+REFRESH_CLAIM_S = 300.0
+
 
 def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
-    key = (str(_custom_db_path()), paths.file_stamp(_custom_db_path()), paths.file_stamp(_status_file_path()),
+    """The catalog to look models up in, without waiting on models.dev: a
+    stale one is used as it is while a process of its own refreshes it, and
+    the lookups read the new one once it lands. ``force`` refreshes here and
+    raises when that fails."""
+    db = paths.file_stamp(_custom_db_path())
+    if _seen_db != [db]:
+        if _seen_db:
+            reset_caches()
+        _seen_db[:] = [db]
+    key = (str(_custom_db_path()), db, paths.file_stamp(_status_file_path()),
            _policy("MODEL_CATALOG_AUTO_REFRESH"), _policy("MODEL_CATALOG_AGE_MAX"))
     checked = _checked.get(key)
     if not force and checked is not None and time.monotonic() - checked[0] < CATALOG_CHECK_S:
@@ -592,28 +604,65 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
 
 
 def _ensure_fresh_catalog(*, force: bool) -> CatalogStatus | None:
-    global _refresh_failure
+    if force:
+        return refresh_catalog(force=True)
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    if not force and (not _policy("MODEL_CATALOG_AUTO_REFRESH") or not catalog_is_stale(current)):
-        return current
-    if not force and _refresh_failure is not None:
-        if current is None:
-            raise RuntimeError(_refresh_failure)
-        return current
-    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
+    if _policy("MODEL_CATALOG_AUTO_REFRESH") and catalog_is_stale(current):
+        refresh_in_background()
+    return current
+
+
+def _refresh_claim_path() -> Path:
+    return paths.model_catalog_dir() / "refresh.claim"
+
+
+def refresh_in_background() -> bool:
+    """Start `python -m js.catalog_refresh` detached from this process, unless
+    one was started in the last REFRESH_CLAIM_S. It outlives a short run, and
+    says nothing. True when it started one."""
+    claim = _refresh_claim_path()
     try:
-        status = refresh_catalog(force=True)
-    except Exception as exc:
-        _refresh_failure = " ".join(f"{type(exc).__name__}: {exc}".split())
-        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.said(error=_refresh_failure))
-        if current is not None:
-            _activate_database(current.db_path)
-            return current
-        raise
-    _refresh_failure = None
-    return status
+        claim.parent.mkdir(parents=True, exist_ok=True)
+        if time.time() - claim.stat().st_mtime < REFRESH_CLAIM_S:
+            return False
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    try:
+        claim.touch()
+        _start_refresher(float(_policy("MODEL_CATALOG_AGE_MAX")))
+    except OSError:
+        return False
+    return True
+
+
+def _start_refresher(age_max: float) -> None:
+    subprocess.Popen(
+        [sys.executable, "-m", "js.catalog_refresh", str(age_max)],
+        env={**os.environ, "JS_HOME": str(paths.home())}, cwd=str(paths.home()),
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+
+
+def refresh_if_older(age_max: float) -> bool:
+    """Refresh the catalog unless it was checked within ``age_max`` seconds or
+    another process is refreshing it now. True when it refreshed."""
+    claim = _refresh_claim_path()
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    with open(claim, "a") as held:
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        current = current_catalog_status()
+        checked_at = None if current is None or current.db_path != _custom_db_path() else current.checked_at
+        if checked_at is not None and (datetime.now(tz=UTC) - checked_at).total_seconds() < age_max:
+            return False
+        refresh_catalog(force=True)
+        return True
 
 
 def run_refresh_model_catalog(args: argparse.Namespace) -> int | None:

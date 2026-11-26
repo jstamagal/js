@@ -84,6 +84,18 @@ records, each synced to disk.
   JSON-encoded with no trace sink or debug log to write them to. The
   transcript log wrote and flushed a line at a time.
 
+## The models.dev catalog
+
+A start that found the catalog older than `MODEL_CATALOG_AGE_MAX` downloaded
+models.dev and rebuilt the database before the first prompt, and waited out
+the failure when offline (0.4 s here for a refused connection, a download and
+13,000 rows written otherwise). A lookup now uses the catalog there is and
+returns in a millisecond or two; `python -m js.catalog_refresh` is started
+detached, at most once in five minutes across every js process, holds a lock
+while it works, and prints nothing. Running processes drop their lookups when
+the database file changes. `--refresh-model-catalog` and
+`/refresh-model-catalog` still refresh in the foreground and report.
+
 ## Imports
 
 - `js --help` printed its usage after importing all of js. `js.entry`, where

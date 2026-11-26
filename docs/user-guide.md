@@ -376,8 +376,8 @@ than 5% (and at least 2000 tokens) less from the prompt cache than the one
 before it prints one `*** Prompt cache break` line with both counts and the
 seconds since that request; at 3 every other model request, subagents
 included, also prints `*** Connecting` and `*** Connected ... Nms`,
-and models.dev catalog refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
-print as well. In the screen that stats
+and the per-call stream stats line (`ms finish tok tok/s cache`)
+prints as well. In the screen that stats
 line follows `NET_DISPLAY`; `-p` still shows it with `-d`.
 
 `/set EDITING_MODE vi` makes the input line a vi buffer (the default is
