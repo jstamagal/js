@@ -4,6 +4,7 @@ a turn to the machine already holding that conversation's prefix."""
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 from test_runtime_cluster_fixes import _cfg, _Recorder
 
@@ -36,7 +37,22 @@ def _cache_key_for(tmp_path, monkeypatch, cfg):
 def test_a_saved_session_sends_a_cache_key(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
 
-    assert _cache_key_for(tmp_path, monkeypatch, cfg) == f"js-a-{cfg.session_file.stem}"
+    assert _cache_key_for(tmp_path, monkeypatch, cfg)
+
+
+def test_the_key_fits_openai_length_cap_for_a_derived_session(tmp_path, monkeypatch):
+    # A derived session's name is 64 hex digits; OpenAI takes 64 characters.
+    cfg = _cfg(tmp_path)
+    cfg = replace(cfg, session_file=tmp_path / "derived" / f"{'f' * 64}.jsonl")
+
+    assert len(_cache_key_for(tmp_path, monkeypatch, cfg)) <= 64
+
+
+def test_same_named_sessions_in_two_directories_do_not_share_a_key(tmp_path, monkeypatch):
+    one = replace(_cfg(tmp_path), session_file=tmp_path / "one" / "work.jsonl")
+    two = replace(_cfg(tmp_path), session_file=tmp_path / "two" / "work.jsonl")
+
+    assert _cache_key_for(tmp_path, monkeypatch, one) != _cache_key_for(tmp_path, monkeypatch, two)
 
 
 def test_the_key_is_stable_across_turns_of_one_session(tmp_path, monkeypatch):

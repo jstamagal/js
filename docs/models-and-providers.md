@@ -244,6 +244,14 @@ A `thinking` object in `EXTRA_PARAMS` replaces the one js builds.
 `include_reasoning: true` to requests on the `cliproxyapi` transport, which
 CLIProxyAPI needs to return Claude's thinking. No other endpoint gets it.
 
+A saved session's requests carry `prompt_cache_key` on api.openai.com,
+api.deepseek.com, and the `cliproxyapi` transport at any address. CLIProxyAPI
+reads it as the conversation's session: toward Codex it is the upstream
+`prompt_cache_key` and keeps the conversation on one account, and toward
+Claude it seeds `metadata.user_id` and the same account pinning. Every other
+endpoint gets no key, since one that validates its inputs rejects the whole
+request over it.
+
 `TEMPLATE_KWARGS` (`--template-kwargs k=v,...`) is sent as
 `chat_template_kwargs`, for example `enable_thinking=false`, llama.cpp's
 per-request thinking switch. A value is read as JSON; one that is not JSON is
@@ -463,7 +471,7 @@ API key (`OPENCODE_GO_API_KEY`) but route over different transports:
   (`sdk=anthropic`) at `https://opencode.ai/zen/go`.
 
 Every request to either one carries an `x-opencode-session` header: the
-session's cache key (`js-<agent>-<session>`), or a one-off id for a request
+session's cache key (`js-` and a hash of the agent and session file), or a one-off id for a request
 with no session. opencode routes and caches by that header, and the Anthropic
 endpoint answers a request without it with 400 `MissingSessionID`.
 
