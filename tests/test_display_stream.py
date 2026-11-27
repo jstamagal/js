@@ -308,10 +308,17 @@ def test_rendered_prose_shows_every_character_of_its_source():
     # A command copied off the screen must run as the model wrote it.
     for source in (
         'case "$out" in *FLIPPED*|"choice "*" conf=0."[0-6]*) echo a;; esac',
-        "a *b* **c** _d_ ~~e~~ x_y_z",
+        "a *b* _d_ ~~e~~ x_y_z",
+        "ls **/*.py **/*.md",
         r"grep \. \* \\ \$HOME",
         "a &amp; b &lt;",
         "use <program> to run <foo/>",
         "<div>\nhi\n</div>",
     ):
         assert ANSI.sub("", display.render_markdown(source, 400)).rstrip("\n") == source
+
+
+def test_strong_emphasis_is_drawn_bold_without_its_stars():
+    rendered = display.render_markdown("**js:** done", 400)
+    assert ANSI.sub("", rendered).rstrip("\n") == "js: done"
+    assert "\x1b[1mjs:" in rendered
