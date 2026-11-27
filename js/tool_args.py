@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import json
+from typing import Any
 
 from . import settings as _settings
 from .toolkit.core import compact_json
@@ -261,17 +263,27 @@ def sdk_safe_tool_args(raw: str) -> str:
     return fixed if is_json_object(fixed) else "{}"
 
 
+@functools.lru_cache(maxsize=256)
+def _validator(schema_json: str) -> Any:
+    """A validator of the schema ``schema_json`` spells, the schema itself
+    checked once; a `SchemaError` when it is not a schema."""
+    from jsonschema import validators as jsonschema_validators
+
+    schema = json.loads(schema_json)
+    validator_type = jsonschema_validators.validator_for(schema)
+    validator_type.check_schema(schema)
+    return validator_type(schema)
+
+
 def schema_error(arguments: object, schema: object) -> str | None:
     """One line saying how ``arguments`` break ``schema``; None when they fit
     or there is no schema."""
     if not isinstance(schema, dict):
         return None
-    from jsonschema import exceptions as jsonschema_exceptions, validators as jsonschema_validators
+    from jsonschema import exceptions as jsonschema_exceptions
 
     try:
-        validator_type = jsonschema_validators.validator_for(schema)
-        validator_type.check_schema(schema)
-        validator_type(schema).validate(arguments)
+        _validator(json.dumps(schema, sort_keys=True)).validate(arguments)
     except (jsonschema_exceptions.SchemaError, jsonschema_exceptions.ValidationError) as exc:
         return " ".join(exc.message.split())
     return None

@@ -8,7 +8,8 @@ Every record carries an `id` and a `parent` (`js.session_store.append`); replay
 reads the file in order and does not use them. An assistant message record
 carries a `stamp`: the model, provider and reasoning level it was written
 under. Every write brings the session's `.txt`
-transcript up to date (`js.session_text`)."""
+transcript up to date (`js.session_text`), except a save that passes
+``refresh_text=False`` (a turn's mid-turn checkpoint)."""
 
 from __future__ import annotations
 
@@ -18,7 +19,9 @@ import fcntl
 import hashlib
 import json
 import os
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +35,7 @@ _owned_records: dict[tuple[int, str], set[str]] = {}
 
 
 def _file_key(path: Path) -> str:
-    return str(path.resolve(strict=False))
+    return session_store.file_key(str(path))
 
 
 class _Snapshot(list):
@@ -679,6 +682,13 @@ def _append_owned(memory_file: Path, rec: Record) -> None:
         _owned_records.setdefault((os.getpid(), _file_key(memory_file)), set()).add(linked["id"])
 
 
+def config_stamp(cfg: Any) -> dict:
+    """The `stamp_for` of the model a turn on ``cfg`` runs, for the assistant
+    messages it writes."""
+    return stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
+                     getattr(cfg, "reasoning_effort", None))
+
+
 def stamp_for(model: str | None, provider: str | None, reasoning: str | None) -> dict:
     """The stamp an assistant message is written under."""
     return {"model": model, "provider": provider, "reasoning": reasoning}
@@ -693,32 +703,101 @@ def append_message(memory_file: Path, message: dict, stamp: dict | None = None) 
     _append(memory_file, _message_record(message, stamp))
 
 
-def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None) -> None:
+def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None, *,
+                     refresh_text: bool = True) -> None:
     """Append the live suffix, retaining replaced records in the journal.
     Each appended assistant message carries `stamp`. A loaded snapshot with
-    unseen history changes raises ESTALE before any replacement is written."""
+    unseen history changes raises ESTALE before any replacement is written.
+    ``refresh_text`` brings the session's `.txt` and index up to date after."""
+    key = _file_key(memory_file)
     with _save_lock(memory_file):
         if memory_file.exists():
             _check_snapshot(memory_file, messages)
         elif isinstance(messages, _Snapshot) and messages.revision is not None:
             raise OSError(errno.ESTALE, "session removed; reload before saving", str(memory_file))
-        persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
-        comparable = _without_answer_reasoning_text(messages)
-        common = 0
-        for old, new in zip(persisted, comparable):
-            if old != new:
-                break
-            common += 1
-        changed = common < len(persisted) or bool(messages[common:])
-        if common < len(persisted):
-            _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=_rollback_marker(common)))
+        common = _saved_prefix(memory_file, key, messages)
+        # What is not yet known to replay as it is: all of it, or what a
+        # remembered save does not cover.
+        unchecked = 0
+        if common is not None:
+            changed = bool(messages[common:])
+            unchecked = common
+        else:
+            persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
+            comparable = _without_answer_reasoning_text(messages)
+            common = 0
+            for old, new in zip(persisted, comparable):
+                if old != new:
+                    break
+                common += 1
+            changed = common < len(persisted) or bool(messages[common:])
+            if common < len(persisted):
+                _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=_rollback_marker(common)))
         for message in messages[common:]:
             _append_owned(memory_file, _message_record(message, stamp))
+        revision = _stat_revision(memory_file)
+        if revision is not None and memory_file != Path(os.devnull) and _replays_as_is(messages[unchecked:]):
+            _remember_saved(key, revision, messages)
         if isinstance(messages, _Snapshot) and memory_file.exists():
             with _open_locked(memory_file, "r") as stream:
                 messages.revision = _revision(stream)
-    if changed:
+    if changed and not refresh_text:
+        _text_behind.add(key)
+    elif changed or key in _text_behind:
+        _text_behind.discard(key)
         session_text.refresh(memory_file)
+
+
+# Session files saved with ``refresh_text=False`` since their last refresh.
+_text_behind: set[str] = set()
+
+
+# The history each session file was last saved from in this process: the
+# file's revision right after that save, and the message objects it held.
+# A save to a file still at that revision, of a history that still starts
+# with those same objects, appends the rest without replaying the file. A
+# message is never changed in place once it is in the history (a rewrite puts
+# a new dict in its slot), so the same object is the same message.
+_SAVED: OrderedDict[str, tuple[tuple[int, int, int], list[dict]]] = OrderedDict()
+_SAVED_MAX = 1024
+_saved_lock = threading.Lock()
+
+
+def _stat_revision(path: Path) -> tuple[int, int, int] | None:
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino, info.st_size
+
+
+def _saved_prefix(path: Path, key: str, messages: list[dict]) -> int | None:
+    """How many of ``messages`` the file already holds, known without reading
+    it; None when only a replay can tell."""
+    with _saved_lock:
+        saved = _SAVED.get(key)
+    if saved is None or saved[0] != _stat_revision(path) or len(saved[1]) > len(messages):
+        return None
+    if not all(old is new for old, new in zip(saved[1], messages)):
+        return None
+    return len(saved[1])
+
+
+def _replays_as_is(messages: list[dict]) -> bool:
+    """True when replay hands back ``messages`` unchanged: no tool call
+    without its result, no stray result (`_heal_orphaned_tool_calls`). A
+    history that replays as it is still does with such messages after it, so
+    a remembered save's messages need no second look."""
+    healed = _heal_orphaned_tool_calls(messages)
+    return len(healed) == len(messages) and all(a is b for a, b in zip(healed, messages))
+
+
+def _remember_saved(key: str, revision: tuple[int, int, int], messages: list[dict]) -> None:
+    with _saved_lock:
+        _SAVED[key] = (revision, list(messages))
+        _SAVED.move_to_end(key)
+        while len(_SAVED) > _SAVED_MAX:
+            _SAVED.popitem(last=False)
 
 
 def append_mark(memory_file: Path, marker: str) -> None:

@@ -124,6 +124,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     # poll, wait and kill of a background handle take neither tasks nor agent_id.
     assert task.required == ()
     assert set(task.params) == {"tasks", "agent_id", "session_id", "model", "reasoning", "background", "action",
+                                "message",
                                 "handle", "timeout"}
 
 
@@ -152,7 +153,7 @@ def test_named_agent_tools_are_generated_from_prompt_dirs():
         assert tool is not None, name
         assert tool.name == name
         assert tool.required == ("tasks",), name
-        assert set(tool.params) == {"tasks", "model", "reasoning"}, name
+        assert set(tool.params) == {"tasks", "model", "reasoning", "background"}, name
 
     assert [tool.name for tool in registry.select([f"{name}:eager" for name in prompt_agents]).tools] == prompt_agents
 

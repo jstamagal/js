@@ -1,6 +1,6 @@
 """The swarm bus: one inbox per agent, a message is a file, the room log is the blackboard.
 
-  python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
+  python -m js.swarm run SPEC.json                   # every agent in the spec, over SWARM_PROCESSES runners (js.swarm_run)
   python -m js.swarm send ROOT FROM TO "text"       # from the runner or the operator; TO is a name or *
   python -m js.swarm send ROOT steer kivu --kind stop   # end an agent after its current turn
   python -m js.swarm send ROOT steer kivu --kind cancel # end its current turn now

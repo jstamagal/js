@@ -115,9 +115,10 @@ def test_sdk_closes_unfinished_response_body(provider, cancel, caplog):
                         for e in events
                     )
                 # Terminator arrives but HTTP body stays unfinished until client closes.
+                # One request per connection: the client may not keep it for the next.
                 length = len(body) if provider == "anthropic" and not cancel else 999999
                 writer.write(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: "
+                    b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/event-stream\r\nContent-Length: "
                     + str(length).encode() + b"\r\n\r\n" + body
                 )
                 await writer.drain()
@@ -222,3 +223,42 @@ def test_owned_iterator_closes_transport_even_if_iterator_teardown_fails():
         assert body.closed == 1
 
     asyncio.run(drive())
+
+
+def test_model_calls_on_one_loop_share_one_http_client_per_sdk():
+    async def clients():
+        first = model_client._shared_http_client("openai")
+        again = model_client._shared_http_client("openai")
+        other = model_client._shared_http_client("anthropic")
+        await model_client.close_shared_http_clients()
+        return first, again, other
+
+    first, again, other = asyncio.run(clients())
+    later, _again, _other = asyncio.run(clients())
+    assert first is again and first is not other
+    assert first.is_closed and later is not first
+    assert model_client._shared_http_client("openai") is None  # off a loop
+
+
+def test_concurrent_requests_on_one_client_see_only_their_own_hooks():
+    import httpx2
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(lambda request: httpx2.Response(200, text="ok")))
+    seen: dict[str, list[str]] = {"a": [], "b": []}
+
+    async def call(name: str, count: int) -> None:
+        async def tag(request):
+            seen[name].append(request.url.path)
+
+        async with stream_transport.own_responses(client, request_hooks=(tag,)):
+            for _ in range(count):
+                await client.get(f"http://x/{name}")
+                await asyncio.sleep(0)
+
+    async def drive():
+        await asyncio.gather(call("a", 3), call("b", 5))
+        await client.get("http://x/none")
+        await client.aclose()
+
+    asyncio.run(drive())
+    assert seen == {"a": ["/a"] * 3, "b": ["/b"] * 5}

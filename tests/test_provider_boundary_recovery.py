@@ -73,8 +73,9 @@ def test_summary_partitions_through_real_boundary(monkeypatch, tmp_path, persist
         assert [len(p[0]) for p in payloads] == [32, 16, 8, 4]
     else:
         summary = asyncio.run(call)
-        assert payloads == [(entries, ""), (entries[:16], ""), (entries[16:], "")]
-        assert all(entry in summary for entry in entries)
+        older = ";".join(entries[:16])
+        assert payloads == [(entries, ""), (entries[:16], ""), (entries[16:], older)]
+        assert summary == ";".join(entries)
 
 
 @pytest.mark.parametrize("kind", ["overflow", "429", "503", "fatal"])

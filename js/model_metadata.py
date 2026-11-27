@@ -1,23 +1,27 @@
 """Dynamic model capability lookup backed by models.dev data.
 
 js keeps its own writable mirror of the models.dev catalog under ~/.js/cache.
-The bundled DB from the installed package is only the seed. On lookup we check
-whether the active catalog exceeds MODEL_CATALOG_AGE_MAX (8 hours by default);
-when MODEL_CATALOG_AUTO_REFRESH is on, we refresh it into
-js's own DB and record when that happened. A forced refresh is available from
-js CLI/REPL commands.
+The bundled DB from the installed package is only the seed. A lookup uses the
+catalog there is. When that one is older than MODEL_CATALOG_AGE_MAX (8 hours
+by default) and MODEL_CATALOG_AUTO_REFRESH is on, a detached process
+(`js.catalog_refresh`) downloads a new one, and lookups read it once it is
+in place. A forced refresh is available from js CLI/REPL commands.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
+import time
 from contextlib import closing
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -33,8 +37,8 @@ from . import (
     model_matching,
     paths,
     providers,
+    served_limits,
     settings as _settings,
-    stream_transport,
 )
 
 _policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", default=None)
@@ -54,22 +58,6 @@ _STATUS_VERSION = 1
 _LOCAL_PROBE_MAX_S = 3.0
 _LOCAL_PROBE_TRANSPORTS = {"ollama", "llama.cpp", "openai_compatible", "custom_openai", "openai"}
 _OPENAI_PROBE_TRANSPORTS = {"openai_compatible", "custom_openai", "openai"}
-_CONTEXT_WINDOW_KEYS = {
-    "context_length",
-    "context_window",
-    "max_context_length",
-    "max_context_window",
-    "max_model_len",
-    "max_model_length",
-    "max_position_embeddings",
-    "max_seq_len",
-    "max_sequence_length",
-    "max_input_tokens",
-    "n_ctx",
-    "num_ctx",
-}
-
-
 @dataclass(frozen=True)
 class ModelLimits:
     provider_id: str | None
@@ -123,10 +111,61 @@ def reset_caches() -> None:
     accepts_image_input.cache_clear()
     _image_inputs.cache_clear()
     _probe_answers.clear()
+    _checked.clear()
+
+
+_ROWS_VERSION = 1
+
+
+def _rows_stamp() -> list:
+    """What `_all_models` reads: the catalog database in use and the release
+    dates beside it, each by path, size and modification time."""
+    stamp: list = [_ROWS_VERSION]
+    for path in (modelsdotdev_data._database_path(), _custom_db_path()):
+        try:
+            stat = path.stat()
+            stamp.append([str(path), stat.st_size, stat.st_mtime_ns])
+        except OSError:
+            stamp.append([str(path), None, None])
+    return stamp
+
+
+def _rows_file() -> Path:
+    return paths.model_catalog_dir() / "rows.json"
+
+
+def _saved_rows(stamp: list) -> tuple[_ModelRow, ...] | None:
+    """The rows `_all_models` saved for the databases ``stamp`` names, or None."""
+    try:
+        saved = json.loads(_rows_file().read_text(encoding="utf-8"))
+        if saved["stamp"] != stamp:
+            return None
+        return tuple(_ModelRow(*row) for row in saved["rows"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_rows(stamp: list, rows: tuple[_ModelRow, ...]) -> None:
+    target = _rows_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
+                                         delete=False, encoding="utf-8") as staged:
+            json.dump({"stamp": stamp, "rows": [astuple(row) for row in rows]}, staged)
+        os.replace(staged.name, target)
+    except OSError:
+        pass
 
 
 @lru_cache(maxsize=1)
 def _all_models() -> tuple[_ModelRow, ...]:
+    """Every catalog model as the row js matches against. Reading the catalog
+    builds an object a model, so the rows are kept in the cache directory and
+    read back while the databases they came from are unchanged."""
+    stamp = _rows_stamp()
+    saved = _saved_rows(stamp)
+    if saved is not None:
+        return saved
     rows: list[_ModelRow] = []
     dates = _release_dates()
     for model in modelsdotdev.iter_models():
@@ -143,6 +182,7 @@ def _all_models() -> tuple[_ModelRow, ...]:
                 image_input=_takes_image(model),
             )
         )
+    _save_rows(stamp, tuple(rows))
     return tuple(rows)
 
 
@@ -234,9 +274,9 @@ def _image_inputs() -> dict[str, bool]:
     """Every catalog model's bare name, and whether any model by that name
     takes image input."""
     found: dict[str, bool] = {}
-    for model in modelsdotdev.iter_models():
-        name = _bare_model_name(model.id)
-        found[name] = found.get(name, False) or _takes_image(model)
+    for row in _all_models():
+        name = _bare_model_name(row.model_id)
+        found[name] = found.get(name, False) or row.image_input
     return found
 
 
@@ -249,45 +289,9 @@ def _bare_model_name(model_id: str) -> str:
     return name.replace(":", "-").replace("_", "-").replace(".", "")
 
 
-def _positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, float):
-        return int(value) if value.is_integer() and value > 0 else None
-    if isinstance(value, str):
-        normalized = value.strip().replace("_", "")
-        if normalized.isdigit():
-            parsed = int(normalized)
-            return parsed if parsed > 0 else None
-    return None
-
-
-def _context_key_matches(key: Any) -> bool:
-    lowered = str(key).lower()
-    return lowered in _CONTEXT_WINDOW_KEYS or any(
-        lowered.endswith(f".{suffix}") for suffix in _CONTEXT_WINDOW_KEYS
-    )
-
-
-def _extract_context_window(payload: Any) -> int | None:
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if _context_key_matches(key):
-                parsed = _positive_int(value)
-                if parsed is not None:
-                    return parsed
-        for value in payload.values():
-            parsed = _extract_context_window(value)
-            if parsed is not None:
-                return parsed
-    elif isinstance(payload, list):
-        for item in payload:
-            parsed = _extract_context_window(item)
-            if parsed is not None:
-                return parsed
-    return None
+def _served_context_window(payload: Any) -> int | None:
+    """The context window a server's model payload states, wherever in it."""
+    return served_limits.find_positive_int(payload, served_limits.SERVED_CONTEXT_KEYS)
 
 
 def _join_url(base_url: str, suffix: str) -> str:
@@ -322,13 +326,13 @@ def _models_payload_for_model(payload: Any, model_id: str) -> Any:
 
 def _probe_openai_context_window(base_url: str, model_id: str) -> int | None:
     payload = _request_json("GET", _join_url(base_url, "models"))
-    parsed = _extract_context_window(_models_payload_for_model(payload, model_id))
+    parsed = _served_context_window(_models_payload_for_model(payload, model_id))
     if parsed is not None:
         return parsed
 
     model_path = quote(model_id, safe="")
     payload = _request_json("GET", _join_url(base_url, f"models/{model_path}"))
-    return _extract_context_window(payload)
+    return _served_context_window(payload)
 
 
 def _probe_ollama_context_window(base_url: str, model_id: str) -> int | None:
@@ -337,13 +341,13 @@ def _probe_ollama_context_window(base_url: str, model_id: str) -> int | None:
         _join_url(_server_root_url(base_url), "api/show"),
         json_body={"model": model_id},
     )
-    return _extract_context_window(payload)
+    return _served_context_window(payload)
 
 
 def _probe_llamacpp_context_window(base_url: str, model_id: str) -> int | None:
     url = _join_url(_server_root_url(base_url), f"props?model={quote(model_id, safe='')}")
     payload = _request_json("GET", url)
-    return _extract_context_window(payload)
+    return _served_context_window(payload)
 
 
 _PROBES = {
@@ -563,35 +567,102 @@ def record_refreshed(db_path: Path, *, refreshed_at: datetime | None = None) -> 
     return status
 
 
-# Set when an automatic refresh fails. A process makes one automatic attempt:
-# later stale checks reuse the current catalog without a retry or another
-# warning. A forced refresh (/refresh-model-catalog) always tries.
-_refresh_failure: str | None = None
+# The catalog database the lookups held were read from: when another process
+# replaces it, they are dropped.
+_seen_db: list = []
+
+# The last catalog check, by what decided it: the catalog and status files as
+# they stood and the refresh settings. Every model call asks several times;
+# for CATALOG_CHECK_S the answer is reused instead of opening the database
+# again.
+_checked: dict[tuple, tuple[float, CatalogStatus | None]] = {}
+CATALOG_CHECK_S = 60.0
+
+# Seconds a background refresh has to itself before another may be started.
+REFRESH_CLAIM_S = 300.0
 
 
 def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
-    global _refresh_failure
+    """The catalog to look models up in, without waiting on models.dev: a
+    stale one is used as it is while a process of its own refreshes it, and
+    the lookups read the new one once it lands. ``force`` refreshes here and
+    raises when that fails."""
+    db = paths.file_stamp(_custom_db_path())
+    if _seen_db != [db]:
+        if _seen_db:
+            reset_caches()
+        _seen_db[:] = [db]
+    key = (str(_custom_db_path()), db, paths.file_stamp(_status_file_path()),
+           _policy("MODEL_CATALOG_AUTO_REFRESH"), _policy("MODEL_CATALOG_AGE_MAX"))
+    checked = _checked.get(key)
+    if not force and checked is not None and time.monotonic() - checked[0] < CATALOG_CHECK_S:
+        return checked[1]
+    status = _ensure_fresh_catalog(force=force)
+    _checked.clear()
+    _checked[key] = (time.monotonic(), status)
+    return status
+
+
+def _ensure_fresh_catalog(*, force: bool) -> CatalogStatus | None:
+    if force:
+        return refresh_catalog(force=True)
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    if not force and (not _policy("MODEL_CATALOG_AUTO_REFRESH") or not catalog_is_stale(current)):
-        return current
-    if not force and _refresh_failure is not None:
-        if current is None:
-            raise RuntimeError(_refresh_failure)
-        return current
-    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
+    if _policy("MODEL_CATALOG_AUTO_REFRESH") and catalog_is_stale(current):
+        refresh_in_background()
+    return current
+
+
+def _refresh_claim_path() -> Path:
+    return paths.model_catalog_dir() / "refresh.claim"
+
+
+def refresh_in_background() -> bool:
+    """Start `python -m js.catalog_refresh` detached from this process, unless
+    one was started in the last REFRESH_CLAIM_S. It outlives a short run, and
+    says nothing. True when it started one."""
+    claim = _refresh_claim_path()
     try:
-        status = refresh_catalog(force=True)
-    except Exception as exc:
-        _refresh_failure = " ".join(f"{type(exc).__name__}: {exc}".split())
-        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.said(error=_refresh_failure))
-        if current is not None:
-            _activate_database(current.db_path)
-            return current
-        raise
-    _refresh_failure = None
-    return status
+        claim.parent.mkdir(parents=True, exist_ok=True)
+        if time.time() - claim.stat().st_mtime < REFRESH_CLAIM_S:
+            return False
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    try:
+        claim.touch()
+        _start_refresher(float(_policy("MODEL_CATALOG_AGE_MAX")))
+    except OSError:
+        return False
+    return True
+
+
+def _start_refresher(age_max: float) -> None:
+    subprocess.Popen(
+        [sys.executable, "-m", "js.catalog_refresh", str(age_max)],
+        env={**os.environ, "JS_HOME": str(paths.home())}, cwd=str(paths.home()),
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+
+
+def refresh_if_older(age_max: float) -> bool:
+    """Refresh the catalog unless it was checked within ``age_max`` seconds or
+    another process is refreshing it now. True when it refreshed."""
+    claim = _refresh_claim_path()
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    with open(claim, "a") as held:
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        current = current_catalog_status()
+        checked_at = None if current is None or current.db_path != _custom_db_path() else current.checked_at
+        if checked_at is not None and (datetime.now(tz=UTC) - checked_at).total_seconds() < age_max:
+            return False
+        refresh_catalog(force=True)
+        return True
 
 
 def run_refresh_model_catalog(args: argparse.Namespace) -> int | None:

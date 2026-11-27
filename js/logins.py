@@ -24,7 +24,7 @@ import ai
 import httpx
 import tomli_w
 
-from . import login_defaults, messages as msgs, output, paths, providers
+from . import login_defaults, messages as msgs, output, paths, providers, served_limits
 
 _CONFIG_DIR_OVERRIDE: Path | None = None
 _LOGINS_FILE = "logins.toml"
@@ -227,20 +227,6 @@ class ModelCacheMetadata:
     training_context_window: int | None = None
 
 
-_SERVED_CONTEXT_KEYS = {
-    "context_length",
-    "context_window",
-    "max_context_length",
-    "max_context_window",
-    "max_model_len",
-    "max_model_length",
-    "max_position_embeddings",
-    "max_seq_len",
-    "max_sequence_length",
-    "max_input_tokens",
-    "n_ctx",
-    "num_ctx",
-}
 _TRAINING_CONTEXT_KEYS = {"n_ctx_train", "training_context_window", "train_context_window"}
 _MAX_OUTPUT_KEYS = {
     "max_output_tokens",
@@ -613,43 +599,8 @@ def remove_login(provider_id: str) -> bool:
     return existed
 
 
-def _positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, float):
-        return int(value) if value.is_integer() and value > 0 else None
-    if isinstance(value, str):
-        normalized = value.strip().replace("_", "")
-        if normalized.isdigit():
-            parsed = int(normalized)
-            return parsed if parsed > 0 else None
-    return None
-
-
-def _metadata_key_matches(key: Any, names: set[str]) -> bool:
-    lowered = str(key).lower()
-    return lowered in names or any(lowered.endswith(f".{name}") for name in names)
-
-
-def _find_positive_int(payload: Any, names: set[str]) -> int | None:
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if _metadata_key_matches(key, names):
-                parsed = _positive_int(value)
-                if parsed is not None:
-                    return parsed
-        for value in payload.values():
-            parsed = _find_positive_int(value, names)
-            if parsed is not None:
-                return parsed
-    elif isinstance(payload, list):
-        for item in payload:
-            parsed = _find_positive_int(item, names)
-            if parsed is not None:
-                return parsed
-    return None
+_positive_int = served_limits.positive_int
+_find_positive_int = served_limits.find_positive_int
 
 
 def _coerce_metadata(raw: Any) -> ModelCacheMetadata | None:
@@ -672,7 +623,7 @@ def _metadata_from_model_payload(entry: Any) -> ModelCacheMetadata | None:
     if not isinstance(entry, dict):
         return None
     metadata = ModelCacheMetadata(
-        context_window=_find_positive_int(entry, _SERVED_CONTEXT_KEYS),
+        context_window=_find_positive_int(entry, served_limits.SERVED_CONTEXT_KEYS),
         max_output_tokens=_find_positive_int(entry, _MAX_OUTPUT_KEYS),
         max_input_tokens=_find_positive_int(entry, _MAX_INPUT_KEYS),
         training_context_window=_find_positive_int(entry, _TRAINING_CONTEXT_KEYS),

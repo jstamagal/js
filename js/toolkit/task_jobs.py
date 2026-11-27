@@ -1,11 +1,21 @@
-"""Background `task` runs: a handle the model polls, waits on, or kills, and a
-note for the next user message when one finishes without the model having
-read its result.
+"""Subagent runs the model starts, watches, stops and talks to by handle.
 
-A background run is the same fan-out a foreground `task` call runs. Under the
-REPL supervisor it is one "subagent" job on the REPL's loop, so it outlives the
-turn that started it and shows in /jobs. Without a supervisor (`-p`, tests) it
-runs on a private loop in a daemon thread, and ends with the process.
+A `task` call of the main agent starts its subagents as a job and returns the
+job's handle at once (``background`` defaults on at depth 0). The handle is
+``tN`` for the job and ``tN.K`` for its K-th subagent. Through the same tool
+the model lists its jobs, polls one (each subagent's state, the tools it has
+called, the text it last wrote, its session file), waits on it, kills it or
+one subagent, and sends a subagent a message: a running one reads it at its
+next tool boundary, a finished one answers it in a new turn on its own
+session, started as a job of its own.
+
+When a job finishes without the model having read its result, a note carrying
+the result rides the main agent's next tool boundary, the next user message,
+or a turn of its own (`listener`, SUBAGENT_WAKE).
+
+Under the REPL supervisor a job is one "subagent" job on the REPL's loop, so
+it outlives the turn that started it and shows in /jobs. Without a supervisor
+(`-p`, tests) it runs on a private loop in a daemon thread.
 
 Each job belongs to the ToolContext that started it (``ToolContext.task_owner``):
 the main agent and each subagent see only their own jobs.
@@ -21,13 +31,125 @@ import secrets
 import threading
 import time
 from collections.abc import Callable, Coroutine
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from .. import paths, snippets, supervisor
+from ..text_bytes import cap_text
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5
+
+# How much of a subagent's latest text a poll shows.
+POLL_TEXT_CHARS = 600
+
+
+class Worker:
+    """One subagent of a job: what a poll reports, its inbox, and how to stop it."""
+
+    def __init__(self, job: TaskJob, index: int, prompt: str) -> None:
+        self.job = job
+        self.index = index
+        self.prompt = prompt
+        self.agent = job.agent_id
+        self.state = "waiting"          # waiting, running, done, error, stopped
+        self.started: float | None = None
+        self.ended: float | None = None
+        # Set by the subagent's turn once it has them.
+        self.session_file: Path | None = None
+        self.messages: list[dict] | None = None
+        # Lines sent to it while it runs, read at its next tool boundary, or
+        # as a turn of their own when it makes no more tool calls.
+        self.inbox: list[str] = []
+        self._inbox_lock = threading.Lock()
+        # False once its turn has found the inbox empty for the last time.
+        self.reading = True
+        self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self.stopping = False
+
+    @property
+    def handle(self) -> str:
+        return f"{self.job.id}.{self.index}"
+
+    def running(self) -> bool:
+        return self.state in ("waiting", "running")
+
+    def send(self, text: str) -> bool:
+        """Queue ``text`` for its next read; False when it reads no more."""
+        with self._inbox_lock:
+            if not self.reading:
+                return False
+            self.inbox.append(text)
+            return True
+
+    def take_inbox(self, *, last: bool = False) -> dict | None:
+        """The lines sent since its last read, as one user message. ``last``
+        is its turn's read after its answer: with nothing there, it reads no
+        more and `send` refuses."""
+        with self._inbox_lock:
+            lines, self.inbox = self.inbox, []
+            if last and not lines:
+                self.reading = False
+        if not lines:
+            return None
+        return {"role": "user", "content": "\n\n".join(lines)}
+
+    def stop(self) -> bool:
+        """Cancel this subagent alone; False when it is not running."""
+        if not self.running() or self._task is None or self._loop is None:
+            return False
+        self.stopping = True
+        try:
+            self._loop.call_soon_threadsafe(self._task.cancel)
+        except RuntimeError:
+            return False
+        return True
+
+    def report(self) -> str:
+        """Its state, what it has done so far and where its session is."""
+        now = time.monotonic()
+        seconds = ((self.ended or now) - self.started) if self.started is not None else 0.0
+        lines = [f"{self.handle} [{self.state}] agent `{self.agent}`, {seconds:.0f}s: {_one_line(self.prompt, 100)}"]
+        messages = list(self.messages or ())
+        calls = [call.get("function", {}).get("name") or call.get("name") or "?"
+                 for message in messages if message.get("role") == "assistant"
+                 for call in (message.get("tool_calls") or ())]
+        if calls:
+            recent = ", ".join(calls[-5:])
+            lines.append(f"  tool calls: {len(calls)} (latest: {recent})")
+        text = next((m.get("content") for m in reversed(messages)
+                     if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip()),
+                    "")
+        if text:
+            tail = text.strip()
+            if len(tail) > POLL_TEXT_CHARS:
+                tail = "..." + tail[-POLL_TEXT_CHARS:]
+            lines.append("  latest text: " + tail.replace("\n", "\n  "))
+        if self.inbox:
+            lines.append(f"  {len(self.inbox)} message(s) waiting for its next model call")
+        if self.session_file is not None:
+            lines.append(f"  session: {self.session_file}")
+        return "\n".join(lines)
+
+
+def _one_line(text: str, width: int) -> str:
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= width else flat[: width - 3] + "..."
+
+
+# The worker of the subagent the current coroutine runs, inside a job.
+CURRENT_WORKER: ContextVar[Worker | None] = ContextVar("js_task_worker", default=None)
+
+
+def claim_worker() -> Worker | None:
+    """The job worker the calling subagent turn is, once: the subagents that
+    turn starts are no worker of the job, and get None."""
+    worker = CURRENT_WORKER.get()
+    if worker is not None:
+        CURRENT_WORKER.set(None)
+    return worker
 
 
 class TaskJob:
@@ -43,6 +165,7 @@ class TaskJob:
         self.finished_at: float | None = None
         self.future: concurrent.futures.Future[str] = concurrent.futures.Future()
         self.workers_done = 0
+        self.workers: list[Worker] = []
         self.delivered = False   # the model has the result (poll, wait, kill)
         self.noted = False       # a completion note went out
         self.saved = False       # result_path holds the result
@@ -83,6 +206,10 @@ _JOBS: dict[str, TaskJob] = {}
 _JOBS_LOCK = threading.Lock()
 _SEQ = 0
 
+# Called with each job once it has settled, from whichever thread settled it.
+# The REPL sets it to wake the main agent for a result nobody has read.
+listener: Callable[[TaskJob], None] | None = None
+
 
 def _next_id() -> str:
     global _SEQ
@@ -99,6 +226,22 @@ def _prune() -> None:
                    if not job.running() and (job.delivered or job.noted or job.depth != 0)]
         for stale in settled[:-KEEP_FINISHED_JOBS] if len(settled) > KEEP_FINISHED_JOBS else []:
             _JOBS.pop(stale.id, None)
+
+
+def find_worker(handle: str | None, owner: str) -> tuple[TaskJob | None, Worker | None]:
+    """``owner``'s job and subagent a handle names: ``tN.K`` is the K-th
+    subagent of job ``tN``; ``tN`` names the job, and its subagent too when it
+    has one. Without a handle, the newest running job."""
+    wanted = str(handle or "").strip()
+    job_id, _dot, index = wanted.partition(".")
+    job = find(job_id or None, owner)
+    if job is None:
+        return None, None
+    if index:
+        if not index.isdigit():
+            return job, None
+        return job, next((w for w in job.workers if w.index == int(index)), None)
+    return job, job.workers[0] if len(job.workers) == 1 else None
 
 
 def find(handle: str | None, owner: str) -> TaskJob | None:
@@ -154,6 +297,9 @@ def _settle(job: TaskJob, outcome: concurrent.futures.Future | asyncio.Future,
     if on_done is not None:
         with contextlib.suppress(Exception):
             on_done()
+    if listener is not None:
+        with contextlib.suppress(Exception):
+            listener(job)
     _prune()
 
 
@@ -168,36 +314,55 @@ def start(
     on_done: Callable[[], None] | None = None,
     on_loop: bool = False,
     schedule: Callable | None = None,
+    label: str = "",
 ) -> TaskJob:
     """Start the fan-out in the background and return its job at once.
 
     ``on_loop`` means the caller is a coroutine on the supervisor's loop;
-    otherwise the caller is a thread off any loop.
+    otherwise the caller is a thread off any loop. ``label`` names its
+    supervisor job; "task tN (background)" by default.
     """
     job_id = _next_id()
     result_path = paths.tool_results_dir() / f"task-{job_id}-{secrets.token_hex(4)}.txt"
     job = TaskJob(job_id, agent_id, len(indexed_items), depth, result_path, owner)
+    job.workers = [Worker(job, idx, str(item)) for idx, item in indexed_items]
 
     async def run_all() -> str:
         results: list[str | None] = [None] * len(indexed_items)
 
-        async def one(idx: int, item: Any) -> None:
+        async def one(worker: Worker, item: Any) -> None:
+            idx = worker.index
+            CURRENT_WORKER.set(worker)
+            worker._task = asyncio.current_task()
+            worker._loop = asyncio.get_running_loop()
+            worker.state, worker.started = "running", time.monotonic()
             try:
                 results[idx - 1] = await coro_factory(idx, item)
+                worker.state = "error" if str(results[idx - 1]).startswith("ERROR") else "done"
             except asyncio.CancelledError:
-                raise
+                if not worker.stopping:
+                    worker.state = "stopped"
+                    raise
+                # Stopped on its own: its siblings carry on.
+                asyncio.current_task().uncancel()
+                results[idx - 1] = f"STOPPED {worker.handle} was stopped before it finished"
+                worker.state = "stopped"
             except snippets.SnippetError:
+                worker.state = "error"
                 raise
             except Exception as exc:  # noqa: BLE001 - one worker's failure is its result
                 results[idx - 1] = f"ERROR {type(exc).__name__}: {exc}"
+                worker.state = "error"
+            finally:
+                worker.ended = time.monotonic()
             job.workers_done += 1
 
-        await asyncio.gather(*(one(idx, item) for idx, item in indexed_items))
+        await asyncio.gather(*(one(worker, item) for worker, (_idx, item) in zip(job.workers, indexed_items)))
         return assemble(results)
 
     with _JOBS_LOCK:
         _JOBS[job.id] = job
-    label = f"task {job.id} (background)"
+    label = label.replace("{id}", job.id) if label else f"task {job.id} (background)"
     if schedule is not None:
         cancel = schedule(run_all(), label, lambda done: _settle(job, done, on_done))
         job.set_cancel(cancel)
@@ -241,14 +406,32 @@ def start(
     return job
 
 
-def started_text(job: TaskJob) -> str:
-    plural = 'task' if job.count == 1 else 'tasks'
-    return "\n".join([
-        f'task running in the background (handle {job.id}): {job.count} {plural} for agent `{job.agent_id}`. It keeps running while you work.',
-        f'Poll it with action="poll", handle="{job.id}", action="wait", handle="{job.id}", timeout=N to block for it, or action="kill", handle="{job.id}" to stop it.',
-        f'When it finishes its result is written to {job.result_path}, and the next user message says so unless you have read it by then.',
+def started_text(job: TaskJob, *, pollable: bool = True) -> str:
+    """What a call that starts ``job`` returns. ``pollable`` says the caller
+    has the `task` tool to watch and talk to it with."""
+    plural = 'subagent' if job.count == 1 else 'subagents'
+    handles = ", ".join(w.handle for w in job.workers)
+    lines = [f'task {job.id} started: {job.count} {plural} of agent `{job.agent_id}` ({handles}), running while you work.']
+    if pollable:
+        lines.append(f'With the task tool: action="poll", handle="{job.id}" shows how each is doing; action="send", handle="{job.workers[0].handle}", message="..." talks to one; action="kill" stops the task, or one subagent by its handle; action="wait", handle="{job.id}" blocks for it.')
+    lines += [
+        f'When it finishes its result comes to you in a <js-reminder> unless you have read it by then; it is also written to {job.result_path}.',
         f'HANDLE {job.id} RUNNING',
-    ])
+    ]
+    return "\n".join(lines)
+
+
+def list_text(owner: str) -> str:
+    """Every job ``owner`` has, with each subagent's state."""
+    mine = jobs(owner)
+    if not mine:
+        return "no tasks"
+    rows = []
+    for job in mine:
+        state = "running" if job.running() else "cancelled" if job.cancelled() else "finished"
+        rows.append(f"{job.id} [{state}] agent `{job.agent_id}`, {job.workers_done} of {job.count} done, {job.elapsed():.0f}s")
+        rows += [f"  {w.handle} [{w.state}] {_one_line(w.prompt, 80)}" for w in job.workers]
+    return "\n".join(rows)
 
 
 # How long a kill waits for the cancelled workers to wind down.
@@ -265,6 +448,7 @@ def report(job: TaskJob, action: str, *, was_running: bool = False) -> str:
     if job.running():
         return "\n".join([
             f'task {job.id} still running after {job.elapsed():.0f}s ({job.workers_done} of {job.count} done).',
+            *(w.report() for w in job.workers),
             f'HANDLE {job.id} RUNNING',
         ])
     job.delivered = True
@@ -294,9 +478,44 @@ async def wait_async(job: TaskJob, timeout: float | None) -> None:
             raise
 
 
-def completion_notes(owner: str) -> list[str]:
+def jobs(owner: str) -> list[TaskJob]:
+    """``owner``'s jobs that are still kept, oldest first."""
+    with _JOBS_LOCK:
+        return [job for job in _JOBS.values() if job.owner == owner]
+
+
+def _unread(job: TaskJob, owner: str) -> bool:
+    return job.owner == owner and job.depth == 0 and not job.delivered and not job.noted
+
+
+def outstanding(owner: str) -> list[TaskJob]:
+    """``owner``'s depth-0 jobs whose result the model has not had: running,
+    or finished with no note sent yet."""
+    with _JOBS_LOCK:
+        return [job for job in _JOBS.values() if _unread(job, owner)]
+
+
+def unread(owner: str) -> bool:
+    """True when a depth-0 job of ``owner`` has finished and its note is due."""
+    return any(not job.running() for job in outstanding(owner))
+
+
+def wait_any(owner: str, poll_s: float = 0.5) -> None:
+    """Block until one of ``owner``'s outstanding jobs has finished, or none
+    is left running. Waits in short steps so ^C reaches the caller."""
+    while True:
+        jobs = outstanding(owner)
+        if not jobs or any(not job.running() for job in jobs):
+            return
+        concurrent.futures.wait([job.future for job in jobs], timeout=poll_s,
+                                return_when=concurrent.futures.FIRST_COMPLETED)
+
+
+def completion_notes(owner: str, result_max: int = 0) -> list[str]:
     """One reminder per job ``owner`` started at depth 0 that has finished
-    since the last call and whose result the model has not read."""
+    since the last call and whose result the model has not read. Each carries
+    the result, cut at ``result_max`` bytes when that is above 0; the result
+    file holds all of it."""
     notes: list[str] = []
     with _JOBS_LOCK:
         jobs = [job for job in _JOBS.values() if job.owner == owner]
@@ -309,10 +528,14 @@ def completion_notes(owner: str) -> list[str]:
         if job.cancelled():
             notes.append(f'<js-reminder>Background task {job.id} (agent `{job.agent_id}`) was cancelled after {job.elapsed():.0f}s and has no result.</js-reminder>')
             continue
-        where = (f'Its result is at {job.result_path}' if job.saved
+        where = (f'Its result is also at {job.result_path}' if job.saved
                  else 'Its result could not be saved to a file')
+        result = job.result()
+        if result_max > 0:
+            result = cap_text(result, result_max, f"\n[truncated: TOOL_RESULT_MAX ({result_max}) reached; the whole result is in the file]")
+        job.delivered = True
         notes.append(
-            snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id)
+            snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id, RESULT=result)
         )
     _prune()
     return notes

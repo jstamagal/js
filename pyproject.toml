@@ -46,7 +46,7 @@ test = [
 ]
 
 [project.scripts]
-js = "js.cli:main"
+js = "js.entry:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

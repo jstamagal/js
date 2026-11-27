@@ -333,6 +333,11 @@
 # A subagent waiting on its own subagents does not count.
 #set SUBAGENT_WORKERS_MAX 8
 
+# When background subagents finish while the main agent sits idle, start a
+# turn that hands it their result, instead of waiting for your next line.
+# In js -p the run keeps going until every background result is in.
+#set SUBAGENT_WAKE on
+
 # Subagents run on your current model instead of the one their own agent
 # names.
 #set SUBAGENT_INHERIT_MODEL off
@@ -343,6 +348,10 @@
 # In a swarm, how many agents may be in the middle of a turn at the same
 # time. 0: no limit.
 #set SWARM_ACTIVE_MAX 0
+
+# How many processes a swarm's agents are spread over. 0: one per 16 agents,
+# up to one per CPU. 1: every agent in one process.
+#set SWARM_PROCESSES 0
 
 # Under `js acp`, how many seconds a cancelled turn keeps running for the
 # prompt that steers it. 0: a cancel ends the turn at once.
@@ -659,12 +668,22 @@
 #   example:  set COMPACTION_EXTERNAL_MODEL cpa/claude-haiku-5-5
 #set COMPACTION_EXTERNAL_MODEL same
 
-# Longest summary allowed, in tokens. It can't go over 8192.
-#set COMPACTION_SUMMARY_TOKENS_MAX 8192
+# Longest summary allowed, in tokens. It can't go over
+# COMPACTION_SUMMARY_REQUEST_TOKENS_MAX, or the model's own output limit
+# where js knows it.
+#set COMPACTION_SUMMARY_TOKENS_MAX 32000
 
 # Tool results sent to the summary model are cut to this many characters,
-# keeping the start and the end. 0: send them whole.
+# keeping the start and the end. 0: send them whole. Only the plain-text
+# summary request clips; a summary that reuses the cache sees them whole.
 #set COMPACTION_SUMMARY_RESULT_CHARS_MAX 2000
+
+# on: the summary request is the conversation's last request with the
+# summary instructions appended, so it reads the history from the prompt
+# cache and sees every tool result whole. It needs the summary model to be
+# the conversation's (COMPACTION_EXTERNAL_MODEL same). off, or when that
+# request can't be used: the history goes out as a plain-text transcript.
+#set COMPACTION_REUSE_CACHE on
 
 # After this many automatic summaries fail in a row, automatic compaction
 # pauses. A successful /compact turns it back on.
@@ -919,7 +938,7 @@
 #set COMPACTION_HINT_TIMEOUT 30
 
 # Upper bound on COMPACTION_SUMMARY_TOKENS_MAX for the summary request.
-#set COMPACTION_SUMMARY_REQUEST_TOKENS_MAX 8192
+#set COMPACTION_SUMMARY_REQUEST_TOKENS_MAX 32000
 
 # Automatic compactions in a row before automatic compaction pauses.
 #set COMPACTION_CONSECUTIVE_MAX 2
@@ -1111,6 +1130,10 @@
 # Lines the full-screen view keeps in scrollback.
 #set SCROLLBACK_LINES_MAX 5000
 
+# Times a second the full-screen view redraws at most, however fast text
+# arrives. 0: redraw on every change.
+#set SCREEN_REDRAWS_MAX 30
+
 # Windows open at once on the REPL screen, window 1 included. A subagent
 # launched with this many open runs without one.
 #set WINDOW_MAX 9
@@ -1190,7 +1213,7 @@
 # API key for an endpoint URI that names none.
 #set ENDPOINT_DEFAULT_KEY sk-dummy-key
 
-# on: a stale model catalog is refreshed at startup.
+# on: a stale model catalog is refreshed by a background process.
 #set MODEL_CATALOG_AUTO_REFRESH on
 
 # Seconds before the model catalog counts as stale.

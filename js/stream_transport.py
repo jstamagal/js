@@ -299,16 +299,47 @@ class _OwnedCoreStream:
             await self._stream.aclose()
 
 
+# The hooks of the model request running in this context. A client carries
+# one dispatcher per hook kind (`_dispatch`), which runs only these, so model
+# calls sharing one client never run each other's hooks.
+_call_hooks: contextvars.ContextVar[tuple[tuple, tuple] | None] = contextvars.ContextVar(
+    "js_call_hooks", default=None)
+
+
+async def _dispatch_request(request: Any) -> None:
+    hooks = _call_hooks.get()
+    for hook in hooks[0] if hooks is not None else ():
+        await hook(request)
+
+
+async def _dispatch_response(response: Any) -> None:
+    hooks = _call_hooks.get()
+    for hook in hooks[1] if hooks is not None else ():
+        await hook(response)
+
+
+def _dispatch(client: httpx2.AsyncClient | httpx.AsyncClient) -> None:
+    """Give ``client`` the dispatchers, once."""
+    hooks = client.event_hooks
+    if _dispatch_request not in hooks["request"]:
+        hooks["request"].append(_dispatch_request)
+    if _dispatch_response not in hooks["response"]:
+        hooks["response"].append(_dispatch_response)
+
+
 @asynccontextmanager
 async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: NetCall | None = None,
                         on_request: Callable[[], None] | None = None,
                         on_bytes: Callable[[], None] | None = None,
-                        timeout: dict[str, float | None] | None = None):
+                        timeout: dict[str, float | None] | None = None,
+                        request_hooks: tuple[Callable[[Any], Any], ...] = ()):
     """Close this model request's byte iterators when its stream scope exits.
     With a `call`, its handshake and response bytes feed the network channel.
     `on_request` is called as each request is sent and `on_bytes` for every
     response chunk read. `timeout` replaces those parts of each request's own
-    (`connect`, `read`, ...)."""
+    (`connect`, `read`, ...). `request_hooks` run on each request after those.
+    Only requests sent from this context see any of it, so one client can
+    serve many concurrent model calls."""
     async with AsyncExitStack() as cleanup:
 
         async def own(response: httpx2.Response) -> None:
@@ -330,13 +361,9 @@ async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: Ne
                 call.request_sent()
                 request.extensions = {**request.extensions, "trace": call.trace}
 
-        response_hooks = client.event_hooks["response"]
-        request_hooks = (client.event_hooks["request"]
-                         if call is not None or on_request is not None or timeout is not None else [])
-        response_hooks.append(own)
-        request_hooks.append(trace)
+        _dispatch(client)
+        token = _call_hooks.set(((trace, *request_hooks), (own,)))
         try:
             yield
         finally:
-            response_hooks.remove(own)
-            request_hooks.remove(trace)
+            _call_hooks.reset(token)

@@ -407,9 +407,10 @@ the models.dev catalog so wrappers like `deepseek-v4-pro:cloud` can still pick
 up the underlying model limits.
 
 js keeps a local writable mirror of the models.dev catalog in
-`~/.js/cache/modelsdotdev/`. On model-limit
-lookups it checks the catalog age and refreshes it automatically when it is more
-than 8 hours old. To force it immediately:
+`~/.js/cache/modelsdotdev/`. Lookups use the catalog that is there and never
+wait on models.dev. When it is more than 8 hours old (`MODEL_CATALOG_AGE_MAX`)
+a detached process downloads a new one and says nothing; lookups read it once
+it is in place. To refresh it now and see the result:
 
 ```bash
 js --refresh-model-catalog

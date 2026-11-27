@@ -209,8 +209,10 @@ _UNSET = object()
 # set
 # ---------------------------------------------------------------------------
 
-def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, columns: int | None = None) -> CommandResult:
-    """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
+def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, columns: int | None = None,
+              said: bool = True) -> CommandResult:
+    """Set ``key`` to ``raw`` in ``settings``, coercing per the registry.
+    ``said`` off leaves the confirmation lines out of the result."""
     if any(not part for part in key.split(".")):
         return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     spec = _s.spec_for(key)
@@ -230,7 +232,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
             changed=True,
             lines=_setting_lines(msgs.SETTING_CHANGED, spec.key.upper(),
                                  render_value(spec, value, masked=masks_secrets(settings))
-                                 if spec.secret else raw.strip(), columns=columns),
+                                 if spec.secret else raw.strip(), columns=columns) if said else [],
             changed_keys=[spec.key],
         )
 
@@ -253,7 +255,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
             lines=_setting_lines(
                 msgs.SETTING_CHANGED, key,
                 msgs.SETTING_VALUE_SECRET.words() if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
-                else raw.strip(), columns=columns),
+                else raw.strip(), columns=columns) if said else [],
             changed_keys=[key],
         )
 
@@ -274,7 +276,8 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banner_changed=None, columns: int | None = None) -> CommandResult:
+def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banner_changed=None, columns: int | None = None,
+                said: bool = True) -> CommandResult:
     """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
     one), the setting takes the baseline's value; a setting the baseline does not
     hold is removed from ``settings``."""
@@ -302,6 +305,9 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banne
     if spec is not None and spec.key == "BANNER":
         (msgs.set_banner if banner_changed is None else banner_changed)(str(_s.knob(settings, "BANNER")))
     changed = before is not after and before != after
+    if not said:
+        key = spec.key if spec is not None else key
+        return CommandResult(handled=True, changed=changed, changed_keys=[key] if changed else [])
     if spec is not None:
         key = spec.key
         display = render_value(spec, None if after is missing else after, masked=masks_secrets(settings))
@@ -357,7 +363,7 @@ def fset_rows(settings: dict, pattern: str | None = None) -> list[str]:
     return rows
 
 
-def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
+def fset_command(settings: dict, arg: str, baseline: dict | None = None, *, said: bool = True) -> CommandResult:
     """`fset` lists every entry, `fset NAME` (or a `*` pattern) shows them,
     `fset -NAME` clears one, `fset NAME value` sets one."""
     name, value = jsrc_line.first_word(arg)
@@ -368,7 +374,7 @@ def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> Comm
         if not _fset.is_name(name[1:]):
             return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name[1:]))
         changed = _fset.unset_entry(name[1:])
-        return CommandResult(handled=True, changed=changed, lines=fset_rows(settings, name[1:]))
+        return CommandResult(handled=True, changed=changed, lines=fset_rows(settings, name[1:]) if said else [])
     if not value:
         rows = fset_rows(settings, name)
         if not rows:
@@ -379,7 +385,7 @@ def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> Comm
     error = _fset.set_entry(name, jsrc_line.from_line_literal(value))
     if error is not None:
         return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=name, error=error))
-    return CommandResult(handled=True, changed=True, lines=fset_rows(settings, name))
+    return CommandResult(handled=True, changed=True, lines=fset_rows(settings, name) if said else [])
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +543,8 @@ def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -
     no-ops; a verb the settings layer does not own returns ``handled=False``.
     `set -key` puts that setting back to its ``baseline`` value (see
     `apply_unset`). A bad `set` returns an ``error`` so the loader can surface
-    it without aborting."""
+    it without aborting. A load says nothing of a line that applied, so the
+    result carries no confirmation lines."""
     parsed = jsrc_line.split_command(line)
     if parsed is None:
         return CommandResult(handled=True)
@@ -547,12 +554,12 @@ def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -
     if verb == "fset":
         if not jsrc_line.first_word(arg)[1] and not arg.startswith("-"):
             return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.said(line=line.strip()))
-        return fset_command(settings, arg, baseline)
+        return fset_command(settings, arg, baseline, said=False)
     if verb != "set":
         arg = f"{verb} {arg}"
     key, value = jsrc_line.first_word(arg)
     if not value and key.startswith("-") and len(key) > 1:
-        return apply_unset(settings, key[1:], baseline)
+        return apply_unset(settings, key[1:], baseline, said=False)
     if not value:
         return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.said(line=line.strip()))
-    return apply_set(settings, key, value)
+    return apply_set(settings, key, value, said=False)

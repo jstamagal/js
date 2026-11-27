@@ -136,15 +136,16 @@ class TranscriptLogSink:
             self._plain_locked(self._cleaned(f"plain:{source}", str(text)))
 
     def _plain_locked(self, clean: str) -> None:
+        # One write for the text: a write and a flush a line cost more than the line.
+        out: list[str] = []
         for part in clean.splitlines(keepends=True):
             if self._plain_at_line_start:
-                self._write_locked(self._stamp())
+                out.append(self._stamp())
                 self._plain_at_line_start = False
+            out.append(part)
             if part.endswith("\n"):
-                self._write_locked(part)
                 self._plain_at_line_start = True
-            else:
-                self._write_locked(part)
+        self._write_locked("".join(out))
 
     def write_turn(self, speaker: str, text: str) -> None:
         self._write_speaker_chunk(speaker, text)
@@ -374,12 +375,9 @@ class TranscriptSink:
         if level <= 0:
             return
         # Every call whole, at every level.
-        if level < 3:
-            record = tool_display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
-        else:
-            record = tool_display.render_exchange(name, args, result, level=level,
-                                                  preview=tool_display.preview_lines(settings),
-                                                  malformed=malformed, settings=settings)
+        # The log keeps no colour, so the exchange is rendered without any.
+        record = tool_display.render_exchange(name, args, result, level=3, malformed=malformed,
+                                              settings=settings, plain=True)
         write_plain(tool_display.for_transcript(record))
 
     def _on_stream_open(self, *, stream: Any) -> None:

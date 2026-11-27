@@ -142,6 +142,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SPELLCHECK_LANGUAGE", "str", group="input"),
     SettingSpec("SPINNER_FRAMES", "str", group="display"),
     SettingSpec("SCROLLBACK_LINES_MAX", "int", group="display"),
+    SettingSpec("SCREEN_REDRAWS_MAX", "int", group="display"),
     SettingSpec("WINDOW_MAX", "int", group="display"),
     SettingSpec("WINDOW_KEEP_UNSEEN", "bool", group="display"),
     SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),
@@ -172,6 +173,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("TOOLBOX_SEED_EXAMPLES", "bool", group="tools"),
     SettingSpec("TYPESAFE_API_KEY", "str", env="TYPESAFE_API_KEY", secret=True, group="tools"),
     SettingSpec("SUBAGENT_RESULT_SHARE", "bool", group="tools"),
+    SettingSpec("SUBAGENT_WAKE", "bool", group="tools"),
     SettingSpec("BROWSER_FALLBACK_FILE", "str", group="tools"),
     SettingSpec("TERMINAL_ENVIRONMENT_INHERIT", "bool", group="tools"),
     SettingSpec("TERMINAL_SHELL_PROGRAM", "str", group="tools"),
@@ -292,6 +294,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SUBAGENT_WORKERS_MAX", "int", group="limits"),
     # --- swarm ---
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
+    SettingSpec("SWARM_PROCESSES", "int", group="shell"),
     # --- acp ---
     SettingSpec("ACP_STEER_WAIT", "int", group="runtime"),
     # --- kernel ---
@@ -349,6 +352,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("COMPACTION_EXTERNAL_MODEL", "str", group="compaction"),
     SettingSpec("COMPACTION_SUMMARY_TOKENS_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_REUSE_CACHE", "bool", group="compaction"),
     SettingSpec("COMPACTION_FAILURES_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_CACHE_TTL", "int", group="compaction"),
     SettingSpec("CACHE_KEEPALIVE", "bool", group="compaction"),

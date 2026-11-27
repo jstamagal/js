@@ -221,8 +221,9 @@ class ToolTrace:
             name, args, result, level=level, preview=tool_display.preview_lines(settings),
             malformed=malformed, settings=settings)
         # A folded row's or a preview's whole form, for the reasoning_toggle key to unfold.
+        # Plain stdout has no such key, so it is rendered only for a screen.
         whole = (tool_display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
-                 if level < 3 else None)
+                 if level < 3 and self._factory() is not None else None)
         if whole == finished:
             whole = None  # shown whole already: nothing to unfold
         with output.LOCK:

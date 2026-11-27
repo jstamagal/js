@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TextIO
@@ -23,6 +24,10 @@ from . import (
 from .toolkit.results import result_text
 
 SCHEMA_VERSION = 2
+# The streamed-delta events, and how long one may wait unflushed when a
+# stream coalesces them.
+_DELTAS = frozenset({"text", "reasoning"})
+DELTA_FLUSH_S = 0.05
 SUMMARY_CHARS = 200
 
 
@@ -53,6 +58,8 @@ def _arguments(raw: Any) -> Any:
 class JsonEvents:
     """Writes the events of one headless run to `out`."""
 
+    coalesce_deltas = False
+
     def __init__(self, out: TextIO) -> None:
         self.out = out
         self.errored = False
@@ -62,6 +69,7 @@ class JsonEvents:
         self.result: dict[str, Any] = {}
         self.usage = usage_mod.UsageTotals()
         self._lock = threading.Lock()
+        self._flushed = 0.0
 
     def emit(self, kind: str, /, **fields: Any) -> None:
         if kind == "error":
@@ -71,7 +79,12 @@ class JsonEvents:
         line = json.dumps({**fields, "type": kind}, ensure_ascii=True, default=str)
         with self._lock:
             self.out.write(line + "\n")
-            self.out.flush()
+            now = time.monotonic()
+            # Coalescing, a streamed delta goes out with the next event or
+            # within DELTA_FLUSH_S, not as a write of its own.
+            if not self.coalesce_deltas or kind not in _DELTAS or now - self._flushed >= DELTA_FLUSH_S:
+                self.out.flush()
+                self._flushed = now
 
     def runtime_event(self, event: str, payload: dict) -> None:
         """The `event_sink` of `runtime.run_turn_async`: each runtime event as

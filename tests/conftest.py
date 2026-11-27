@@ -171,6 +171,8 @@ def local_model_catalog(monkeypatch, fresh_model_catalog):
         raise RuntimeError(f"offline test suite: not downloading {source}")
 
     monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_load_providers", no_download)
+    monkeypatch.setattr(model_metadata, "_start_refresher", lambda age_max: None)
+    monkeypatch.setattr(model_metadata, "_seen_db", [])
 
 
 @pytest.fixture

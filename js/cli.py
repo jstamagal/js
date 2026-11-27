@@ -14,9 +14,7 @@ from pathlib import Path
 
 from . import (
     agent_lock,
-    bench,
     command_line,
-    commit_cli,
     compaction,
     display as display_mod,
     dotenv,
@@ -28,23 +26,19 @@ from . import (
     loop_controller,
     memory as M,
     messages as msgs,
-    migrate_config,
     model_metadata,
     network_display,
     paths as _paths,
     persona as P,
     prompt_run,
-    repl,
     run_assembly,
     runtime,
     sampling as sampling_mod,
     session_catalog,
-    session_picker,
     session_store,
     setting_values,
     settings,
     snippets,
-    verify,
 )
 from .cli_options import RunOptions, current, invocation
 from .config import (
@@ -206,6 +200,8 @@ def _commit(args: argparse.Namespace, setup: Setup) -> int:
             stdin_text = _read_stdin_if_piped()
             extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
     session_catalog.session_leases.start["mode"] = "commit"
+    from . import commit_cli
+
     return commit_cli.run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                        session=args.session, save=not args.no_save,
                        reasoning=args.reasoning, maxout=args.max_out,
@@ -222,6 +218,8 @@ def _agent_bench(args: argparse.Namespace, setup: Setup) -> int | None:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
     if not current().replaces_prompt and not current().chat and P.has_benchmarks(agent_dir):
+        from . import bench
+
         return bench.run_agent_bench(agent, args, setup.sources)
     return None
 
@@ -270,9 +268,10 @@ def main(argv: list[str] | None = None) -> int:
     except snippets.SnippetError as exc:
         msgs.warn(msgs.FAILED, error=exc)
         code = 2
-    pending = dict(repl.pending_switch)
-    repl.pending_switch.clear()
-    if pending:
+    repl = sys.modules.get(f"{__package__}.repl")
+    if repl is not None and repl.pending_switch:
+        pending = dict(repl.pending_switch)
+        repl.pending_switch.clear()
         repl.exec_session(pending["target"])
     return code
 
@@ -523,6 +522,8 @@ def _setup(args: argparse.Namespace, dispatch_argv: list[str]) -> Setup | int:
             msgs.warn(msgs.SESSIONS_NEEDS_TERMINAL)
             return 2
         try:
+            from . import session_picker
+
             choice = session_picker.pick_session(Path.cwd())
             target = session_picker.session_target(choice) if choice is not None else None
         except Exception as exc:  # noqa: BLE001
@@ -652,6 +653,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if isinstance(setup, int):
         return setup
     if args.verify is not None:
+        from . import verify
+
         return verify.run_verify(args)
     if args.list_sessions:
         return listings.run_list_sessions(args)
@@ -678,10 +681,14 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if isinstance(setup, int):
         return setup
     if args.bench:
+        from . import bench
+
         return bench.run_bench_mode(args, setup.sources)
     if args.compact:
         return _compact(args, setup)
     if args.migrate_config:
+        from . import migrate_config
+
         return migrate_config.run_migrate_config()
     if args.commit:
         return _commit(args, setup)
@@ -694,6 +701,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.json or args.json_stream:
         msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, -f, a pipe, an agent run, or --bench")
         return 2
+    from . import repl
+
     return repl.start_repl(args, setup.sources, setup.agent)
 
 

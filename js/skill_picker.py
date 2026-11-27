@@ -14,23 +14,16 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from prompt_toolkit.application import Application, get_app
-from prompt_toolkit.data_structures import Point
-from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input, create_input
-from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import HSplit, Layout, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
 from . import fset, keys, messages as msgs, picker, skills
 from .skills import SkillMetadata
 
-_PAGE = 10
-_MOVES = {"up": -1, "down": 1, "page_up": -_PAGE, "page_down": _PAGE}
+_PAGE = picker.PAGE
+_MOVES = picker.MOVES
 SKILL_KEYMAPS: dict[str, keys.Keymap] = {
     "list": {"interrupt": (("c-c",),), "up": (("up",), ("k",)), "down": (("down",), ("j",)),
              "page_up": (("pageup",),), "page_down": (("pagedown",),),
@@ -44,11 +37,8 @@ SKILL_KEYMAPS: dict[str, keys.Keymap] = {
 }
 
 
-class _Closed:
-    pass
-
-
-CLOSED = _Closed()
+_Closed = picker._Closed
+CLOSED = picker.CLOSED
 
 
 def _style() -> Style:
@@ -145,26 +135,7 @@ class SkillPicker:
         return None
 
     def _search_key(self, key: str) -> None:
-        action = keys.action_for(self.keymaps[self.screen], key)
-        text = self.query_text
-        if action in _MOVES:
-            self.move(_MOVES[action])
-            return None
-        if action == "choose":
-            self.screen = "list"
-            return None
-        if action == "back":
-            self.query_text = ""
-            self.screen = "list"
-        elif action == "backspace":
-            self.query_text = text[:-1]
-        elif action == "clear":
-            self.query_text = ""
-        elif isinstance(key, str) and len(key) == 1 and key.isprintable():
-            self.query_text = text + key
-        if self.query_text != text:
-            self.refresh()
-        return None
+        picker.search_key(self, key)
 
     # -- view --------------------------------------------------------------------
 
@@ -205,52 +176,7 @@ class SkillPicker:
 
     def application(self, *, input: Input | None = None, output: Output | None = None
                     ) -> Application[tuple[str, ...] | None]:
-        kb = KeyBindings()
-        names = {Keys.ControlM: "enter", Keys.ControlJ: "enter", Keys.ControlH: "backspace",
-                 Keys.Backspace: "backspace", Keys.Escape: "escape", Keys.ControlC: "c-c",
-                 Keys.ControlU: "c-u", Keys.Up: "up", Keys.Down: "down",
-                 Keys.PageUp: "pageup", Keys.PageDown: "pagedown", Keys.Home: "home", Keys.End: "end"}
-
-        def dispatch(event: KeyPressEvent) -> None:
-            pressed = event.key_sequence[0].key
-            key = names.get(pressed, pressed if isinstance(pressed, str) and len(pressed) == 1 else None)
-            if key is None:
-                key = event.data if len(event.data) == 1 and event.data.isprintable() else ""
-            if not key:
-                return
-            if len(event.key_sequence) > 1:
-                key = tuple(names.get(press.key, press.key) for press in event.key_sequence)
-            result = self.press(key)
-            if isinstance(result, tuple):
-                event.app.exit(result=result)
-            elif result is CLOSED:
-                event.app.exit(result=None)
-
-        kb.add(Keys.Any)(dispatch)
-        kb.add("escape", eager=Condition(
-            lambda: keys.action_for(self.keymaps[self.screen], "escape") is not None,
-        ))(dispatch)
-
-        for keymap in self.keymaps.values():
-            for sequences in keymap.values():
-                for sequence in sequences:
-                    if len(sequence) > 1:
-                        kb.add(*sequence)(dispatch)
-
-        body = FormattedTextControl(
-            lambda: self.body()[0],
-            get_cursor_position=lambda: Point(0, self.body()[1]),
-            show_cursor=False,
-        )
-        root = HSplit(
-            [
-                Window(FormattedTextControl(self.title), height=1),
-                Window(FormattedTextControl(self.subtitle), height=lambda: Dimension.exact(self.subtitle_height())),
-                Window(body, wrap_lines=False, always_hide_cursor=True),
-            ]
-        )
-        return Application(layout=Layout(root), key_bindings=kb, style=_style(), full_screen=True,
-                           input=input, output=output)
+        return picker.list_application(self, _style(), input=input, output=output)
 
 
 def pick_skills(cwd: str | Path, disabled: Iterable[str] = (), *, input=None, output=None, picker_factory=None) -> tuple[str, ...] | None:

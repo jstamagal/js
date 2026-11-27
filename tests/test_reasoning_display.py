@@ -312,8 +312,7 @@ def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(mo
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(
             lambda _request: httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body),
         )) as client:
-            get_provider = model_client.ai.get_provider
-            monkeypatch.setattr(model_client.ai, "get_provider", lambda *a, **kw: get_provider(*a, **kw, client=client))
+            monkeypatch.setattr(model_client, "_shared_http_client", lambda _sdk: client)
             loop = asyncio.get_running_loop()
             telemetry = runtime.Telemetry(None, reasoning_factory=lambda level: screen.ScreenReasoningDisplay(loop, scroll, app, level))
             messages = [{"role": "user", "content": "first"}]

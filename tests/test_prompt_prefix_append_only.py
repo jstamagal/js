@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from js import memory as M, microcompact, runtime as R
+from js import memory as M, runtime as R
 from js.config import Config
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import ToolRegistry
@@ -120,7 +120,7 @@ def _session_requests(tmp_path, monkeypatch, model: str) -> list[dict]:
             cfg, "SYSTEM PROMPT", history, R.Telemetry(debug_log=None),
             tool_registry=registry, tool_context=context, suppress_output=True,
         )
-        M.persist_messages(cfg.session_file, history, stamp=microcompact.cfg_stamp(cfg))
+        M.persist_messages(cfg.session_file, history, stamp=M.config_stamp(cfg))
 
     async def drive():
         with patch.object(R.T, "STOCK_CONTEXT", context):

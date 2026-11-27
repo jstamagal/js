@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Subagents run alongside the main agent, which watches, stops and talks to them.** Modelled on Claude Code's background agents and Codex CLI's multi-agent tools; `docs/subagents.md` has the comparison.
+  - The main agent's `task` and named-agent calls return handles at once (`t1` for the task, `t1.1`, `t1.2` for its subagents) and the subagents run while it works or answers you. `background=false` waits as before; a subagent's own calls still wait by default.
+  - `task` actions: `list`; `poll` shows each subagent's state, tool calls, latest text and session file; `kill` stops the task or one subagent; `send` talks to a subagent, read at its next tool call while it runs (in a further turn before it finishes when it makes none), or answered in a new turn on its own session once it has finished; `wait` as before.
+  - A finished result reaches the main agent without you typing: at its next tool call, with your next line, or, when it is idle, in a turn of its own (`SUBAGENT_WAKE`, default on). The reminder carries the result itself, cut at `TOOL_RESULT_MAX`.
+  - `js -p` waits for the subagents the agent left running and hands it their results before the run ends; `SUBAGENT_WAKE off` keeps the old ending.
+  - `/jobs` lists the main agent's task handles with how many subagents are done.
+
+- **Swarms use every core, and each agent costs less.** Numbers and causes are in `docs/swarm-performance.md`; `just swarmbench` measures it against a fake model.
+  - `python -m js.swarm run` spreads its agents over runner processes: `SWARM_PROCESSES` (or the spec's `"processes"`), default one per 16 agents up to one per CPU; 1 is the old single process.
+  - Model calls on one event loop share one HTTP client, so connections are reused and TLS setup is not repeated per call.
+  - Saving a session appends without re-reading the file when nothing else wrote to it; the `.txt` transcript and search index update at the end of a turn instead of after every tool batch.
+  - The model catalog freshness check, tool description rendering and session path resolution are cached; a swarm's streamed text events are flushed in batches of up to 50 ms.
+
+- **The harness repeats less of its own work.** A pass over everything js does regularly, measured with `just harnessbench` (`bench/harness`); numbers and causes are in `docs/harness-performance.md`.
+  - A tool result is rendered once for the screen and once, without colour, for the transcript log; it was highlighted two or three times and the colour then thrown away. Only the rows a folded `read` shows are highlighted.
+  - `shell`, prompt `!sh` blocks and every other captured command wait on the process and its pipes instead of polling them, so a command that takes 2 ms returns in 2 ms, not 11.
+  - The REPL redraws at most `SCREEN_REDRAWS_MAX` times a second (30) while text streams; 0 redraws on every change, as before.
+  - Startup reads the model catalog once and keeps the rows it needs in the cache directory, loads `defaults/jsrc` without composing a confirmation line per setting, and the REPL imports the provider SDK in the background while the prompt is idle.
+  - A tool call's arguments are checked against a validator kept per schema; saving a session checks only the new messages for unanswered tool calls; the usage anchor compares histories by message, not by hashing the whole history each round.
+  - Colour and theme lookups, the lexer for a file name, skill indexes and layered setup lookups no longer re-read or re-walk what has not changed.
+  - A stale models.dev catalog no longer holds up a start. The catalog there is gets used, and a detached process downloads the new one without printing anything; `--refresh-model-catalog` still refreshes in the foreground. The `CATALOG_UPDATE_FAILED` fset entry is gone with the message.
+  - `js --help` prints its usage in 0.06 s instead of 0.8 s: the command starts in `js.entry`, and `js.cli` imports the REPL, `--bench`, `--commit`, `--verify` and `--loop` only for the mode that runs them.
+  - Helpers that existed in two or more copies have one: the list pickers' application and search keys, the served context-window lookup, MCP redaction, the session config stamp, jail path resolution and the file stamp caches key on.
+
 - **Kernel and toolbox fixes from an agent-style shakedown.**
   - `toolbox load` and `save` refuse while a kernel cell is still running, instead of queueing behind it and interrupting it on their timeout.
   - A kernel result over `TOOL_RESULT_MAX` cuts the middle of the printed output, so the traceback, `IMAGE` lines and the `HANDLE`/`NAMESPACE` line survive.

@@ -319,7 +319,9 @@ async def compact_now(
         guidance = await asyncio.to_thread(compaction_summary.run_pre_hook, cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
-        summary = await compaction_summary.summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
+        owner = context or T.STOCK_CONTEXT
+        summary = await compaction_summary.summarize(cfg, compact_model, messages[:keep_from], focus, guidance,
+                                                     cached=owner.cached_request, history=messages)
         recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
                             **({"flight_path": str(flight.path)} if flight.path else {})}
         rehydrated = _post_compact_rehydration(
@@ -349,7 +351,7 @@ async def compact_now(
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
-        M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
+        M.persist_messages(cfg.session_file, messages, stamp=M.config_stamp(cfg))
         M.append_mark(cfg.session_file, marker)
         messages[:] = after
         owner = context or T.STOCK_CONTEXT
@@ -510,7 +512,8 @@ def maybe_auto_compact(
     messages: list[dict], resolve_window: Any,
 ) -> AutoCompactOutcome:
     """Between-turn compaction for callers outside an event loop."""
-    return asyncio.run(maybe_auto_compact_async(cfg, ac, context, system, messages, resolve_window))
+    return owning_loop.run_owning_loop(
+        maybe_auto_compact_async(cfg, ac, context, system, messages, resolve_window))
 
 
 def compact_hooks(state: ReplState, cfg: Config) -> dict:

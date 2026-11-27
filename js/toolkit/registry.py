@@ -9,7 +9,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -145,13 +145,11 @@ class ToolRegistry:
         # path funnels through (select()'d surfaces and the raw full registry that
         # commit/wiki hand straight to the model), so it is leak-proof: a
         # {{#unless fs_search}} block never reaches the model unresolved.
-        present = set(self.by_name)
+        present = frozenset(self.by_name)
         specs = []
         for tool in self.tools:
             spec = tool.openai_spec()
-            spec["function"]["description"] = render_tool_name_sections(
-                tool.description, present, tool=tool.name
-            )
+            spec["function"]["description"] = _rendered_description(tool.description, present, tool.name)
             specs.append(spec)
         return specs
 
@@ -645,6 +643,13 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
             continue
         tools.append(replace(subagents.named_agent_tool(agent_id), name=name, source="agent"))
     return tuple(tools)
+
+
+@lru_cache(maxsize=1024)
+def _rendered_description(description: str, present: frozenset[str], tool: str) -> str:
+    """A tool's description as `render_tool_name_sections` resolves it among
+    ``present``: the same for every model call on the same surface."""
+    return render_tool_name_sections(description, present, tool=tool)
 
 
 @cache

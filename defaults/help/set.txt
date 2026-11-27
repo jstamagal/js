@@ -224,9 +224,20 @@ SUBAGENT_WORKERS_MAX
     from every task call; minimum 1. A subagent waiting on its own subagents
     does not count.
 
+SUBAGENT_WAKE
+    on: a background task that finishes while the REPL's main agent is idle
+    starts a turn carrying its result; in js -p the run waits for every
+    background task and gives the agent its result before it ends. off: the
+    result rides the next line you type.
+
 SWARM_ACTIVE_MAX
     How many agents of an in-process swarm may be mid-turn at once; 0 is no
-    cap.
+    cap. Spread over several runner processes, each holds its share of it.
+
+SWARM_PROCESSES
+    How many runner processes `python -m js.swarm run` spreads a swarm's
+    agents over. 0 is one per 16 agents, up to one per CPU; 1 runs every
+    agent in one process. A spec's own "processes" wins.
 
 ACP_STEER_WAIT
     Seconds `js acp` keeps a cancelled turn running for the prompt that
@@ -415,11 +426,20 @@ COMPACTION_EXTERNAL_MODEL
     Model used to write the compaction summary; 'same' = active model.
 
 COMPACTION_SUMMARY_TOKENS_MAX
-    Max tokens for the compaction summary. Capped at 8192.
+    Max tokens for the compaction summary. Capped at
+    COMPACTION_SUMMARY_REQUEST_TOKENS_MAX and at the model's own output
+    limit where js knows it.
 
 COMPACTION_SUMMARY_RESULT_CHARS_MAX
     Longest tool result, in characters, that a summary request carries
     whole; a longer one keeps its head and tail. 0 = whole results.
+    Applies to the plain-text summary request only.
+
+COMPACTION_REUSE_CACHE
+    on: the summary request is the conversation's last request plus the
+    summary instructions, so it reads the history from the prompt cache
+    and sees whole tool results. Needs COMPACTION_EXTERNAL_MODEL same.
+    off, or when that request can't be used: a plain-text transcript.
 
 COMPACTION_FAILURES_MAX
     Failed automatic summaries in a row that pause automatic compaction. A
@@ -815,6 +835,10 @@ SPINNER_FRAMES
 SCROLLBACK_LINES_MAX
     Lines the full-screen view keeps in scrollback.
 
+SCREEN_REDRAWS_MAX
+    Times a second the full-screen view redraws at most, however fast text
+    arrives. 0 redraws on every change.
+
 WINDOW_MAX
     Windows open at once on the REPL screen, window 1 included. A subagent
     launched with this many open runs without one.
@@ -887,7 +911,7 @@ ENDPOINT_DEFAULT_KEY
     API key for an endpoint URI that names none.
 
 MODEL_CATALOG_AUTO_REFRESH
-    on: a stale model catalog is refreshed at startup.
+    on: a stale model catalog is refreshed by a background process.
 
 MODEL_CATALOG_AGE_MAX
     Seconds before the model catalog counts as stale.

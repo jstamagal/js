@@ -83,11 +83,9 @@ _parsed: dict[Path, tuple[tuple[int, int], PromptCommand | None]] = {}
 
 
 def _load_cached(path: Path) -> PromptCommand | None:
-    try:
-        stat = path.stat()
-    except OSError:
+    stamp = paths.file_stamp(path)
+    if stamp is None:
         return None
-    stamp = (stat.st_mtime_ns, stat.st_size)
     cached = _parsed.get(path)
     if cached is not None and cached[0] == stamp:
         return cached[1]

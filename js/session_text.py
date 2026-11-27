@@ -519,7 +519,7 @@ def refresh(session_file: Path) -> None:
     session_file = Path(session_file)
     if session_file.suffix != session_store.SUFFIX:
         return
-    key = str(session_file.resolve(strict=False))
+    key = session_store.file_key(str(session_file))
     with _lock:
         try:
             guard = open(f"{session_file}.refresh.lock", "a+b")  # noqa: SIM115 - held through publication
@@ -587,7 +587,7 @@ def forget(session_file: Path) -> None:
 
     session_file = Path(session_file)
     with _lock:
-        _parsed.pop(str(session_file.resolve(strict=False)), None)
+        _parsed.pop(session_store.file_key(str(session_file)), None)
     try:
         session_store.text_path(session_file).unlink()
     except OSError:

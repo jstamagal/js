@@ -226,7 +226,7 @@ def test_compact_pre_hook_output_is_capped_and_marked(tmp_path):
 def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeypatch, tmp_path):
     seen_models: list[str] = []
 
-    async def summarize_stub(cfg, model, messages, focus, guidance):
+    async def summarize_stub(cfg, model, messages, focus, guidance, **_):
         seen_models.append(model)
         return f"Summary from {model}"
 
@@ -244,7 +244,7 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
 def test_compact_now_model_argument_overrides_the_configured_summary_model(monkeypatch, tmp_path):
     seen_models: list[str] = []
 
-    async def summarize_stub(cfg, model, messages, focus, guidance):
+    async def summarize_stub(cfg, model, messages, focus, guidance, **_):
         seen_models.append(model)
         return f"Summary from {model}"
 

@@ -252,7 +252,6 @@ fset RESPONSE_INCOMPLETE %C07%G%C Response incomplete: $0-
 fset SIGNED_REASONING_DROPPED %C07%G%C The provider refused replayed reasoning; dropped it from $0- messages and sending again.
 fset THINKING_TURN_RESTARTED %C07%G%C The provider refused this turn's thinking; restarted the turn from $0- messages and sending again.
 fset MAX_OUTPUT_RESUMING %C07%G%C Reply hit its output cap; asking the model to resume, $0 of $1-.
-fset CATALOG_UPDATE_FAILED %C07%G%C models.dev cache not refreshed: $0-
 fset LOGIN_BAD_HEADERS %C07%G%C Headers must use k=v,k=v. Nothing saved yet.
 fset LOGIN_MODELS_UNREACHABLE %C07%G%C Could not list models: $0-. Saving the server anyway.
 fset LOGIN_BAD_DEFAULTS %C07%G%C $0-. Nothing saved yet.

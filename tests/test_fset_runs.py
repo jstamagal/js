@@ -100,7 +100,7 @@ def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_term
     monkeypatch.setattr(sys, "stdout", out)
     monkeypatch.setattr(sys, "stderr", err)
     fset.set_entry("RUN_LINE", "%C04run $0-")
-    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
+    stream_transport.say_or_print(3, msgs.SAVE_FAILED.said(error="disk full"))
     telemetry = runtime.Telemetry(None)
     ConsoleSink(telemetry).emit(output.event("run_line", fields=["model=m", "ctx=1"]))
     context = ToolContext()

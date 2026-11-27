@@ -168,7 +168,7 @@ async def type_line(cfg, messages, line, during=None):
 
 def persist_turn(cfg, messages):
     """Write the turn's messages to the session as the REPL does after a turn."""
-    M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
+    M.persist_messages(cfg.session_file, messages, stamp=M.config_stamp(cfg))
 
 
 async def summary_fault(mode):
@@ -370,6 +370,7 @@ async def run_loop(mode):
     for m in messages:
         M.append_message(cfg.session_file, m)
     summaries = []
+    replays = []
     requests = []
     effects = []
     model_calls = 0
@@ -389,6 +390,10 @@ async def run_loop(mode):
         if payload.startswith("Summarize this js session"):
             summaries.append(payload.split("<conversation>\n", 1)[1].split("\n</conversation>", 1)[0])
             return result("condensed " + str(len(summaries)))
+        if "checkpoint of this session for context compaction" in text_of(kw["messages"][-1:]):
+            # The summary that reuses the cache: the conversation, then the instructions.
+            replays.append(text_of(kw["messages"][:-1]))
+            return result("condensed " + str(len(summaries) + len(replays)))
         requests.append([m.model_dump(mode="json") for m in kw["messages"]])
         model_calls += 1
         if mode == "midturn_overflow" and model_calls == 2:
@@ -425,6 +430,8 @@ async def run_loop(mode):
     if mode == "churn":
         # A summary request whose conversation holds no message beyond the
         # previous summary and its re-attached files rewrites only the summary.
+        # A summary that reuses the cache sends the whole conversation, so only
+        # plain-text requests show what was summarized.
         checks["no_summary_only_rewrites"] = all(
             re.search(r"^\[(User|Assistant|Tool result)", source, re.MULTILINE)
             for source in summaries
@@ -436,7 +443,7 @@ async def run_loop(mode):
         checks,
         error=error,
         model_calls=model_calls,
-        summaries=len(summaries),
+        summaries=len(summaries) + len(replays),
         tool_executions=len(effects),
         user_survives=any(m is user for m in messages),
         live_count=len(messages),

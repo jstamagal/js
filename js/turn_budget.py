@@ -88,6 +88,11 @@ class TurnConvo:
             return
         self.ai.extend(self._render_history("", list(records)))
 
+    def render(self, records: list[dict]) -> list[Any]:
+        """The SDK messages ``records`` add after this convo's system prompt,
+        as `append` would build them."""
+        return self._render_history("", records)
+
     def _render_history(self, system: str, records: list[dict]) -> list[Any]:
         messages = history_record.history_to_ai_messages(
             system, records, provider_id=self._provider_id, model_id=self._model, vision=self._vision,

@@ -21,15 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from prompt_toolkit.application import Application
-from prompt_toolkit.data_structures import Point
-from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input, create_input
-from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
@@ -56,7 +49,7 @@ BRANCH = "branch"
 _HIT_LINES = 300
 # Session path -> (size, mtime) of the file when it was previewed, and the preview.
 _PREVIEWS: dict[str, tuple[tuple[int, int], tuple[str, str]]] = {}
-_PAGE = 10
+_PAGE = picker.PAGE
 
 
 @dataclass(frozen=True)
@@ -70,11 +63,8 @@ class Choice:
     message_id: str | None = None
 
 
-class _Closed:
-    pass
-
-
-CLOSED = _Closed()
+_Closed = picker._Closed
+CLOSED = picker.CLOSED
 
 def _style() -> Style:
     """The picker in /fset's colours."""
@@ -96,7 +86,7 @@ def _style() -> Style:
         }
     )
 
-_MOVES = {"up": -1, "down": 1, "page_up": -_PAGE, "page_down": _PAGE}
+_MOVES = picker.MOVES
 _NAVIGATION: keys.Keymap = {
     "up": (("up",), ("k",)), "down": (("down",), ("j",)),
     "page_up": (("pageup",),), "page_down": (("pagedown",),),
@@ -227,7 +217,7 @@ class SessionPicker:
         """The session's last user text and agent line. A file is read again
         only when its size or mtime changed since it was last previewed; a
         session with no file to stat is read once per picker."""
-        stamp = _file_stamp(session.path)
+        stamp = paths.file_stamp(session.path)
         cached = _PREVIEWS.get(session.path)
         if stamp is None and session.path in self._previews:
             preview = self._previews[session.path]
@@ -302,27 +292,7 @@ class SessionPicker:
         return None
 
     def _search_key(self, key: str) -> Choice | _Closed | None:
-        action = keys.action_for(self.keymaps[self.screen], key)
-        text = self.query_text
-        if action in _MOVES:
-            self.move(_MOVES[action])
-            return None
-        if action == "choose":
-            self.screen = "list"
-            return None
-        if action == "back":
-            self.query_text = ""
-            self.screen = "list"
-        elif action == "backspace":
-            self.query_text = text[:-1]
-        elif action == "clear":
-            self.query_text = ""
-        elif action == "delete_word":
-            self.query_text = text.rstrip()[: len(text.rstrip()) - len(text.rstrip().split(" ")[-1])]
-        elif isinstance(key, str) and len(key) == 1 and key.isprintable():
-            self.query_text = text + key
-        if self.query_text != text:
-            self.refresh()
+        picker.search_key(self, key)
         return None
 
     def _messages_key(self, key: str) -> Choice | _Closed | None:
@@ -494,63 +464,9 @@ class SessionPicker:
 
     def application(self, *, input: Input | None = None, output: Output | None = None
                     ) -> Application[Choice | None]:
-        kb = KeyBindings()
-        names = {Keys.ControlM: "enter", Keys.ControlJ: "enter", Keys.ControlH: "backspace",
-                 Keys.Backspace: "backspace", Keys.Escape: "escape", Keys.ControlC: "c-c",
-                 Keys.ControlU: "c-u", Keys.ControlW: "c-w", Keys.Up: "up", Keys.Down: "down",
-                 Keys.PageUp: "pageup", Keys.PageDown: "pagedown", Keys.Home: "home", Keys.End: "end"}
-
-        def dispatch(event: KeyPressEvent) -> None:
-            pressed = event.key_sequence[0].key
-            key = names.get(pressed, pressed if isinstance(pressed, str) and len(pressed) == 1 else None)
-            if key is None:
-                key = event.data if len(event.data) == 1 and event.data.isprintable() else ""
-            if not key:
-                return
-            if len(event.key_sequence) > 1:
-                key = tuple(names.get(press.key, press.key) for press in event.key_sequence)
-            result = self.press(key)
-            if isinstance(result, Choice):
-                event.app.exit(result=result)
-            elif result is CLOSED:
-                event.app.exit(result=None)
-
-        kb.add(Keys.Any)(dispatch)
-        kb.add("escape", eager=Condition(
-            lambda: keys.action_for(self.keymaps[self.screen], "escape") is not None,
-        ))(dispatch)
-
-        for keymap in self.keymaps.values():
-            for sequences in keymap.values():
-                for sequence in sequences:
-                    if len(sequence) > 1:
-                        kb.add(*sequence)(dispatch)
-
-        body = FormattedTextControl(
-            lambda: self.body()[0],
-            get_cursor_position=lambda: Point(0, self.body()[1]),
-            show_cursor=False,
-        )
-        root = HSplit(
-            [
-                Window(FormattedTextControl(self.title), height=1),
-                Window(FormattedTextControl(self.subtitle), height=lambda: Dimension.exact(self.subtitle_height())),
-                # The highlighted session's preview sits under its row: keep
-                # that many lines below the cursor on the screen.
-                Window(body, wrap_lines=False, always_hide_cursor=True,
-                       scroll_offsets=ScrollOffsets(bottom=self.preview_height)),
-            ]
-        )
-        return Application(layout=Layout(root), key_bindings=kb, style=_style(), full_screen=True,
-                           input=input, output=output)
-
-
-def _file_stamp(path: str) -> tuple[int, int] | None:
-    try:
-        info = Path(path).stat()
-    except (OSError, ValueError):
-        return None
-    return info.st_size, info.st_mtime_ns
+        # The highlighted session's preview sits under its row: keep that
+        # many lines below the cursor on the screen.
+        return picker.list_application(self, _style(), rows_below=self.preview_height, input=input, output=output)
 
 
 def _tokens(path: str) -> int | None:

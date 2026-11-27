@@ -108,6 +108,8 @@ class Telemetry:
     def event(self, kind: str, **fields: Any) -> None:
         if self.event_observer is not None:
             self.event_observer(kind, fields)
+        if self.trace_sink is None and not self.debug_log:
+            return
         rec = {"ts": time.time(), "kind": kind, **fields}
         line = json.dumps(rec, default=str) + "\n"
         with output.LOCK:

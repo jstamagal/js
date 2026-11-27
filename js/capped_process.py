@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import select
 import shlex
 import signal
 import subprocess
@@ -19,6 +20,8 @@ from .jail import _IGNORE_SIGINT
 # After the process exits, how long its reader threads get to drain the pipes
 # before a reader still blocked (a grandchild holding the pipe) is stopped.
 READER_GRACE_S = 2.0
+# How often a reader with a silent pipe looks for a stop.
+READER_STOP_CHECK_S = 0.25
 
 
 @dataclass(frozen=True)
@@ -348,6 +351,35 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
+def _readable(fd: int, timeout: float | None) -> bool:
+    """Whether ``fd`` has something to read, or its end, within ``timeout``
+    seconds. `poll`, which takes a descriptor of any number."""
+    waiter = select.poll()
+    waiter.register(fd, select.POLLIN)
+    return bool(waiter.poll(None if timeout is None else max(0.0, timeout) * 1000))
+
+
+def _wait_exit(proc: subprocess.Popen, timeout: float | None) -> int | None:
+    """``proc``'s exit status, waiting up to ``timeout`` seconds; None while
+    it still runs. Sleeps on the process's pidfd, so the wait ends when the
+    process does; where the kernel has none, `Popen.wait` polls for it."""
+    if proc.poll() is not None:
+        return proc.returncode
+    try:
+        pidfd = os.pidfd_open(proc.pid)
+    except (AttributeError, OSError):
+        try:
+            return proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+    try:
+        if not _readable(pidfd, timeout):
+            return None
+    finally:
+        os.close(pidfd)
+    return proc.wait()
+
+
 class CappedProcess:
     """A started ``argv`` whose streams are being captured in the background.
 
@@ -414,9 +446,8 @@ class CappedProcess:
         if self._result is not None:
             return self._result
         deadline = None if timeout is None else time.monotonic() + timeout
-        try:
-            rc = self.proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        rc = _wait_exit(self.proc, timeout)
+        if rc is None:
             return None
         if pipe_idle is not None:
             for thread in self._threads:
@@ -491,14 +522,16 @@ def start_capped(
     def _reader(name: str, stream) -> None:
         capture = captures[name]
         try:
-            os.set_blocking(stream.fileno(), False)
-            while True:
-                if stop_readers.is_set():
-                    return
+            fd = stream.fileno()
+            os.set_blocking(fd, False)
+            while not stop_readers.is_set():
+                # Sleep until the pipe has bytes or its end; wake now and
+                # then only to see a stop.
+                if not _readable(fd, READER_STOP_CHECK_S):
+                    continue
                 try:
-                    chunk = os.read(stream.fileno(), 65536)
+                    chunk = os.read(fd, 65536)
                 except BlockingIOError:
-                    stop_readers.wait(0.01)
                     continue
                 if not chunk:
                     return

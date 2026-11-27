@@ -58,7 +58,7 @@ Streaming tool-use loop on one event loop, over the async SDK; tools are
 sync and run on executor threads. `js/model_client.py` is the model I/O boundary (providers are registered in
 `js/providers.py`); `js/runtime.py` is the loop (dispatch, subagent
 fan-out), and a turn's model call and streamed reply live in
-`js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` is `main`: it reads
+`js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` is `main` (the command starts in `js/entry.py`): it reads
 the command line (`js/command_line.py` defines it) and picks the mode, each
 side mode (`--bench`, `--commit`, `--list-*`) living in a module of its own, `js/repl.py` is the interactive REPL (startup,
 the input loop, the turn queue, steering), and `js/prompt_run.py` is the `-p`

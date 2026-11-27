@@ -1,0 +1,1 @@
+The conversation above holds an earlier checkpoint inside <compaction-summary>. Write one checkpoint that replaces it: keep everything in it that still holds, add the new goals, decisions, files, commands, errors and fixes, move finished work out of Pending and next step, and remove only what newer messages make obsolete.
