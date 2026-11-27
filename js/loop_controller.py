@@ -33,19 +33,22 @@ def claim_child() -> None:
 
 
 def after_run(code: int, argv: list[str], *, bench: str | None, prompt: str | None,
-              settings: Callable[[], dict],
+              settings: Callable[[], dict], stdin: bytes | None = None,
               relay: Callable[[Iterable[str]], None] | None = None) -> int:
     """The exit code of a run that ended with ``code``. A run a controller
     started hands its control exit to that controller. A run started by hand
     is its own controller: HALT ends it, and LOOP repeats ``argv`` as fresh
-    runs for as long as each one ends on LOOP. ``relay`` takes the stdout
-    lines of each repeat."""
+    runs for as long as each one ends on LOOP. Each repeat opens a session of
+    its own and reads ``stdin``, what the run read from its stdin. ``relay``
+    takes the stdout lines of each repeat."""
     if code not in CONTROL_EXITS or _is_child:
         return code
     if code == HALT_EXIT:
         return 0
-    return run(argv, "", bench=bench, prompt=prompt, settings=settings(), while_looping=True,
-               relay=relay)
+    fresh = command_line.words([arg for arg in command_line.read(argv)
+                                if arg.dest not in ("session", "session_key")])
+    return run(fresh, "", bench=bench, prompt=prompt, settings=settings(), while_looping=True,
+               stdin_data=stdin, relay=relay)
 
 
 def parse_limit(value: str) -> tuple[int | None, float | None]:
@@ -97,19 +100,27 @@ def _stop_child(child: subprocess.Popen) -> None:
 
 def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
         child_command: list[str] | None = None, settings: dict | None = None,
-        while_looping: bool = False,
+        while_looping: bool = False, stdin_data: bytes | None = None,
         relay: Callable[[Iterable[str]], None] | None = None) -> int:
     """Repeat ``argv`` as fresh runs up to ``limit``. A run that ends on HALT
     ends the loop. ``while_looping`` also ends it after a run that did not end
-    on LOOP, and sends each run as it was typed, with no instruction added.
-    With ``relay``, each run's stdout is piped and its lines handed to it."""
+    on LOOP, sends each run as it was typed, with no instruction added and
+    without JS_SESSION, and
+    gives each run ``stdin_data`` as its stdin, this process's own stdin when
+    None; otherwise each run reads what is piped to this process. With ``relay``,
+    each run's stdout is piped and its lines handed to it."""
     count, seconds = parse_limit(limit)
     command = list(child_command or [sys.executable, "-m", "js"])
     args = child_argv(argv)
-    stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
+    if not while_looping:
+        stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
     if (prompt is None and bench is None and not stdin_data and not while_looping
             and "--commit" not in args):
         args += ["-p", snippets.render("fresh-session")]
+    env = {**os.environ, _CHILD_ENV: "1"}
+    if while_looping:
+        # A session JS_SESSION names would be resumed, and its exchanges skipped.
+        env.pop("JS_SESSION", None)
     deadline = time.monotonic() + seconds if seconds is not None else None
     completed = failures = attempts = 0
     max_attempts = count * int(_settings.knob(settings, "LOOP_ATTEMPTS_MULTIPLIER")) if count is not None else None
@@ -125,7 +136,7 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
             if relay is None:
                 child = subprocess.Popen(command + args, start_new_session=True,
                                          stdin=subprocess.PIPE if stdin_data is not None else None,
-                                         env={**os.environ, _CHILD_ENV: "1"})
+                                         env=env)
             else:
                 # Stdin comes from a file, so the run never waits on a write
                 # while its stdout is read.
@@ -136,7 +147,7 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
                     child = subprocess.Popen(command + args, start_new_session=True,
                                              stdin=stdin_file if stdin_data is not None else None,
                                              stdout=subprocess.PIPE, text=True,
-                                             env={**os.environ, _CHILD_ENV: "1"})
+                                             env=env)
             try:
                 if relay is None:
                     child.communicate(input=stdin_data)

@@ -106,21 +106,29 @@ def _invocation_sources(args: argparse.Namespace) -> InvocationSources:
     )
 
 
+# What this run read from its stdin, which a repeat of the run reads in turn;
+# None when it read nothing from it.
+_stdin_read: bytes | None = None
+
+
 def _read_stdin_if_piped() -> str:
+    global _stdin_read
     if sys.stdin.isatty():
         return ""
     try:
-        return sys.stdin.read()
+        text = sys.stdin.read()
     except (OSError, ValueError):
         return ""
+    _stdin_read = text.encode("utf-8", errors="surrogateescape")
+    return text
 
 def _read_stdin_attachment_if_piped() -> bytes:
+    global _stdin_read
     if sys.stdin.isatty():
         return b""
     buffer = getattr(sys.stdin, "buffer", None)
-    if buffer is not None:
-        return buffer.read()
-    return sys.stdin.read().encode("utf-8")
+    _stdin_read = buffer.read() if buffer is not None else sys.stdin.read().encode("utf-8")
+    return _stdin_read
 
 
 # The command-line flags that set a setting: (args attribute, setting). Each
@@ -284,6 +292,8 @@ def _main(argv: list[str] | None = None) -> int:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
     loop_controller.claim_child()
+    global _stdin_read
+    _stdin_read = None
     generate = dispatch_argv[:1] == ["generate"]
     options_end = dispatch_argv.index("--") if "--" in dispatch_argv else len(dispatch_argv)
     if not generate and "--acp" in dispatch_argv[:options_end]:
@@ -355,7 +365,7 @@ def _main(argv: list[str] | None = None) -> int:
             code, dispatch_argv, bench=args.bench, prompt=args.prompt,
             settings=lambda: run_settings(Path(args.cd).expanduser() if args.cd else None,
                                           sources=_invocation_sources(args)),
-            relay=None if headless.active is None else headless.active.relay)
+            stdin=_stdin_read, relay=None if headless.active is None else headless.active.relay)
 
     try:
         options.selectors(())

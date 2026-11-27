@@ -182,8 +182,10 @@ not recorded. The word is written in the file or printed by its inline code.
 | `%%LOOP%%` | end the run and start the same command line again as a fresh process and session |
 | `%%HALT%%` | end the run, and the loop it is in |
 
-A run that ends on `%%LOOP%%` or `%%HALT%%` does not send its `-p` prompt. A
-loop started by `%%LOOP%%` goes on for as long as each run ends on `%%LOOP%%`;
+A run that ends on `%%LOOP%%` or `%%HALT%%` does not send its `-p` prompt.
+Each repeat reads what the first run read from stdin, and leaves off
+`--session`, `--session-key` and `JS_SESSION`, so it runs its exchanges again
+in a new session. A loop started by `%%LOOP%%` goes on for as long as each run ends on `%%LOOP%%`;
 `--loop N` and `--loop NM` cap it. In the REPL, `--bench` setup and subagents,
 `%%LOOP%%` and `%%HALT%%` end the remaining exchanges and nothing else. In an
 ACP turn either word ends the turn, which succeeds; nothing repeats. A run

@@ -533,7 +533,7 @@ def test_loop_reads_the_saved_turn_then_repeats_the_command_line(tmp_path, monke
     assert js(monkeypatch, "--session", "seeded") == 0
     assert [request[-1] for request in requests] == [("user", "build")]
     assert seen.read_text().strip() == "1"
-    assert repeated == [(["--session", "seeded"], "", True)]
+    assert repeated == [([], "", True)]
 
 
 @pytest.mark.parametrize(("word", "code"), [("LOOP", loop_controller.LOOP_EXIT), ("HALT", loop_controller.HALT_EXIT)])
@@ -553,6 +553,57 @@ def test_exchanges_are_the_prompt_when_stdin_is_not_a_terminal_and_empty(tmp_pat
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(""))
     assert cli.main(["--session", "seeded"]) == 0
     assert [request[-1] for request in requests] == [("user", "one")]
+
+
+def _repeats(monkeypatch):
+    """Each repeat the loop controller starts, as {"argv", "env", "stdin"}; each ends
+    without asking for another."""
+    from types import SimpleNamespace
+
+    repeats = []
+
+    def start(command, **kwargs):
+        repeat = {"argv": command[3:], "env": kwargs["env"]}
+        repeats.append(repeat)
+        return SimpleNamespace(communicate=lambda input=None: repeat.update(stdin=input), returncode=0)
+
+    monkeypatch.setattr(loop_controller.subprocess, "Popen", start)
+    return repeats
+
+
+def test_a_repeat_gets_the_prompt_the_first_run_read_from_stdin(tmp_path, monkeypatch):
+    import io
+
+    _agent(tmp_path, monkeypatch, {"1-user.md": "%%LOOP%%"})
+    _model(monkeypatch, [])
+    repeats = _repeats(monkeypatch)
+    monkeypatch.setattr(cli.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"piped prompt")))
+    assert cli.main(["-p", "-"]) == 0
+    assert [repeat["stdin"] for repeat in repeats] == [b"piped prompt"]
+
+
+@pytest.mark.parametrize("option", [["-s", "seeded"], ["--session=seeded"], ["--session-key", "key"]])
+def test_a_repeat_runs_in_a_fresh_session(tmp_path, monkeypatch, option):
+    from js import command_line
+
+    _agent(tmp_path, monkeypatch, {"1-user.md": "%%LOOP%%"})
+    _model(monkeypatch, [])
+    repeats = _repeats(monkeypatch)
+    assert js(monkeypatch, *option, "-m", "offline-test-model") == 0
+    assert len(repeats) == 1
+    repeated = command_line.parser().parse_args(repeats[0]["argv"])
+    assert repeated.model == "offline-test-model"
+    assert repeated.session is None and repeated.session_key is None
+
+
+def test_a_repeat_does_not_take_the_session_named_in_the_environment(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"1-user.md": "%%LOOP%%"})
+    _model(monkeypatch, [])
+    repeats = _repeats(monkeypatch)
+    monkeypatch.setenv("JS_SESSION", "seeded")
+    assert js(monkeypatch, "-p", "now") == 0
+    assert len(repeats) == 1
+    assert "JS_SESSION" not in repeats[0]["env"]
 
 
 def _json_lines(text):
@@ -588,6 +639,8 @@ def test_a_looped_run_prints_one_result_for_the_whole_loop(tmp_path, monkeypatch
                     f"[ $(wc -l < '{runs}') -ge 3 ] && echo '%%HALT%%' || echo '%%LOOP%%'\n")
     _agent(tmp_path, monkeypatch, {"1-user.md": f"!{{sh sh '{step}'}}"})
     _model(monkeypatch, [])
+    # The repeats are js processes of their own; none of them refreshes the catalog.
+    monkeypatch.setenv("JS_MODEL_CATALOG_AUTO_REFRESH", "0")
     assert js(monkeypatch, flag) == 0
     assert len(runs.read_text().splitlines()) == 3
     result = _one_result(_json_lines(capfd.readouterr().out), flag)
