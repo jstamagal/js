@@ -340,18 +340,22 @@ def _discard_unstarted_turn(cfg: Config, messages: list[dict], user_message: dic
     _persist_turn_messages(cfg, messages)
 
 
-def _finished_task_notes() -> list[str]:
+def _finished_task_notes(cfg: Config, state: ReplState, message: dict | None = None) -> list[str]:
     """One note, with its result, for each background task of the main agent
     that finished unread."""
     main = runtime.T.STOCK_CONTEXT
-    return task_jobs.completion_notes(main.task_owner, int(main.max_tool_result_bytes or 0))
+    return task_jobs.completion_notes(
+        main.task_owner, int(main.max_tool_result_bytes or 0),
+        room_bytes=lambda: context_window.attachment_room_bytes(
+            cfg, state.system, state.messages if message is None else [*state.messages, message]),
+    )
 
 
-def _take_pending_notes(state: ReplState) -> list[str]:
+def _take_pending_notes(cfg: Config, state: ReplState, message: dict) -> list[str]:
     """The reminders queued since the last user message, and one for each
     background task that finished unread since then, removed from the queue."""
     queued, state.pending_notes = state.pending_notes, []
-    return [*queued, *_finished_task_notes()]
+    return [*queued, *_finished_task_notes(cfg, state, _with_notes(message, queued))]
 
 
 # Queued when a background task of the main agent finished while nothing
@@ -585,7 +589,7 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
         return
     user_message = conversation.note_mode_switch(cfg, user_message, "repl")
     user_message = conversation.note_model_switch(turn_cfg, user_message)
-    notes = _take_pending_notes(state)
+    notes = _take_pending_notes(turn_cfg, state, user_message)
     user_message = _with_notes(user_message, notes)
     state.messages[:] = M.balance_orphaned_tool_calls(state.messages)
     state.messages.append(user_message)
@@ -602,7 +606,7 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
         # _do_turn's post-turn delta sync. A background task that finished
         # since the last boundary hands the model its result here.
         if not steer_inbox:
-            finished = _finished_task_notes()
+            finished = _finished_task_notes(turn_cfg, state)
             return {"role": "user", "content": "\n\n".join(finished), "steered": True} if finished else None
         text = "\n".join(steer_inbox)
         steer_inbox.clear()
@@ -622,13 +626,13 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
         except ValueError as e:
             msgs.say(msgs.FAILED, error=e)
             # A result that is due still goes to the model.
-            finished = _finished_task_notes()
+            finished = _finished_task_notes(turn_cfg, state)
             return {"role": "user", "content": "\n\n".join(finished), "steered": True} if finished else None
         if (sink := transcript_mod.transcript_sink(telemetry)) is not None:
             sink.emit(output.event("transcript_user", text=text))
         # Results are taken once the line is built: a turn cancelled while it
         # was being built has taken none.
-        return _with_notes({**built, "steered": True}, _finished_task_notes())
+        return _with_notes({**built, "steered": True}, _finished_task_notes(turn_cfg, state, built))
 
     job = sup.spawn(
         _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,

@@ -396,7 +396,7 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
     def finished_tasks() -> dict | None:
         # A background task that finished since the last tool boundary hands
         # the model its result there.
-        notes = task_jobs.completion_notes(chat.context.task_owner, int(chat.context.max_tool_result_bytes or 0))
+        notes = _finished_task_notes(chat)
         return {"role": "user", "content": "\n\n".join(notes), "steered": True} if notes else None
 
     turn_kwargs.setdefault("steer", finished_tasks)
@@ -498,6 +498,13 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     _background_turns(prepared, chat, transcript, echo_user, trace_override, turn_kwargs)
 
 
+def _finished_task_notes(chat: Conversation) -> list[str]:
+    return task_jobs.completion_notes(
+        chat.context.task_owner, int(chat.context.max_tool_result_bytes or 0),
+        room_bytes=lambda: context_window.attachment_room_bytes(chat.cfg, chat.system, chat.messages),
+    )
+
+
 def _background_turns(prepared: _PreparedRun, chat: Conversation, transcript, echo_user,
                       trace_override: bool, turn_kwargs: dict) -> None:
     """With SUBAGENT_WAKE on, the run waits for each background task the
@@ -507,10 +514,9 @@ def _background_turns(prepared: _PreparedRun, chat: Conversation, transcript, ec
     if not settings.live_bool_setting(getattr(cfg, "settings", None) or {}, ("SUBAGENT_WAKE",), True):
         return
     owner = chat.context.task_owner
-    result_max = int(chat.context.max_tool_result_bytes or 0)
     while task_jobs.outstanding(owner):
         task_jobs.wait_any(owner)
-        notes = task_jobs.completion_notes(owner, result_max)
+        notes = _finished_task_notes(chat)
         if not notes:
             continue
         message = {"role": "user", "content": snippets.render("background-task-wake").strip()}

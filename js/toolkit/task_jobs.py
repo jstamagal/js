@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths, snippets, supervisor
-from ..text_bytes import cap_text
+from ..text_bytes import byte_size, cap_text
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5
@@ -511,16 +511,19 @@ def wait_any(owner: str, poll_s: float = 0.5) -> None:
                                 return_when=concurrent.futures.FIRST_COMPLETED)
 
 
-def completion_notes(owner: str, result_max: int = 0) -> list[str]:
+def completion_notes(
+    owner: str, result_max: int = 0, *, room_bytes: Callable[[], int] | None = None,
+) -> list[str]:
     """One reminder per job ``owner`` started at depth 0 that has finished
-    since the last call and whose result the model has not read. Each carries
-    the result, cut at ``result_max`` bytes when that is above 0; the result
-    file holds all of it."""
+    since the last call and whose result the model has not read. Result text
+    shares one context budget across the batch, with a per-result cap when
+    ``result_max`` is positive. The result files hold the full results."""
+    jobs = [job for job in outstanding(owner) if not job.running()]
+    results_left = sum(not job.cancelled() for job in jobs)
+    room = room_bytes() if room_bytes is not None and results_left else None
     notes: list[str] = []
-    with _JOBS_LOCK:
-        jobs = [job for job in _JOBS.values() if job.owner == owner]
     for job in jobs:
-        if job.depth != 0 or job.running() or job.delivered or job.noted:
+        if job.delivered or job.noted:
             continue
         job.noted = True
         if not job.cancelled() and isinstance(job.future.exception(), snippets.SnippetError):
@@ -531,8 +534,15 @@ def completion_notes(owner: str, result_max: int = 0) -> list[str]:
         where = (f'Its result is also at {job.result_path}' if job.saved
                  else 'Its result could not be saved to a file')
         result = job.result()
-        if result_max > 0:
-            result = cap_text(result, result_max, f"\n[truncated: TOOL_RESULT_MAX ({result_max}) reached; the whole result is in the file]")
+        cap = result_max if result_max > 0 else None
+        if room is not None:
+            share = room // results_left
+            cap = share if cap is None else min(cap, share)
+        if cap is not None:
+            result = cap_text(result, cap, "\n[truncated]")
+        if room is not None:
+            room -= byte_size(result)
+            results_left -= 1
         job.delivered = True
         notes.append(
             snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id, RESULT=result)

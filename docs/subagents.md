@@ -245,8 +245,9 @@ a supervisor (`-p`) it runs on a private loop in a daemon thread.
 
 **Results.** When a job started by the main agent finishes and the model has
 not read its result through poll, wait or kill, a `<js-reminder>` hands the
-model the result (cut at `TOOL_RESULT_MAX`; the file holds all of it),
-whichever comes first:
+model the result. Each result is capped at `TOOL_RESULT_MAX`, and the results
+in one delivery share the model's remaining attachment budget. The file
+holds the full result. Delivery happens at whichever comes first:
 
 - the main agent's next tool boundary, if a turn is running (the REPL's and
   `-p`'s `steer`);

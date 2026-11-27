@@ -17,9 +17,11 @@ from test_runtime_offline_integration import offline_config
 from turn_driver import run_async as run_turn_async
 
 from js import (
+    context_window,
     runtime,
     supervisor,
 )
+from js.conversation import Conversation
 from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
 
@@ -184,6 +186,24 @@ def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx, 
     assert job.id in note and str(job.result_path) in note
     # Only once.
     assert "<js-reminder>" not in again
+
+
+def test_finished_tasks_share_the_repl_models_remaining_room(workers, ctx, monkeypatch, tmp_path):
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 8192)
+    jobs = [
+        _job(_handle(subagents.task(tasks=[letter * 40000], agent_id="worker", background=True, context=ctx)), ctx)
+        for letter in ("界", "語")
+    ]
+    workers.release.set()
+    for job in jobs:
+        job.future.result(timeout=5)
+
+    [sent] = _sent(monkeypatch, tmp_path, "next")
+    cfg = offline_config(tmp_path)
+    room = context_window.attachment_room_bytes(cfg, "sys", [{"role": "user", "content": "next"}])
+    sizes = [sent.count(letter) * len(letter.encode()) for letter in ("界", "語")]
+    assert all(sizes) and sum(sizes) <= room
+    assert all(str(job.result_path) in sent for job in jobs)
 
 
 def test_a_result_already_read_gets_no_reminder(workers, ctx):
@@ -384,27 +404,46 @@ def test_an_idle_repl_with_subagent_wake_off_waits_for_the_next_line(workers, ct
     assert sent.startswith("next") and "result of alpha" in sent
 
 
-def test_a_prompt_run_gives_the_agent_each_background_result_before_it_ends(workers, ctx):
+def test_a_prompt_run_gives_the_agent_each_background_result_before_it_ends(workers, ctx, monkeypatch, tmp_path):
     from js import prompt_run
 
-    sent: list[dict] = []
-
-    class Chat:
-        context = ctx
-
-        async def turn(self, message, *, started=None, **_kwargs):
-            if started is not None:
-                started()
-            sent.append(message)
-
-    prepared = types.SimpleNamespace(cfg=types.SimpleNamespace(settings={}),
-                                     inputs=types.SimpleNamespace(save=False))
+    cfg = offline_config(tmp_path)
+    chat = Conversation(cfg, "sys", context=ctx, messages=[])
+    turns = record_turns(monkeypatch)
+    prepared = types.SimpleNamespace(cfg=cfg, inputs=types.SimpleNamespace(save=False))
     subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     threading.Timer(0.2, workers.release.set).start()
-    prompt_run._background_turns(prepared, Chat(), None, None, False, {})
-    [message] = sent
-    assert "result of alpha" in message["content"]
+    prompt_run._background_turns(prepared, chat, None, None, False, {})
+    [turn] = turns
+    assert "result of alpha" in turn.messages[-1]["content"]
     assert task_jobs.outstanding(ctx.task_owner) == []
+
+
+@pytest.mark.parametrize("has_room", [True, False], ids=["room", "full"])
+def test_a_prompt_run_limits_background_results_to_the_models_remaining_room(
+    workers, ctx, monkeypatch, tmp_path, has_room,
+):
+    from js import prompt_run
+
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 8192)
+    cfg = offline_config(tmp_path)
+    history = "previous prompt" if has_room else "previous prompt " * 1050
+    chat = Conversation(cfg, "sys", context=ctx, messages=[{"role": "user", "content": history}])
+    turns = record_turns(monkeypatch)
+    room = context_window.attachment_room_bytes(cfg, chat.system, chat.messages)
+    prepared = types.SimpleNamespace(cfg=cfg, inputs=types.SimpleNamespace(save=False))
+    job = _job(_handle(subagents.task(tasks=["界" * 40000], agent_id="worker", background=True, context=ctx)), ctx)
+    workers.release.set()
+    job.future.result(timeout=5)
+
+    prompt_run._background_turns(prepared, chat, None, None, False, {})
+
+    [turn] = turns
+    sent = turn.messages[-1]["content"]
+    size = sent.count("界") * len("界".encode())
+    assert size <= room
+    assert bool(size) == has_room
+    assert str(job.result_path) in sent
 
 
 
@@ -756,16 +795,14 @@ def test_a_steer_cancelled_while_its_line_is_built_leaves_a_due_result_untaken(w
     assert taken == [False]
 
 
-def test_a_prompt_run_with_no_prompt_of_its_own_hands_back_what_its_exchanges_started(workers, ctx, monkeypatch):
+def test_a_prompt_run_with_no_prompt_of_its_own_hands_back_what_its_exchanges_started(
+    workers, ctx, monkeypatch, tmp_path,
+):
     from js import agent_messages, prompt_run
 
-    sent: list[dict] = []
-
-    class Chat:
-        context = ctx
-
-        async def turn(self, message, *, started=None, **_kwargs):
-            sent.append(message)
+    cfg = offline_config(tmp_path)
+    chat = Conversation(cfg, "sys", context=ctx, messages=[])
+    turns = record_turns(monkeypatch)
 
     async def exchanges(*_args, **_kwargs):
         subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
@@ -773,11 +810,11 @@ def test_a_prompt_run_with_no_prompt_of_its_own_hands_back_what_its_exchanges_st
 
     monkeypatch.setattr(agent_messages, "initialize", exchanges)
     prepared = types.SimpleNamespace(
-        cfg=types.SimpleNamespace(settings={}, trace=False), messages=[], user_message=None, control=None,
+        cfg=cfg, messages=chat.messages, user_message=None, control=None,
         inputs=types.SimpleNamespace(save=False, debug=False, debug_file=None, tool_context=ctx),
         telemetry=runtime.Telemetry(debug_log=None),
         settled=types.SimpleNamespace(system="sys", prompt_spec=types.SimpleNamespace(exchanges=[object()])))
-    prompt_run._turns(prepared, Chat(), None, {})
-    [message] = sent
-    assert "result of alpha" in message["content"]
+    prompt_run._turns(prepared, chat, None, {})
+    [turn] = turns
+    assert "result of alpha" in turn.messages[-1]["content"]
 
