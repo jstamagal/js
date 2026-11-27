@@ -85,7 +85,7 @@ def test_cache_discovery_obeys_session_isolation(cached_models, monkeypatch):
 
 
 def test_resumed_prompt_lock_is_held_until_cancellation_cleanup(cached_models, monkeypatch):
-    monkeypatch.setenv("JS_ACP_STEER_WAIT", "0")
+    monkeypatch.setenv("JS_ACP_STEER_TIMEOUT", "0")
 
     async def scenario():
         started = asyncio.Event()
@@ -190,7 +190,7 @@ def test_a_steer_the_turn_did_not_take_is_the_next_turn(cached_models, monkeypat
 
 
 def test_a_cancel_no_prompt_follows_ends_the_turn(cached_models, monkeypatch):
-    monkeypatch.setenv("JS_ACP_STEER_WAIT", "1")
+    monkeypatch.setenv("JS_ACP_STEER_TIMEOUT", "1")
     ended = []
 
     async def run_turn(**kwargs):
@@ -216,7 +216,7 @@ def test_a_cancel_no_prompt_follows_ends_the_turn(cached_models, monkeypatch):
 
 
 def test_a_cancel_whose_turn_ended_does_not_end_the_next_turn(cached_models, monkeypatch):
-    monkeypatch.setenv("JS_ACP_STEER_WAIT", "1")
+    monkeypatch.setenv("JS_ACP_STEER_TIMEOUT", "1")
     finish_first = asyncio.Event()
     finished = []
 
@@ -245,6 +245,30 @@ def test_a_cancel_whose_turn_ended_does_not_end_the_next_turn(cached_models, mon
 
     asyncio.run(scenario())
     assert finished == ["first", "second"]
+
+
+def test_a_session_whose_cancelled_turn_has_ended_can_be_resumed(cached_models, monkeypatch):
+    monkeypatch.setenv("JS_ACP_STEER_TIMEOUT", "30")
+    finish = asyncio.Event()
+
+    async def run_turn(**kwargs):
+        await finish.wait()
+
+    async def scenario():
+        monkeypatch.setattr(acp_turn, "run_turn", run_turn)
+        agent = acp_agent.Agent([])
+        agent.on_connect(SimpleNamespace())
+        session_id = (await agent.new_session(str(cached_models))).session_id
+        first = asyncio.create_task(agent.prompt(session_id, [TextContentBlock(text="first")]))
+        await asyncio.sleep(0.05)
+        await agent.cancel(session_id)
+        assert (await first).stop_reason == "cancelled"
+        turn = agent.sessions[session_id].turn
+        finish.set()
+        await asyncio.wait_for(asyncio.shield(turn), 10)
+        await agent.resume_session(session_id, str(cached_models))
+
+    asyncio.run(scenario())
 
 
 def test_an_image_in_a_prompt_is_a_file_the_turn_attaches(cached_models, monkeypatch):

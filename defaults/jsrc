@@ -87,7 +87,7 @@ set SWARM_ACTIVE_MAX 0
 set SWARM_PROCESSES 0
 
 # --- acp ---
-set ACP_STEER_WAIT 2
+set ACP_STEER_TIMEOUT 2
 
 # --- kernel ---
 set KERNEL_VERBOSITY normal

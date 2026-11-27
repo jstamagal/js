@@ -6,8 +6,13 @@ host=$1; shift
 copy=.js/work/js-test-$(basename "$PWD")
 # Tracked files and new ones not ignored, less the project's own .js/ (its
 # local config, which can hold keys); a tracked file deleted here is skipped.
+# They go by way of a staged copy, so a file gone from the checkout is
+# deleted on the host too.
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
 git ls-files -co --exclude-standard -z -- . ':!.js' |
-    rsync -a --delete --ignore-missing-args --from0 --files-from=- --exclude=.venv ./ "$host:$copy/"
+    rsync -a --ignore-missing-args --from0 --files-from=- ./ "$stage/"
+rsync -a --delete --exclude=.venv --exclude=__pycache__ "$stage/" "$host:$copy/"
 args=$(printf ' %q' "$@")
 # Most of the host's cores are the suite's: nobody sits at it.
 ssh "$host" "cd $copy && PATH=\$HOME/.local/bin:\$PATH JS_TEST_WORKERS=\${JS_TEST_WORKERS:-\$((\$(nproc) - 2))} \

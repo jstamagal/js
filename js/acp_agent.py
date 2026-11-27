@@ -324,7 +324,7 @@ class Agent:
         if not _session_marker(path, session_id).is_dir():
             raise RequestError.resource_not_found(session_id)
         session = self.sessions.get(session_id)
-        if session and session.turn is not None:
+        if session and session.turn is not None and not session.turn.done():
             raise RequestError.invalid_request({"message": "A prompt is already running for this session"})
         self.sessions[session_id] = Session(path, _servers(mcp_servers or []))
         return acp.ResumeSessionResponse(config_options=self._model_options(
@@ -451,14 +451,14 @@ class Agent:
             turn.cancel()
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
-        """End the session's turn, unless a prompt comes within ACP_STEER_WAIT
+        """End the session's turn, unless a prompt comes within ACP_STEER_TIMEOUT
         seconds: the protocol has no steer, so a client that steers sends a
         cancel and then the prompt. The open prompt request is answered now."""
         session = self.sessions.get(session_id)
         if (session is None or session.turn is None or session.turn.done()
                 or session.cancelled or session.stop is not None):
             return
-        wait = int(settings.knob(run_settings(session.cwd), "ACP_STEER_WAIT"))
+        wait = int(settings.knob(run_settings(session.cwd), "ACP_STEER_TIMEOUT"))
         if wait <= 0:
             self._stop(session)
             return

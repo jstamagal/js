@@ -296,7 +296,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
     SettingSpec("SWARM_PROCESSES", "int", group="shell"),
     # --- acp ---
-    SettingSpec("ACP_STEER_WAIT", "int", group="runtime"),
+    SettingSpec("ACP_STEER_TIMEOUT", "int", group="runtime"),
     # --- kernel ---
     SettingSpec("SHELL_PROGRAM", "str", group="shell"),
     SettingSpec("SHELL_WAIT", "int", group="shell"),

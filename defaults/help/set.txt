@@ -239,7 +239,7 @@ SWARM_PROCESSES
     agents over. 0 is one per 16 agents, up to one per CPU; 1 runs every
     agent in one process. A spec's own "processes" wins.
 
-ACP_STEER_WAIT
+ACP_STEER_TIMEOUT
     Seconds `js acp` keeps a cancelled turn running for the prompt that
     steers it. A client steers with a cancel and then a prompt; the turn
     takes that prompt at its next tool boundary. With no prompt in that

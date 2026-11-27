@@ -101,7 +101,7 @@ When js requests permission for a tool, T3 applies the thread's permission
 mode. A message sent while a turn runs steers it: T3 sends a cancel and then
 the prompt, and js keeps the turn running and adds the prompt at its next tool
 boundary, so the tool call in progress finishes. A cancel with no prompt
-within `ACP_STEER_WAIT` seconds (2) stops the turn; 0 stops it at the cancel.
+within `ACP_STEER_TIMEOUT` seconds (2) stops the turn; 0 stops it at the cancel.
 Each turn runs in a fresh
 worker in the session directory. Conversation history and workspace files
 carry across prompts. In-memory shell, terminal and kernel handles last for
