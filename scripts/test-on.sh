@@ -4,8 +4,10 @@
 set -euo pipefail
 host=$1; shift
 copy=.js/work/js-test-$(basename "$PWD")
-git ls-files -co --exclude-standard -z |
-    rsync -a --delete --from0 --files-from=- --exclude=.venv ./ "$host:$copy/"
+# Tracked files and new ones not ignored, less the project's own .js/ (its
+# local config, which can hold keys); a tracked file deleted here is skipped.
+git ls-files -co --exclude-standard -z -- . ':!.js' |
+    rsync -a --delete --ignore-missing-args --from0 --files-from=- --exclude=.venv ./ "$host:$copy/"
 args=$(printf ' %q' "$@")
 # Most of the host's cores are the suite's: nobody sits at it.
 ssh "$host" "cd $copy && PATH=\$HOME/.local/bin:\$PATH JS_TEST_WORKERS=\${JS_TEST_WORKERS:-\$((\$(nproc) - 2))} \

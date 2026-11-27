@@ -252,8 +252,9 @@ test *args:
     scripts/cached-test.sh "${cache_args[@]}" uv run --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal "${pytest_args[@]}"
 
 # run the offline suite on another host, from a copy of this checkout. e.g. just test-on vader
+[positional-arguments]
 test-on host *args:
-    scripts/test-on.sh {{host}} {{args}}
+    scripts/test-on.sh "$@"
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 [positional-arguments]
