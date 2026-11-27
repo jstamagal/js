@@ -665,7 +665,8 @@
 #set COMPACTION_EXTERNAL_MODEL same
 
 # Longest summary allowed, in tokens. It can't go over
-# COMPACTION_SUMMARY_REQUEST_TOKENS_MAX.
+# COMPACTION_SUMMARY_REQUEST_TOKENS_MAX, or the model's own output limit
+# where js knows it.
 #set COMPACTION_SUMMARY_TOKENS_MAX 32000
 
 # Tool results sent to the summary model are cut to this many characters,

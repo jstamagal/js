@@ -402,7 +402,8 @@ COMPACTION_EXTERNAL_MODEL
 
 COMPACTION_SUMMARY_TOKENS_MAX
     Max tokens for the compaction summary. Capped at
-    COMPACTION_SUMMARY_REQUEST_TOKENS_MAX.
+    COMPACTION_SUMMARY_REQUEST_TOKENS_MAX and at the model's own output
+    limit where js knows it.
 
 COMPACTION_SUMMARY_RESULT_CHARS_MAX
     Longest tool result, in characters, that a summary request carries
