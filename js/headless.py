@@ -9,7 +9,7 @@ import re
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -85,6 +85,24 @@ class JsonEvents:
             if not self.coalesce_deltas or kind not in _DELTAS or now - self._flushed >= DELTA_FLUSH_S:
                 self.out.flush()
                 self._flushed = now
+
+    def relay(self, lines: Iterable[str]) -> None:
+        """Take the --json or --json-stream output of a run repeating this one.
+        Its records join this stream and its result replaces this run's; its
+        `start` names the session the result is of."""
+        self.session, self.result, self.stop_reason = None, {}, None
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            kind = record.pop("type", None)
+            if kind is None or kind == "end":
+                self.result = record
+            else:
+                self.emit(kind, **record)
 
     def runtime_event(self, event: str, payload: dict) -> None:
         """The `event_sink` of `runtime.run_turn_async`: each runtime event as

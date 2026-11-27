@@ -185,8 +185,12 @@ not recorded. The word is written in the file or printed by its inline code.
 A run that ends on `%%LOOP%%` or `%%HALT%%` does not send its `-p` prompt. A
 loop started by `%%LOOP%%` goes on for as long as each run ends on `%%LOOP%%`;
 `--loop N` and `--loop NM` cap it. In the REPL, `--bench` setup and subagents,
-`%%LOOP%%` and `%%HALT%%` end the remaining exchanges and nothing else. A run
-the loop started exits 75 on `%%LOOP%%` and 76 on `%%HALT%%`.
+`%%LOOP%%` and `%%HALT%%` end the remaining exchanges and nothing else. In an
+ACP turn either word ends the turn, which succeeds; nothing repeats. A run
+the loop started exits 75 on `%%LOOP%%` and 76 on `%%HALT%%`. A run that ends
+on `%%HALT%%` succeeds, and with `--json` or `--json-stream` reports a
+successful result. The result of a run repeated by `%%LOOP%%` is that of its
+last repeat (see [headless-json.md](headless-json.md)).
 
 ```
 01-user.md   !{sh cat /tmp/prompt}

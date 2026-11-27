@@ -576,7 +576,8 @@ def _finish(prepared: _PreparedRun) -> int:
     """The stats files and the JSON result, then the answer printed and the
     saved session compacted when it is due. 1 when there is no answer or a
     stats file was not written. A run its user files ended on a control word
-    needs no answer and exits with that word's code."""
+    needs no answer and exits with that word's code; for a protocol client
+    the word ends the turn, which exits 0."""
     inputs, cfg, telemetry = prepared.inputs, prepared.cfg, prepared.telemetry
     answer = _turn_answer(prepared.messages)
     stats_ok = _record_stats(prepared, answer)
@@ -604,6 +605,8 @@ def _finish(prepared: _PreparedRun) -> int:
             owning_loop.run_owning_loop(conversation.maybe_auto_compact_async(cfg, prepared.state))
     if not stats_ok:
         return 1
+    if inputs.client is not None:
+        return 0
     return {agent_messages.LOOP: loop_controller.LOOP_EXIT,
             agent_messages.HALT: loop_controller.HALT_EXIT}.get(prepared.control, 0)
 

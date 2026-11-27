@@ -347,17 +347,22 @@ def _main(argv: list[str] | None = None) -> int:
         no_mcp=args.no_mcp or args.bare, no_tools=args.no_tools, tools=args.tools,
         pi=args.pi, pi_strict=args.pi_strict,
     )
+    def run() -> int:
+        # The control word a run ended on is settled before a --json result
+        # is printed, so the result is that of the whole run.
+        code = _run_args(args, dispatch_argv)
+        return loop_controller.after_run(
+            code, dispatch_argv, bench=args.bench, prompt=args.prompt,
+            settings=lambda: run_settings(Path(args.cd).expanduser() if args.cd else None,
+                                          sources=_invocation_sources(args)),
+            relay=None if headless.active is None else headless.active.relay)
+
     try:
         options.selectors(())
         with invocation(options):
             if _json_run_requested(args):
-                code = headless.json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
-            else:
-                code = _run_args(args, dispatch_argv)
-        return loop_controller.after_run(
-            code, dispatch_argv, bench=args.bench, prompt=args.prompt,
-            settings=lambda: run_settings(Path(args.cd).expanduser() if args.cd else None,
-                                          sources=_invocation_sources(args)))
+                return headless.json_run(run, stream=args.json_stream)
+            return run()
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2

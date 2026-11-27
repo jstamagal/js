@@ -553,3 +553,43 @@ def test_exchanges_are_the_prompt_when_stdin_is_not_a_terminal_and_empty(tmp_pat
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(""))
     assert cli.main(["--session", "seeded"]) == 0
     assert [request[-1] for request in requests] == [("user", "one")]
+
+
+def _json_lines(text):
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _one_result(records, flag):
+    """The run's result, after checking it is the only one ``flag`` printed."""
+    if flag == "--json":
+        assert len(records) == 1
+        return records[0]
+    assert [record["type"] for record in records].count("end") == 1
+    assert records[-1]["type"] == "end"
+    return records[-1]
+
+
+@pytest.mark.parametrize("flag", ["--json", "--json-stream"])
+def test_a_halt_is_reported_as_a_successful_run(tmp_path, monkeypatch, capsys, flag):
+    _agent(tmp_path, monkeypatch, {"1-user.md": "%%HALT%%"})
+    _model(monkeypatch, [])
+    assert js(monkeypatch, flag) == 0
+    result = _one_result(_json_lines(capsys.readouterr().out), flag)
+    assert result["ok"] is True
+    assert result["exit_code"] == 0
+
+
+@pytest.mark.parametrize("flag", ["--json", "--json-stream"])
+def test_a_looped_run_prints_one_result_for_the_whole_loop(tmp_path, monkeypatch, capfd, flag):
+    runs = tmp_path / "runs"
+    step = tmp_path / "step.sh"
+    # The first two runs end on LOOP, the third on HALT.
+    step.write_text(f"echo x >> '{runs}'\n"
+                    f"[ $(wc -l < '{runs}') -ge 3 ] && echo '%%HALT%%' || echo '%%LOOP%%'\n")
+    _agent(tmp_path, monkeypatch, {"1-user.md": f"!{{sh sh '{step}'}}"})
+    _model(monkeypatch, [])
+    assert js(monkeypatch, flag) == 0
+    assert len(runs.read_text().splitlines()) == 3
+    result = _one_result(_json_lines(capfd.readouterr().out), flag)
+    assert result["ok"] is True
+    assert result["exit_code"] == 0

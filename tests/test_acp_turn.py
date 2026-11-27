@@ -113,6 +113,43 @@ def test_a_steer_joins_the_conversation_at_the_tool_boundary(tmp_path, monkeypat
     assert not any(event["type"] == "steered" for event in output)
 
 
+@pytest.mark.parametrize("word", ["HALT", "LOOP"])
+def test_a_startup_control_word_ends_the_turn_normally(tmp_path, monkeypatch, acp_provider, word):
+    base_url, requests = acp_provider
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "profile"
+    agent = home / "agents" / "defaultagent"
+    agent.mkdir(parents=True)
+    (agent / "prompt.md").write_text("Answer.")
+    runs = tmp_path / "runs"
+    (agent / "1-user.md").write_text(f"!{{sh echo x >> '{runs}'}}\n%%{word}%%\n")
+    for key in tuple(os.environ):
+        if key.startswith("JS_"):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "JS_HOME": str(home), "JS_PROVIDER": "llama.cpp", "JS_BASE_URL": base_url,
+        "JS_API_KEY": "fixture", "JS_MODEL": "acp-fixture", "NO_PROXY": "127.0.0.1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    output = []
+
+    async def emit(event):
+        output.append(event)
+
+    async def run():
+        async with asyncio.timeout(20):
+            await acp_turn.run_turn(cwd=workspace, session_id=uuid4().hex, text="question",
+                                   options=[], mcp_servers={}, emit=emit)
+
+    asyncio.run(run())
+    assert output[-1]["type"] == "end"
+    assert output[-1]["ok"] is True
+    # The control word ended the run inside the worker: no repeat of it ran.
+    assert len(runs.read_text().splitlines()) == 1
+    assert requests == []
+
+
 @pytest.mark.parametrize("stdout, diagnostic", [
     ("garbage", "Invalid js worker JSON stream"),
     ('{"type":"error","message":"model failed"}', "model failed"),

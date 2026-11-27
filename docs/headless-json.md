@@ -39,6 +39,12 @@ other fields are the object printed by `--json`.
 | `error` | Error message and whether it is retryable. |
 | `end` | The final result object. |
 
+A run that an agent's user files repeat with `%%LOOP%%` is one run here:
+`--json` prints the one object of its last repeat, and `--json-stream` carries
+each repeat's records after the first run's, every repeat opening with its own
+`start`, and ends with one `end`, the last repeat's result. `ok` and
+`exit_code` are those of the whole loop.
+
 Deltas from a failed attempt remain in the stream if the request is retried.
 Subagent work appears through the parent's task call and result. Session usage
 includes calls charged by subagents; individual call statistics count the
