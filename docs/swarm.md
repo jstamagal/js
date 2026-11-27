@@ -172,8 +172,9 @@ The bus is files, so agents in different runners talk as agents in one do.
 
 `slots` caps how many agents may be mid-turn at once; the rest wait for a
 slot before starting their next turn. Unset, it is the registered setting
-`SWARM_ACTIVE_MAX`; 0 is no cap. Over several runners the cap is dealt out
-like the agents, and there are never more runners than slots. `recruit` adds an agent to the recruiter's loop with the
+`SWARM_ACTIVE_MAX` as the first agent's config has it; 0 is no cap. Over
+several runners that one cap is dealt out like the agents, and there are
+never more runners than slots. `recruit` adds an agent to the recruiter's loop with the
 recruiter's agent, model and settings and a session named
 `<parent session>-<name>`.
 
