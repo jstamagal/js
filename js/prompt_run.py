@@ -54,7 +54,7 @@ from .cli_options import current
 from .config import Config, InvocationSources, jsrc_paths, vision_enabled_for_model
 from .conversation import Conversation
 from .repl_state import ReplState
-from .toolkit import ToolContext
+from .toolkit import ToolContext, task_jobs
 
 
 def _mute_transcript_tee(sink):
@@ -362,6 +362,18 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
                         context=inputs.tool_context or runtime.T.STOCK_CONTEXT,
                         telemetry=telemetry, messages=prepared.messages)
 
+    def finished_tasks() -> dict | None:
+        # A background task that finished since the last tool boundary hands
+        # the model its result there.
+        notes = task_jobs.completion_notes(chat.context.task_owner, int(chat.context.max_tool_result_bytes or 0))
+        return {"role": "user", "content": "\n\n".join(notes), "steered": True} if notes else None
+
+    turn_kwargs.setdefault("steer", finished_tasks)
+    # The run hands back what its tasks return before it ends (`_background_turns`).
+    delivered_before = chat.context.delivers_task_results
+    chat.context.delivers_task_results = settings.live_bool_setting(
+        getattr(cfg, "settings", None) or {}, ("SUBAGENT_WAKE",), True)
+
     def turns() -> None:
         _turns(prepared, chat, transcript, turn_kwargs)
 
@@ -390,6 +402,7 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
                 headless.emit_failure(events, network_display.error_text(e), code)
             return code
     finally:
+        chat.context.delivers_task_results = delivered_before
         try:
             if inputs.save:
                 chat.save()
@@ -446,6 +459,38 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     context_window.install_context_window_overrides(cfg)
     owning_loop.run_owning_loop(chat.turn(
         prepared.user_message, started=started, trace_override=trace_override, **turn_kwargs))
+    _background_turns(prepared, chat, transcript, echo_user, trace_override, turn_kwargs)
+
+
+def _background_turns(prepared: _PreparedRun, chat: Conversation, transcript, echo_user,
+                      trace_override: bool, turn_kwargs: dict) -> None:
+    """With SUBAGENT_WAKE on, the run waits for each background task the
+    agent left running and gives it the result in a turn of its own, until
+    none is left; the last of those turns' answers is the run's."""
+    cfg = prepared.cfg
+    if not settings.live_bool_setting(getattr(cfg, "settings", None) or {}, ("SUBAGENT_WAKE",), True):
+        return
+    owner = chat.context.task_owner
+    result_max = int(chat.context.max_tool_result_bytes or 0)
+    while task_jobs.outstanding(owner):
+        task_jobs.wait_any(owner)
+        notes = task_jobs.completion_notes(owner, result_max)
+        if not notes:
+            continue
+        message = {"role": "user", "content": snippets.render("background-task-wake").strip()}
+        for note in notes:
+            message = attach.with_note(message, note)
+
+        def started(message: dict = message) -> None:
+            if prepared.inputs.save:
+                conversation.append_turn(cfg, message)
+            if transcript is not None:
+                transcript.emit(output.event("transcript_user", text=message["content"]))
+            if echo_user is not None:
+                echo_user(message["content"])
+
+        owning_loop.run_owning_loop(chat.turn(
+            message, started=started, trace_override=trace_override, **turn_kwargs))
 
 
 def _turns_on_the_terminal(prepared: _PreparedRun, trace_sink, turns: Callable[[], None]) -> None:

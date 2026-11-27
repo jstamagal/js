@@ -446,6 +446,8 @@ PERSONA_TRUNCATED = Message("Truncated. {size} bytes in all.")
 REPL_ONLY = Message("{command} is unavailable outside the REPL.")
 NO_JOBS = Message("No running jobs.")
 JOB_ROW = Message("[{id}] {kind}{label}", banner=False)
+TASK_ROW = Message("{handle}  agent {agent}  {done} of {count} done  {seconds}s  {state}", banner=False)
+TASK_WAKE = Message("A background task finished; handing its result to the agent.")
 
 # Windows on the REPL screen (`js.subagent_windows`, `/window`). `state` is
 # a WINDOW_STATE_* entry's words, `mark` "" or WINDOW_MARK_* words, `where`

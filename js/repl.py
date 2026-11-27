@@ -340,11 +340,36 @@ def _discard_unstarted_turn(cfg: Config, messages: list[dict], user_message: dic
     _persist_turn_messages(cfg, messages)
 
 
+def _finished_task_notes() -> list[str]:
+    """One note, with its result, for each background task of the main agent
+    that finished unread."""
+    main = runtime.T.STOCK_CONTEXT
+    return task_jobs.completion_notes(main.task_owner, int(main.max_tool_result_bytes or 0))
+
+
 def _take_pending_notes(state: ReplState) -> list[str]:
     """The reminders queued since the last user message, and one for each
     background task that finished unread since then, removed from the queue."""
     queued, state.pending_notes = state.pending_notes, []
-    return [*queued, *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]
+    return [*queued, *_finished_task_notes()]
+
+
+# Queued when a background task of the main agent finished while nothing
+# else would hand it the result: the consumer runs a turn that does.
+_WAKE = object()
+
+
+def _wake_on(state: ReplState) -> bool:
+    return bool(settings.live_bool_setting(state.settings, ("SUBAGENT_WAKE",), True))
+
+
+def _wake_due(state: ReplState) -> bool:
+    """A background task of the main agent finished unread and SUBAGENT_WAKE is on."""
+    return state.running and _wake_on(state) and task_jobs.unread(runtime.T.STOCK_CONTEXT.task_owner)
+
+
+def _wake_message() -> dict:
+    return {"role": "user", "content": snippets.render("background-task-wake").strip()}
 
 
 def _with_notes(message: dict, notes: list[str]) -> dict:
@@ -481,7 +506,11 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
     while True:
         line = await queue.get()
         try:
-            if callable(line):
+            if line is _WAKE:
+                lines = [_wake_message()] if _wake_due(state) else []
+                if lines:
+                    msgs.say(msgs.TASK_WAKE)
+            elif callable(line):
                 # The agent's startup exchanges, queued ahead of the first typed
                 # line, or the idle compaction the cache keepalive queues: a
                 # turn like any other, so ^C cancels it.
@@ -491,8 +520,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                 lines = []
             else:
                 lines = [line]
-            if lines and _steer_mode(state) == "batch":
-                pending = [line, *_take_queued(queue)]
+            if lines and line is not _WAKE and _steer_mode(state) == "batch":
+                # A queued wake has nothing to add: these lines carry the notes.
+                pending = [item for item in [line, *_take_queued(queue)] if item is not _WAKE]
                 lines = []
                 for item in pending:
                     if isinstance(item, str) and lines and isinstance(lines[-1], str):
@@ -507,6 +537,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                 leftover = "\n".join(steer_inbox)
                 steer_inbox.clear()
                 await _run_repl_turn(leftover, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+            # A task that finished after the turn's last tool boundary.
+            if queue.empty() and _wake_due(state):
+                queue.put_nowait(_WAKE)
         finally:
             queue.task_done()
 
@@ -566,9 +599,13 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
         # The inbox is loop-owned: it is read and cleared here, on the loop.
         # Skill expansion, attachment reads and encoding run in the executor.
         # Settings that an input hook changes apply from the next turn, through
-        # _do_turn's post-turn delta sync.
+        # _do_turn's post-turn delta sync. A background task that finished
+        # since the last boundary hands the model its result here.
+        finished = _finished_task_notes()
         if not steer_inbox:
-            return None
+            if not finished:
+                return None
+            return {"role": "user", "content": "\n\n".join(finished), "steered": True}
         text = "\n".join(steer_inbox)
         steer_inbox.clear()
         steer_text, steer_attachments = attach.split_repl_attachments(text)
@@ -586,10 +623,11 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
             raise
         except ValueError as e:
             msgs.say(msgs.FAILED, error=e)
-            return None
+            # The results taken above still go to the model.
+            return {"role": "user", "content": "\n\n".join(finished), "steered": True} if finished else None
         if (sink := transcript_mod.transcript_sink(telemetry)) is not None:
             sink.emit(output.event("transcript_user", text=text))
-        return {**built, "steered": True}
+        return _with_notes({**built, "steered": True}, finished)
 
     job = sup.spawn(
         _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,
@@ -851,10 +889,22 @@ class Repl:
             context.config = state.config_for_turn(cfg)
             turn_settings.install(context, context.config)
             context.tool_call_hooks = state.events
+            context.delivers_task_results = False
             return context
 
         child_windows.parent_context = window_parent_context
         opener_token = subagents.window_opener.set(child_windows.open)
+        def wake() -> None:
+            if not (sup.turn_active() or steer_inbox or not queue.empty()) and _wake_due(state):
+                queue.put_nowait(_WAKE)
+
+        def task_settled(job: task_jobs.TaskJob) -> None:
+            if job.depth == 0 and job.owner == runtime.T.STOCK_CONTEXT.task_owner:
+                with contextlib.suppress(RuntimeError):  # the loop has closed
+                    loop.call_soon_threadsafe(wake)
+
+        task_jobs.listener = task_settled
+        runtime.T.STOCK_CONTEXT.delivers_task_results = True
 
         channel_instructed: set[str] = set()
 
@@ -1085,6 +1135,8 @@ class Repl:
             telemetry.display_factory = previous_display_factory
             telemetry.exchange_factory = previous_exchange_factory
             supervisor.set_current(None)
+            task_jobs.listener = None
+            runtime.T.STOCK_CONTEXT.delivers_task_results = False
             subagents.window_opener.reset(opener_token)
             state.windows = None
             consumer.cancel()

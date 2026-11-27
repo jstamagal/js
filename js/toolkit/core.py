@@ -388,6 +388,10 @@ class ToolContext(_turn_settings.ContextSettings):
     # Names this context as the owner of the background tasks it starts; only
     # the owner can poll, wait on or kill them.
     task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)
+    # True where something hands this context the result of a task it left
+    # running (the REPL's main agent, a `-p` run with SUBAGENT_WAKE on): its
+    # task calls return handles at once unless told to wait.
+    delivers_task_results: bool = False
 
     def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
                      follow: bool = True) -> Path:

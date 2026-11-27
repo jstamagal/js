@@ -173,6 +173,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("TOOLBOX_SEED_EXAMPLES", "bool", group="tools"),
     SettingSpec("TYPESAFE_API_KEY", "str", env="TYPESAFE_API_KEY", secret=True, group="tools"),
     SettingSpec("SUBAGENT_RESULT_SHARE", "bool", group="tools"),
+    SettingSpec("SUBAGENT_WAKE", "bool", group="tools"),
     SettingSpec("BROWSER_FALLBACK_FILE", "str", group="tools"),
     SettingSpec("TERMINAL_ENVIRONMENT_INHERIT", "bool", group="tools"),
     SettingSpec("TERMINAL_SHELL_PROGRAM", "str", group="tools"),

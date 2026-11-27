@@ -333,6 +333,11 @@
 # A subagent waiting on its own subagents does not count.
 #set SUBAGENT_WORKERS_MAX 8
 
+# When background subagents finish while the main agent sits idle, start a
+# turn that hands it their result, instead of waiting for your next line.
+# In js -p the run keeps going until every background result is in.
+#set SUBAGENT_WAKE on
+
 # Subagents run on your current model instead of the one their own agent
 # names.
 #set SUBAGENT_INHERIT_MODEL off

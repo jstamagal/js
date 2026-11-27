@@ -1,14 +1,15 @@
 """The REPL's job commands: /jobs, /cancel and /flush, over the supervisor's
-jobs."""
+jobs. /jobs also lists the main agent's task handles."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
 
-from . import messages as msgs, supervisor
+from . import messages as msgs, runtime, supervisor
 from .config import Config
 from .repl_state import Command, ReplState
+from .toolkit import task_jobs
 
 
 def _cmd_jobs(arg: str, state: ReplState, cfg: Config) -> str | None:
@@ -17,10 +18,16 @@ def _cmd_jobs(arg: str, state: ReplState, cfg: Config) -> str | None:
         msgs.say(msgs.REPL_ONLY, command="/jobs")
         return None
     jobs = sup.jobs()
-    if not jobs:
+    tasks = task_jobs.jobs(runtime.T.STOCK_CONTEXT.task_owner)
+    if not jobs and not tasks:
         msgs.say(msgs.NO_JOBS)
     for j in jobs:
         msgs.say(msgs.JOB_ROW, id=j.id, kind=j.kind, label=f"  {j.label}" if j.label else "")
+    for t in tasks:
+        state_word = ("running" if t.running() else "cancelled" if t.cancelled()
+                      else "read" if t.delivered else "finished")
+        msgs.say(msgs.TASK_ROW, handle=t.id, agent=t.agent_id, done=t.workers_done, count=t.count,
+                 seconds=f"{t.elapsed():.0f}", state=state_word)
     return None
 
 
