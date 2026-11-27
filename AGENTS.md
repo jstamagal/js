@@ -145,3 +145,21 @@ wrong.
 Comments state what is true about the code. Do not turn something someone
 said once into a rule in the code, and do not describe what the code does not
 do or alternatives nobody asked about. Describe what is there.
+
+## Models for subagents
+
+When the owner names a model family for a subagent or a delegate, use the
+newest version of that family the provider lists at that moment (Sol 6.2 and
+Opus 5.5 on 2026-11-27), and pass the reasoning effort on every launch. A
+provider's default effort is never the answer.
+
+| Family | As a worker | As a reviewer |
+|--------|-------------|---------------|
+| Opus   | medium      | high          |
+| Sol    | medium      | high          |
+| Sonnet | high        | xhigh         |
+| Terra  | high        | xhigh         |
+| Neon   | high        | high          |
+
+Bulk reads go to Haiku or Terra, at high. Neon is the one Gemini model in
+use; Carbon and Hydrogen are not called on.
