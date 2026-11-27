@@ -257,6 +257,36 @@ def test_symlinked_agent_is_a_tool_before_its_target_is_checked(tmp_path, monkey
     assert capsys.readouterr().err == ""
 
 
+def test_a_symlinked_agent_on_a_network_mount_is_a_tool_and_is_not_read_through(tmp_path, monkeypatch):
+    """Seen live: an agent linked to a host with its lid closed stalled every run 5s."""
+    from js import jail, paths
+
+    root = tmp_path / "agents"
+    remote = tmp_path / "remote"
+    _agent_dir(remote / "group", "leaf")
+    root.mkdir()
+    (root / "group").symlink_to(remote / "group")
+    monkeypatch.setattr(jail, "_mounts", lambda: [jail._Mount("0:1", Path("/"), remote, "nfs4")])
+    real_iterdir, real_stat = Path.iterdir, Path.stat
+    read: list[Path] = []
+
+    def iterdir(self):
+        if self.name == "group":
+            read.append(self)
+        return real_iterdir(self)
+
+    def stat(self, *args, **kwargs):
+        if self.name == "group" and kwargs.get("follow_symlinks", True):
+            read.append(self)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    monkeypatch.setattr(Path, "stat", stat)
+
+    assert [name for name, _ in paths.walk_agent_dirs(root)] == ["group"]
+    assert read == []
+
+
 def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monkeypatch):
     """Skipping is only for the startup scan. `js -a asleep` and a task child
     on `asleep` must stop, cleanly: ENODEV becomes a ValueError, which the task

@@ -896,7 +896,9 @@ directory. js recognizes a nested agent by its `agent.yaml` or an agent
 file such as `01-prompt.md`. Intermediate directories can group children
 at any depth. A symlinked directory is read like a real one: a symlinked
 group lists the agents beneath it, and a nested symlink is an agent only
-when its target holds agent files.
+when its target holds agent files. A top-level symlink into a network mount
+is still an agent, but the listing does not read through it, so a host that
+is asleep does not stall a start.
 
 js looks up each full agent name in stock `defaults/agents/`, home `agents/`,
 and project `.js/agents/`. The nearest matching agent supplies all its files.

@@ -367,13 +367,25 @@ def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Pa
     return candidates
 
 
+def _links_into_network_mount(link: Path) -> bool:
+    """Whether ``link`` points under a network filesystem's mount, told from
+    the link and the mount table, with the target left untouched: a host that
+    is asleep behind such a mount stalls whatever reads through it."""
+    from . import jail
+
+    target = os.path.normpath(os.path.join(link.parent, os.readlink(link)))
+    return any(target == str(mount.point) or target.startswith(str(mount.point).rstrip("/") + "/")
+               for mount in jail._mounts() if mount.fstype in jail.NETWORK_FS)
+
+
 def walk_agent_dirs(root: Path, *, on_error: Callable[[OSError], None] | None = None) -> Iterator[tuple[str, Path]]:
     """Discover flat agents and nested agents with source files, the same test
     `agent_dirs` applies. Every top-level entry that is a directory or a
     symlink is an agent; a top-level symlink is yielded before its target is
     touched, and a failure to list that target is silent, so an unreachable
-    mount keeps its agent. Directory symlinks are followed below that, through
-    the link's own path; a directory already on the current descent is not
+    mount keeps its agent; one that points into a network mount is not read
+    through at all. Directory symlinks are followed below that, through the
+    link's own path; a directory already on the current descent is not
     entered again."""
     def visit(directory: Path, prefix: str, ancestors: frozenset[tuple[int, int]],
               report: Callable[[OSError], None] | None) -> Iterator[tuple[str, Path]]:
@@ -397,7 +409,8 @@ def walk_agent_dirs(root: Path, *, on_error: Callable[[OSError], None] | None = 
             try:
                 if not prefix and entry.is_symlink():
                     yield agent_id, entry
-                    yield from visit(entry, agent_id, ancestors, None)
+                    if not _links_into_network_mount(entry):
+                        yield from visit(entry, agent_id, ancestors, None)
                 elif entry.is_dir():
                     if not prefix:
                         yield agent_id, entry
