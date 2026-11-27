@@ -590,6 +590,8 @@ def test_a_message_sent_after_a_subagents_last_tool_call_is_its_next_turn(monkey
         if len([m for m in messages if m["role"] == "user"]) == 1:
             answering.set()
             await release.wait()
+        if "fail" in messages[-1]["content"]:
+            raise RuntimeError("provider down")
         messages.append({"role": "assistant", "content": f"answer to {messages[-1]['content']}"})
 
     main = _real_turns(monkeypatch, tmp_path, turn)
@@ -602,9 +604,20 @@ def test_a_message_sent_after_a_subagents_last_tool_call_is_its_next_turn(monkey
     assert subagents.task(action="send", handle=handle, message="and beta", context=main).startswith("sent to")
     loop.call_soon_threadsafe(release.set)
 
-    assert _job(handle, main).future.result(timeout=10) == "answer to and beta"
+    # Its first answer is still in the result, ahead of the one to the message.
+    assert _job(handle, main).future.result(timeout=10) == "answer to alpha\n\nanswer to and beta"
     [worker] = _job(handle, main).workers
     assert not worker.send("too late")
+
+    # A further turn that fails leaves the answer before it.
+    answering.clear()
+    loop.call_soon_threadsafe(release.clear)
+    handle = _handle(asyncio.run_coroutine_threadsafe(launch(), loop).result(timeout=10))
+    assert answering.wait(10)
+    assert subagents.task(action="send", handle=handle, message="now fail", context=main).startswith("sent to")
+    loop.call_soon_threadsafe(release.set)
+    result = _job(handle, main).future.result(timeout=10)
+    assert result.startswith("answer to alpha\n\nERROR RuntimeError")
 
 
 def test_a_job_worker_is_claimed_once_and_not_by_what_that_turn_starts():
