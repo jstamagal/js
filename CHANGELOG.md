@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Subagents run alongside the main agent, which watches, stops and talks to them.** Modelled on Claude Code's background agents and Codex CLI's multi-agent tools; `docs/subagents.md` has the comparison.
   - The main agent's `task` and named-agent calls return handles at once (`t1` for the task, `t1.1`, `t1.2` for its subagents) and the subagents run while it works or answers you. `background=false` waits as before; a subagent's own calls still wait by default.
-  - `task` actions: `list`; `poll` shows each subagent's state, tool calls, latest text and session file; `kill` stops the task or one subagent; `send` talks to a subagent, read at its next tool call while it runs, or answered in a new turn on its own session once it has finished; `wait` as before.
+  - `task` actions: `list`; `poll` shows each subagent's state, tool calls, latest text and session file; `kill` stops the task or one subagent; `send` talks to a subagent, read at its next tool call while it runs (in a further turn before it finishes when it makes none), or answered in a new turn on its own session once it has finished; `wait` as before.
   - A finished result reaches the main agent without you typing: at its next tool call, with your next line, or, when it is idle, in a turn of its own (`SUBAGENT_WAKE`, default on). The reminder carries the result itself, cut at `TOOL_RESULT_MAX`.
   - `js -p` waits for the subagents the agent left running and hands it their results before the run ends; `SUBAGENT_WAKE off` keeps the old ending.
   - `/jobs` lists the main agent's task handles with how many subagents are done.
