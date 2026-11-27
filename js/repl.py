@@ -601,11 +601,9 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
         # Settings that an input hook changes apply from the next turn, through
         # _do_turn's post-turn delta sync. A background task that finished
         # since the last boundary hands the model its result here.
-        finished = _finished_task_notes()
         if not steer_inbox:
-            if not finished:
-                return None
-            return {"role": "user", "content": "\n\n".join(finished), "steered": True}
+            finished = _finished_task_notes()
+            return {"role": "user", "content": "\n\n".join(finished), "steered": True} if finished else None
         text = "\n".join(steer_inbox)
         steer_inbox.clear()
         steer_text, steer_attachments = attach.split_repl_attachments(text)
@@ -623,11 +621,14 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
             raise
         except ValueError as e:
             msgs.say(msgs.FAILED, error=e)
-            # The results taken above still go to the model.
+            # A result that is due still goes to the model.
+            finished = _finished_task_notes()
             return {"role": "user", "content": "\n\n".join(finished), "steered": True} if finished else None
         if (sink := transcript_mod.transcript_sink(telemetry)) is not None:
             sink.emit(output.event("transcript_user", text=text))
-        return _with_notes({**built, "steered": True}, finished)
+        # Results are taken once the line is built: a turn cancelled while it
+        # was being built has taken none.
+        return _with_notes({**built, "steered": True}, _finished_task_notes())
 
     job = sup.spawn(
         _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,

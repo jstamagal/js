@@ -27,7 +27,7 @@ from .. import (
 from ..events import RefusableOnly
 from ..mcp_config import resolve as resolve_mcp
 from ..session_catalog import record_session_start
-from ..text_bytes import cap_text
+from ..text_bytes import byte_size, cap_text
 from ..toolkit import subagent_gate
 from ..usage import session_key
 from . import task_jobs
@@ -370,9 +370,6 @@ async def _run_one_task_async(
     if error is not None and not earlier:
         return error
 
-    # A further turn that failed leaves the answers before it, its error last.
-    last = error if error is not None else chat.answer().strip() or "(no final response)"
-    final = "\n\n".join([*earlier, last])
     # Give each child a FAIR SHARE of the aggregate budget, not the whole thing.
     # The parent's dispatch layer re-clips the joined TASK_RESULTS at
     # max_tool_result_bytes; if every child could fill that full budget, one fat
@@ -383,10 +380,23 @@ async def _run_one_task_async(
     # fixed budget, not silent starvation.) Read the parent context: the child's
     # runtime rewrites child_context.max_tool_result_bytes mid-turn.
     budget = int(parent_context.max_tool_result_bytes or 0)
-    if budget > 0 and parent_context.subagent_result_share:
-        cap = budget // max(1, total)
-        final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
-    return final
+    cap = budget // max(1, total) if budget > 0 and parent_context.subagent_result_share else 0
+    marker = f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]"
+    if error is not None:
+        # A further turn that failed leads with its error, so the result reads
+        # as one that failed and the cap keeps the error; the answers before
+        # it follow.
+        final = "\n\n".join([error, *earlier])
+        return cap_text(final, cap, marker) if cap else final
+    last = chat.answer().strip() or "(no final response)"
+    before = "\n\n".join(earlier)
+    if cap:
+        # The answer to the last message is kept, up to the share; the answers
+        # before it take the room it leaves.
+        last = cap_text(last, cap, marker)
+        room = cap - byte_size(last) - 2
+        before = cap_text(before, room, marker) if before and room > 0 else ""
+    return f"{before}\n\n{last}" if before else last
 
 
 def _joined_steer(steers):

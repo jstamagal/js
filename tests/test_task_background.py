@@ -609,7 +609,7 @@ def test_a_message_sent_after_a_subagents_last_tool_call_is_its_next_turn(monkey
     [worker] = _job(handle, main).workers
     assert not worker.send("too late")
 
-    # A further turn that fails leaves the answer before it.
+    # A further turn that fails is a failed task, which keeps the answer before it.
     answering.clear()
     loop.call_soon_threadsafe(release.clear)
     handle = _handle(asyncio.run_coroutine_threadsafe(launch(), loop).result(timeout=10))
@@ -617,9 +617,12 @@ def test_a_message_sent_after_a_subagents_last_tool_call_is_its_next_turn(monkey
     assert subagents.task(action="send", handle=handle, message="now fail", context=main).startswith("sent to")
     loop.call_soon_threadsafe(release.set)
     result = _job(handle, main).future.result(timeout=10)
-    assert result.startswith("answer to alpha\n\nERROR RuntimeError")
+    assert result.startswith("ERROR RuntimeError") and result.endswith("answer to alpha")
+    [worker] = _job(handle, main).workers
+    assert worker.state == "error"
 
-    # That result is held to the subagent's share of the result budget, as any is.
+    # That result is held to the subagent's share of the result budget, as
+    # any is, and what the cap keeps is the error.
     main.max_tool_result_bytes, main.subagent_result_share = 10, True
     answering.clear()
     loop.call_soon_threadsafe(release.clear)
@@ -628,7 +631,21 @@ def test_a_message_sent_after_a_subagents_last_tool_call_is_its_next_turn(monkey
     assert subagents.task(action="send", handle=handle, message="now fail", context=main).startswith("sent to")
     loop.call_soon_threadsafe(release.set)
     result = _job(handle, main).future.result(timeout=10)
-    assert len(result.encode()) <= 10
+    assert len(result.encode()) <= 10 and result.startswith("ERROR")
+    [worker] = _job(handle, main).workers
+    assert worker.state == "error"
+
+    # A capped result keeps the answer to the message, and what room that
+    # leaves goes to the answer before it.
+    main.max_tool_result_bytes = 30
+    answering.clear()
+    loop.call_soon_threadsafe(release.clear)
+    handle = _handle(asyncio.run_coroutine_threadsafe(launch(), loop).result(timeout=10))
+    assert answering.wait(10)
+    assert subagents.task(action="send", handle=handle, message="and beta", context=main).startswith("sent to")
+    loop.call_soon_threadsafe(release.set)
+    result = _job(handle, main).future.result(timeout=10)
+    assert len(result.encode()) <= 30 and result.endswith("answer to and beta") and result.startswith("answer to")
 
 
 def test_a_job_worker_is_claimed_once_and_not_by_what_that_turn_starts():
@@ -686,3 +703,81 @@ def test_a_result_due_with_a_typed_line_that_cannot_be_sent_still_reaches_the_mo
 
     [message] = steered
     assert "result of alpha" in message["content"]
+
+
+def test_a_steer_cancelled_while_its_line_is_built_leaves_a_due_result_untaken(workers, ctx, monkeypatch, tmp_path):
+    from js import attach
+
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    entered, release = asyncio.Event(), asyncio.Event()
+    building, built = threading.Event(), threading.Event()
+    jobs: list = []
+    taken: list = []
+
+    async def turn(cfg, system, messages, telemetry, *, steer=None, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+            taking = asyncio.ensure_future(steer())
+            while not building.is_set():
+                await asyncio.sleep(0.01)
+            taking.cancel()
+            await asyncio.gather(taking, return_exceptions=True)
+            taken.append(jobs[0].delivered)
+            built.set()
+
+    build = attach.build_user_message
+
+    def slow(text, *args, **kwargs):
+        if "slow" in text:
+            building.set()
+            built.wait(10)
+        return build(text, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    monkeypatch.setattr(attach, "build_user_message", slow)
+
+    async def lines(on_line) -> None:
+        await on_line("first")
+        await asyncio.wait_for(entered.wait(), 10)
+        job = _job(_handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)), ctx)
+        jobs.append(job)
+        workers.release.set()
+        while job.running():
+            await asyncio.sleep(0.01)
+        await on_line("a slow line")
+        release.set()
+
+    run_repl(monkeypatch, cfg, lines)
+
+    # The cancelled steer took nothing: the result is still due.
+    assert taken == [False]
+
+
+def test_a_prompt_run_with_no_prompt_of_its_own_hands_back_what_its_exchanges_started(workers, ctx, monkeypatch):
+    from js import agent_messages, prompt_run
+
+    sent: list[dict] = []
+
+    class Chat:
+        context = ctx
+
+        async def turn(self, message, *, started=None, **_kwargs):
+            sent.append(message)
+
+    async def exchanges(*_args, **_kwargs):
+        subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
+        threading.Timer(0.2, workers.release.set).start()
+
+    monkeypatch.setattr(agent_messages, "initialize", exchanges)
+    prepared = types.SimpleNamespace(
+        cfg=types.SimpleNamespace(settings={}, trace=False), messages=[], user_message=None, control=None,
+        inputs=types.SimpleNamespace(save=False, debug=False, debug_file=None, tool_context=ctx),
+        telemetry=runtime.Telemetry(debug_log=None),
+        settled=types.SimpleNamespace(system="sys", prompt_spec=types.SimpleNamespace(exchanges=[object()])))
+    prompt_run._turns(prepared, Chat(), None, {})
+    [message] = sent
+    assert "result of alpha" in message["content"]
+

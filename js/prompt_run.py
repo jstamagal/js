@@ -472,7 +472,11 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
             system=prepared.settled.system, save=inputs.save, trace_override=trace_override,
             tool_context=inputs.tool_context, echo_user=echo_user, **turn_kwargs,
         ))
-    if prepared.user_message is None or prepared.control is not None:
+    if prepared.control is not None:
+        return
+    if prepared.user_message is None:
+        # The exchanges can leave tasks running, as the prompt's turn can.
+        _background_turns(prepared, chat, transcript, echo_user, trace_override, turn_kwargs)
         return
 
     def started() -> None:
