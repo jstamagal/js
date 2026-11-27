@@ -205,3 +205,47 @@ def test_acp_stdio_t3_session(tmp_path, acp_provider):
     assert history.index(("user", first_prompt)) < history.index(("assistant", "First reply."))
     assert history[-1] == ("user", second_prompt)
     assert any(role == "tool" and marker in content for role, content in history)
+
+
+def test_a_prompt_carrying_a_large_image_is_read(tmp_path):
+    env = {key: value for key, value in os.environ.items() if not key.startswith("JS_")}
+    env.update(JS_HOME=str(tmp_path / "profile"))
+    image = "A" * (7 * 1024 * 1024)  # the base64 of an image of about 5 MiB
+
+    async def drive():
+        with (tmp_path / "acp.stderr").open("ab") as stderr:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-I", "-m", "js", "--acp", cwd=tmp_path,
+                env=env, stderr=stderr, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, limit=64 * 1024 * 1024,
+            )
+        try:
+            async def request(request_id, method, params):
+                message = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+                process.stdin.write((json.dumps(message) + "\n").encode())
+                await process.stdin.drain()
+                async with asyncio.timeout(30):
+                    while True:
+                        line = await process.stdout.readline()
+                        assert line, f"ACP closed stdout during {method}"
+                        answer = json.loads(line)
+                        if answer.get("id") == request_id:
+                            return answer
+
+            assert "result" in await request(1, "initialize", {
+                "protocolVersion": 2, "clientCapabilities": {},
+                "clientInfo": {"name": "t3-code", "version": "test"},
+            })
+            # No such session: the answer shows the whole line was read.
+            answer = await request(2, "session/prompt", {
+                "sessionId": "0" * 32,
+                "prompt": [{"type": "image", "data": image, "mimeType": "image/png"}],
+            })
+            assert "error" in answer
+        finally:
+            process.stdin.close()
+            if process.returncode is None:
+                process.kill()
+            await asyncio.wait_for(process.communicate(), timeout=10)
+
+    asyncio.run(drive())
