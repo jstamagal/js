@@ -172,14 +172,19 @@ def _slots(cfg: Any, spec_slots: Any) -> int:
         return 0
 
 
-def _configure(spec: AgentSpec, *, save_session: bool = True) -> run_assembly.SettledRun:
-    """The settled run of one agent: the bus tools on its surface and its
-    seat file after its system prompt. ``save_session`` off settles it
-    without making its session file."""
+def _agent_config(spec: AgentSpec, *, save_session: bool = True) -> Any:
+    """The config one agent's run starts from: its opts, its agent, its
+    directory and its session. ``save_session`` off makes no session file."""
     extras = tuple(f"{k}={v}" for k, v in spec.opts.items())
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
-    cfg = from_env(save_session=save_session, sources=InvocationSources(extras=extras), agent_id=spec.agent,
-                   session=spec.session, cwd=cwd)
+    return from_env(save_session=save_session, sources=InvocationSources(extras=extras), agent_id=spec.agent,
+                    session=spec.session, cwd=cwd)
+
+
+def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
+    """The settled run of one agent: the bus tools on its surface and its
+    seat file after its system prompt."""
+    cfg = _agent_config(spec)
     if spec.effort is not None:
         # The spec's own effort is set for this run like a flag; agent.yaml's
         # effort is then left out of the agent layer.
@@ -458,14 +463,16 @@ def processes_for(agents: int, setting: Any, slots: int = 0) -> int:
 RUNNER_END_WAIT = 5.0
 
 
-def _settled_slots(raw: dict) -> int:
-    """The cap a spec with no ``slots`` runs under: SWARM_ACTIVE_MAX as its
-    first agent's run settles it, which is the cap one runner takes; the
-    live setting when that run does not settle."""
+def _first_agent_slots(raw: dict) -> int:
+    """The cap a spec with no ``slots`` runs under: SWARM_ACTIVE_MAX in its
+    first agent's config, which is the cap one runner takes; the live
+    setting when that config cannot be read. Settling a run leaves that
+    setting as the config has it, so the agent's prompt is not loaded here."""
     try:
-        first = AgentSpec.from_dict((raw.get("agents") or [{}])[0])
-        return _slots(_configure(first, save_session=False).config, None)
-    except Exception:  # noqa: BLE001 - the agent's own runner reports why it does not settle
+        # Without its session: one the run has yet to make is not there to read.
+        first = replace(AgentSpec.from_dict((raw.get("agents") or [{}])[0]), session=None)
+        return _slots(_agent_config(first, save_session=False), None)
+    except Exception:  # noqa: BLE001 - the agent's own runner reports what is wrong with it
         return _slots(None, _settings.live_value("SWARM_ACTIVE_MAX") or 0)
 
 
@@ -587,7 +594,7 @@ def main(path: str) -> int:
         slots = raw.get("slots")
         if slots is None and processes_for(agents, processes) > 1:
             # One cap for the whole swarm, dealt out over its runners.
-            slots = _settled_slots(raw)
+            slots = _first_agent_slots(raw)
         count = processes_for(agents, processes, int(slots or 0))
         if count > 1:
             return run_sharded(path, count, raw={**raw, "slots": int(slots or 0)})
