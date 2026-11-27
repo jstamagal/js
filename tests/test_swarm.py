@@ -982,3 +982,265 @@ def test_a_sharded_run_that_cannot_start_a_runner_ends_the_ones_it_started(tmp_p
 
     assert started[0].poll() is not None
     assert not list((tmp_path / "bus" / ".runners").iterdir())
+
+
+def test_a_recruit_cannot_take_a_spec_agents_name_before_its_runner_starts_it(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(swarm_run.Runner, "add", lambda self, spec: None)
+    monkeypatch.setattr(swarm_run._settings, "live_value", lambda _key: 5)
+    root = tmp_path / "bus"
+    parent = swarm_run.AgentSpec.from_dict({"name": "a0", "agent": "voice", "opener": "go"})
+    outcomes: list = []
+
+    async def recruit() -> None:
+        runner = swarm_run.Runner(root, [parent], None, io.StringIO())
+        await asyncio.to_thread(runner.recruiter(parent, swarm.Agent(root / "a0")), "a1", "hello")
+
+    def popen(_args, **_kwargs):
+        # No runner has started yet: a0's runner recruits a1, the spec agent
+        # the second runner is to start.
+        try:
+            asyncio.run(recruit())
+            outcomes.append(None)
+        except ValueError as exc:
+            outcomes.append(exc)
+        raise OSError("no runner started")
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(2)]
+
+    with pytest.raises(OSError):
+        swarm_run.run_sharded(_spec(tmp_path, agents), 2, out=io.StringIO())
+
+    assert len(outcomes) == 1 and isinstance(outcomes[0], ValueError)
+
+
+def _until(out: io.StringIO, done) -> list[dict]:
+    """The events in ``out`` once ``done`` holds of them, or the run has ended."""
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        events = _events(out)
+        if done(events) or any(e["type"] == "run_end" for e in events):
+            return events
+        time.sleep(0.05)
+    raise AssertionError("the runner did not get there")
+
+
+def _controlled_spec(tmp_path, agents: list[dict], control: int) -> str:
+    path = Path(_spec(tmp_path, agents))
+    path.write_text(json.dumps({**json.loads(path.read_text()), "control": control}))
+    return str(path)
+
+
+def test_a_sharded_runner_with_no_agents_left_restarts_one_and_ends_when_its_launcher_is_gone(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    read, write = os.pipe()
+
+    async def stream(**kwargs):
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    def launcher() -> None:
+        # Another runner's agent restarts a once it has ended; when a has
+        # ended again, the launcher goes away.
+        try:
+            _until(out, lambda events: any(e["type"] == "agent_end" for e in events))
+            room.send("steer", "a", "come back", kind=swarm.RESTART)
+            _until(out, lambda events: len([e for e in events if e["type"] == "agent_end"]) == 2)
+        finally:
+            os.close(write)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _controlled_spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a",
+                                        "cwd": str(tmp_path)}], read)
+    thread = threading.Thread(target=launcher, daemon=True)
+    thread.start()
+
+    assert swarm_run.run(spec, out=out) == 0
+    thread.join()
+
+    events = _events(out)
+    starts = [e for e in events if e["type"] == "agent_start"]
+    assert len(starts) == 2 and starts[0]["session"] == starts[1]["session"]
+    assert "come back" in _user_texts_of(memory.load_replay_messages(Path(starts[1]["session"])))[-1]
+    assert events[-1]["type"] == "run_end"
+
+
+def test_sigterm_ends_a_sharded_runner_with_no_agents_left(tmp_path, monkeypatch):
+    import signal
+
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    read, write = os.pipe()
+
+    async def stream(**kwargs):
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    def interrupt() -> None:
+        try:
+            events = _until(out, lambda events: any(e["type"] == "runner_idle" for e in events))
+            if not any(e["type"] == "run_end" for e in events):
+                os.kill(os.getpid(), signal.SIGTERM)
+                _until(out, lambda _events: False)
+        finally:
+            os.close(write)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _controlled_spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a",
+                                        "cwd": str(tmp_path)}], read)
+    thread = threading.Thread(target=interrupt, daemon=True)
+    thread.start()
+
+    assert swarm_run.run(spec, out=out) == 130
+    thread.join()
+
+
+def test_a_restart_waiting_when_the_launcher_asks_keeps_a_sharded_runner_up(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    read, write = os.pipe()
+
+    async def stream(**kwargs):
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    def launcher() -> None:
+        # The restart is in a's inbox when the launcher's round asks this
+        # runner to sweep and then to finish.
+        try:
+            _until(out, lambda events: any(e["type"] == "runner_idle" for e in events))
+            room.send("steer", "a", "come back", kind=swarm.RESTART)
+            os.write(write, b"query 1\nfinish\n")
+            _until(out, lambda events: len([e for e in events if e["type"] == "agent_end"]) == 2)
+        finally:
+            os.close(write)
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _controlled_spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a",
+                                        "cwd": str(tmp_path)}], read)
+    thread = threading.Thread(target=launcher, daemon=True)
+    thread.start()
+
+    assert swarm_run.run(spec, out=out) == 0
+    thread.join()
+
+    events = _events(out)
+    assert len([e for e in events if e["type"] == "agent_start"]) == 2
+    assert not any(e["type"] == "runner_ready" for e in events)
+
+
+# A runner as the launcher sees it: each reports that its agents have all
+# ended, a1 only once a0 has, and answers the launcher's control lines. a0
+# exits 5 when told to finish while a1 still had an agent running.
+_IDLE_RUNNER = r"""
+import json, os, select, sys, time
+spec = json.load(open(sys.argv[1]))
+me, bus, control = spec["agents"][0]["name"], spec["root"], spec.get("control")
+def say(**event):
+    sys.stdout.write(json.dumps({"agent": "", **event}) + "\n")
+    sys.stdout.flush()
+def wait_for(path):
+    deadline = time.monotonic() + 60
+    while not os.path.exists(path):
+        if time.monotonic() > deadline:
+            sys.exit(9)
+        time.sleep(0.01)
+say(agent=me, type="agent_end", reason="stopped")
+if control is None:
+    say(type="runner_idle")
+    sys.exit(7)
+if me == "a1":
+    wait_for(os.path.join(bus, "a0.idle"))
+    open(os.path.join(bus, "a1.idle"), "w").close()
+say(type="runner_idle")
+if me == "a0":
+    open(os.path.join(bus, "a0.idle"), "w").close()
+pending = ""
+while True:
+    if not select.select([control], [], [], 60)[0]:
+        sys.exit(9)
+    data = os.read(control, 100).decode()
+    if not data:
+        sys.exit(8)
+    pending += data
+    while "\n" in pending:
+        line, pending = pending.split("\n", 1)
+        word, _, arg = line.partition(" ")
+        if word == "query":
+            say(type="runner_ready", round=int(arg))
+        elif word == "finish":
+            if me == "a0" and not os.path.exists(os.path.join(bus, "a1.idle")):
+                sys.exit(5)
+            say(type="run_end", agents=[me], exit_code=0)
+            sys.exit(0)
+"""
+
+
+def test_a_sharded_run_ends_its_runners_once_every_one_has_no_agents_left(tmp_path, monkeypatch):
+    import subprocess
+
+    real = subprocess.Popen
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda args, **kwargs: real([sys.executable, "-c", _IDLE_RUNNER, args[-1]], **kwargs))
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(2)]
+    out = io.StringIO()
+
+    assert swarm_run.run_sharded(_spec(tmp_path, agents), 2, out=out) == 0
+
+    events = _events(out)
+    assert sorted(e["agent"] for e in events if e["type"] == "agent_end") == ["a0", "a1"]
+    assert [e["type"] for e in events if not e["agent"]] == ["run_end"]
+    assert events[-1]["type"] == "run_end"
+
+
+class _ClosedOut(io.StringIO):
+    """A stdout whose reader has gone, as ``| head`` leaves it."""
+
+    def write(self, _text):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def flush(self):
+        raise BrokenPipeError(32, "Broken pipe")
+
+
+def test_a_sharded_run_whose_stdout_is_closed_ends_its_runners(tmp_path, monkeypatch):
+    import subprocess
+
+    started: list[subprocess.Popen] = []
+    real = subprocess.Popen
+    # Each runner writes more events than its pipe holds, then runs on.
+    chatty = ("import sys, time\n"
+              "line = '{\"agent\": \"a\", \"type\": \"tool_call\", \"name\": \"" + "x" * 200 + "\"}\\n'\n"
+              "sys.stdout.write(line * 5000); sys.stdout.flush(); time.sleep(120)\n")
+
+    def popen(args, **kwargs):
+        started.append(real([sys.executable, "-c", chatty, args[-1]], **kwargs))
+        return started[-1]
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    hung = threading.Event()
+
+    def watchdog() -> None:
+        hung.set()
+        for child in started:
+            child.kill()
+
+    timer = threading.Timer(60, watchdog)
+    timer.start()
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(2)]
+    try:
+        swarm_run.run_sharded(_spec(tmp_path, agents), 2, out=_ClosedOut())
+    finally:
+        timer.cancel()
+
+    assert not hung.is_set()
+    assert all(child.poll() is not None for child in started)

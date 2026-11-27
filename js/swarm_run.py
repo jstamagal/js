@@ -12,6 +12,8 @@ every sleep, and the sleep an await on the inbox. ``slots`` caps how many agents
 are mid-turn at once; 0 is no cap. ``recruit`` adds an agent to this loop.
 ``processes`` (else SWARM_PROCESSES) spreads the agents over that many runner
 processes (`run_sharded`); 0 is one per AGENTS_PER_PROCESS, up to the CPUs.
+``control``, which `run_sharded` writes into each runner's share, is the file
+descriptor of the pipe that runner reads its launcher's lines from.
 
 Two message kinds are the runner's, not the agent's (``swarm.RUNNER_KINDS``):
 ``cancel`` sent to an agent cancels its current turn, saved as it stands, and
@@ -23,10 +25,13 @@ either is dropped.
 
 Events go to stdout as JSON lines, every one carrying ``agent``; ``agent_start``,
 ``agent_end``, ``turn_cancelled``, ``restart``, ``dropped`` and ``run_end`` are
-the runner's own. What an agent writes to stderr goes to stderr as
+the runner's own; a runner with ``control`` also writes ``runner_idle``,
+``runner_busy`` and ``runner_ready``, which its launcher reads and does not
+pass on. What an agent writes to stderr goes to stderr as
 ``[name] line`` and to ROOT/<name>/stderr (`AgentStderr`). A runner ends
-when every agent has stopped or retired. SIGTERM and SIGINT end it like ^C:
-every session is persisted and the exit code is 130.
+when every agent has stopped or retired; one runner of a sharded run, when
+every agent of the swarm, in every runner, has (`run_sharded`). SIGTERM and
+SIGINT end it like ^C: every session is persisted and the exit code is 130.
 """
 
 from __future__ import annotations
@@ -215,8 +220,20 @@ def _recruiting(root: Path):
 
 
 class Runner:
-    def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO, *, configure=None) -> None:
+    """``control``, the read end of a pipe from `run_sharded`, makes this one
+    runner of several: with no agent left it reports ``runner_idle`` and
+    waits, still taking ``restart``, until told to finish (`heard`), its
+    launcher is gone (end of file) or it is signalled."""
+
+    def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO, *, configure=None,
+                 control: int | None = None) -> None:
         self.configure = configure
+        self.control = control
+        self.unread = ""
+        self.orphaned = False
+        # Set when the idle runner has something to look at: an agent added,
+        # a finish, its launcher gone, a signal.
+        self.wake = asyncio.Event()
         self.root = root
         self.specs = specs
         self.spec_slots = slots
@@ -242,17 +259,34 @@ class Runner:
         for sig in (signal.SIGTERM, signal.SIGINT):
             with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, self.cancel_all)
+        if self.control is not None:
+            os.set_inheritable(self.control, False)
+            loop.add_reader(self.control, self.heard)
         for spec in self.specs:
             self.add(spec)
         watcher = loop.create_task(self.watch(), name="swarm:runner")
         stderr, sys.stderr = sys.stderr, AgentStderr(sys.stderr, self.root)
+        runner_events = AgentEvents(self.out, self.lock, "")
         try:
-            while self.tasks:
-                await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
-                for name in [n for n, t in self.tasks.items() if t.done()]:
-                    self.tasks.pop(name, None)
+            while True:
+                while self.tasks:
+                    await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
+                    for name in [n for n, t in self.tasks.items() if t.done()]:
+                        self.tasks.pop(name, None)
+                if self.control is None or self.orphaned or self.code == 130:
+                    break
+                self.wake = asyncio.Event()
+                runner_events.emit("runner_idle")
+                await self.wake.wait()
+                if not self.tasks:
+                    break
+                runner_events.emit("runner_busy")
         finally:
             watcher.cancel()
+            if self.control is not None:
+                loop.remove_reader(self.control)
+                with contextlib.suppress(OSError):
+                    os.close(self.control)
             sys.stderr = stderr
             await model_client.close_shared_http_clients()
         AgentEvents(self.out, self.lock, "").emit("run_end", agents=[s.name for s in self.specs],
@@ -264,21 +298,49 @@ class Runner:
         self.ended.pop(spec.name, None)
         task = asyncio.get_running_loop().create_task(self.run_agent(spec), name=f"swarm:{spec.name}")
         self.tasks[spec.name] = task
+        self.wake.set()
         return task
 
     async def watch(self) -> None:
         """Act on the runner's message kinds as they land, every poll."""
-        room = swarm.Room(self.root)
         while True:
-            for name in list(self.originals):
-                landed = swarm.Inbox(room, name).take(swarm.RUNNER_KINDS)
-                for msg in landed:
-                    try:
-                        self.act(name, msg)
-                    except Exception as exc:  # noqa: BLE001 - one bad message does not stop the watch
-                        AgentEvents(self.out, self.lock, name).emit(
-                            "error", message=f"{type(exc).__name__}: {exc}", retryable=False)
+            self.sweep()
             await asyncio.sleep(swarm.POLL_S)
+
+    def sweep(self) -> None:
+        """Act on the runner's message kinds waiting for its agents."""
+        room = swarm.Room(self.root)
+        for name in list(self.originals):
+            for msg in swarm.Inbox(room, name).take(swarm.RUNNER_KINDS):
+                try:
+                    self.act(name, msg)
+                except Exception as exc:  # noqa: BLE001 - one bad message does not stop the watch
+                    AgentEvents(self.out, self.lock, name).emit(
+                        "error", message=f"{type(exc).__name__}: {exc}", retryable=False)
+
+    def heard(self) -> None:
+        """Read the launcher's control lines. ``query N`` sweeps the inboxes
+        and, when that leaves the runner with no agent, answers
+        ``runner_ready`` for round N; ``finish`` ends a runner with no agent
+        and is ignored by one that has any. End of file is the launcher gone."""
+        try:
+            data = os.read(self.control, 4096)
+        except OSError:
+            data = b""
+        if not data:
+            asyncio.get_running_loop().remove_reader(self.control)
+            self.orphaned = True
+            self.wake.set()
+            return
+        *lines, self.unread = (self.unread + data.decode("utf-8", "replace")).split("\n")
+        for line in lines:
+            word, _, arg = line.partition(" ")
+            if word == "query":
+                self.sweep()
+                if not self.tasks:
+                    AgentEvents(self.out, self.lock, "").emit("runner_ready", round=arg)
+            elif word == "finish" and not self.tasks:
+                self.wake.set()
 
     def act(self, name: str, msg: swarm.Msg) -> None:
         events = AgentEvents(self.out, self.lock, name)
@@ -313,6 +375,7 @@ class Runner:
         self.code = 130
         for task in self.tasks.values():
             task.cancel()
+        self.wake.set()
 
     def recruiter(self, parent: AgentSpec, agent: swarm.Agent):
         """What `recruit` calls on this runner, from a tool thread: a sibling
@@ -435,7 +498,9 @@ def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int 
 
 def run(path: str | os.PathLike[str], out: TextIO | None = None, *, configure=None) -> int:
     root, agents, slots = load_spec(path)
-    runner = Runner(root, agents, slots, out or sys.stdout, configure=configure)
+    control = json.loads(Path(path).read_text(encoding="utf-8")).get("control")
+    runner = Runner(root, agents, slots, out or sys.stdout, configure=configure,
+                    control=None if control is None else int(control))
     return asyncio.run(runner.run())
 
 
@@ -494,6 +559,26 @@ def _is_delta(line: str) -> bool:
     return line.endswith(('"type": "text"}\n', '"type": "reasoning"}\n'))
 
 
+# The events a runner started by `run_sharded` reports about itself: the
+# launcher reads them and does not pass them on.
+_RUNNER_STATES = ("runner_idle", "runner_busy", "runner_ready")
+
+
+def _end_runners(children: list) -> None:
+    """Terminate each runner; one still running RUNNER_END_WAIT later is killed."""
+    import subprocess
+
+    for child in children:
+        with contextlib.suppress(OSError):
+            child.terminate()
+    for child in children:
+        try:
+            child.wait(timeout=RUNNER_END_WAIT)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+
+
 def run_sharded(path: str | os.PathLike[str], count: int, out: TextIO | None = None, *,
                 raw: dict | None = None) -> int:
     """Run the spec's agents over ``count`` runner processes, each one
@@ -502,65 +587,137 @@ def run_sharded(path: str | os.PathLike[str], count: int, out: TextIO | None = N
     swarm; their stderr is this process's. SIGINT and SIGTERM go to every
     runner. The exit code is 130 when any runner was interrupted, else the
     highest a runner returned. ``raw`` is the spec to split; None reads it
-    from ``path``."""
+    from ``path``.
+
+    Every spec agent is on the bus before any runner starts. Each runner
+    reads a control pipe (`Runner.heard`): a runner with no agent left
+    stays up, so another runner's agent can restart one of its agents, and
+    once every runner has none, a round asks each to sweep its inboxes and
+    the runners are told to finish when every one answers ready. When
+    stdout can no longer be written, the runners are ended and the run ends
+    with no ``run_end``."""
     import subprocess
 
     out = out or sys.stdout
     if raw is None:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    root, _agents, _slots = load_spec(path)
+    root, agents, _slots = load_spec(path)
+    room = swarm.Room(root)
+    for agent in agents:
+        room.join(agent.name)
     shards = root / ".runners"
     shards.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
     # The spec's agents and every one a runner started besides (a recruit).
     names: list[str] = [str(a.get("name")) for a in raw.get("agents") or []]
     children: list[subprocess.Popen] = []
+    # The write end of each runner's control pipe.
+    controls: list[int] = []
     written: list[Path] = []
     try:
         for i, spec in enumerate(_shard_specs(raw, count)):
             shard = shards / f"{os.getpid()}-{i}.json"
             written.append(shard)
-            shard.write_text(json.dumps(spec), encoding="utf-8")
-            children.append(subprocess.Popen([sys.executable, "-m", "js.swarm", "run", str(shard)],
-                                             stdout=subprocess.PIPE, text=True, encoding="utf-8"))
+            read, write = os.pipe()
+            controls.append(write)
+            try:
+                shard.write_text(json.dumps({**spec, "control": read}), encoding="utf-8")
+                children.append(subprocess.Popen([sys.executable, "-m", "js.swarm", "run", str(shard)],
+                                                 stdout=subprocess.PIPE, text=True, encoding="utf-8",
+                                                 pass_fds=(read,)))
+            finally:
+                os.close(read)
     except BaseException:
         # A runner that could not start ends the ones already started. Their
         # stdout is closed first, so one blocked writing to it is not waited on.
         for child in children:
             child.stdout.close()
-            child.terminate()
-        for child in children:
-            try:
-                child.wait(timeout=RUNNER_END_WAIT)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+        _end_runners(children)
+        for fd in controls:
+            with contextlib.suppress(OSError):
+                os.close(fd)
         for shard in written:
             shard.unlink(missing_ok=True)
         raise
 
     flushed = [0.0]
+    # Set once a write to ``out`` has failed: nothing more is written to it.
+    broken = threading.Event()
+    # What each runner last reported, and the round of the finish under way:
+    # the runners asked in it and those that answered ready.
+    state = threading.Lock()
+    idle = [False] * len(children)
+    ended = [False] * len(children)
+    asked: set[int] = set()
+    ready: set[int] = set()
+    rounds = [0]
 
-    def relay(child: subprocess.Popen) -> None:
+    def settle() -> None:
+        """Under ``state``: once every runner still up has no agent, ask each
+        to sweep; once each has answered ready, tell them all to finish."""
+        live = [i for i, done in enumerate(ended) if not done]
+        if not live or not all(idle[i] for i in live):
+            return
+        if not asked:
+            rounds[0] += 1
+            asked.update(live)
+            ready.clear()
+            line = f"query {rounds[0]}\n"
+        elif asked <= ready | {i for i, done in enumerate(ended) if done}:
+            line = "finish\n"
+        else:
+            return
+        for i in live:
+            with contextlib.suppress(OSError):
+                os.write(controls[i], line.encode())
+
+    def reported(i: int, event: dict) -> None:
+        with state:
+            if event["type"] == "runner_busy":
+                idle[i] = False
+                asked.clear()
+                ready.clear()
+                return
+            if event["type"] == "runner_idle":
+                idle[i] = True
+            elif i in asked and str(event.get("round")) == str(rounds[0]):
+                ready.add(i)
+            settle()
+
+    def relay(i: int, child: subprocess.Popen) -> None:
         for line in child.stdout:
             # Only the runner's own events are read; the rest pass through.
             event = None
-            if '"run_end"' in line or '"agent_start"' in line:
+            if any(f'"{kind}"' in line for kind in ("run_end", "agent_start", *_RUNNER_STATES)):
                 with contextlib.suppress(ValueError):
                     event = json.loads(line)
-            if isinstance(event, dict):
-                if event.get("type") == "run_end":
-                    continue
-                if event.get("type") == "agent_start":
-                    names.append(str(event.get("agent")))
+            kind = event.get("type") if isinstance(event, dict) else None
+            if kind in _RUNNER_STATES:
+                reported(i, event)
+                continue
+            if kind == "run_end":
+                continue
+            if kind == "agent_start":
+                names.append(str(event.get("agent")))
             with lock:
-                out.write(line)
-                now = time.monotonic()
-                if not _is_delta(line) or now - flushed[0] >= headless.DELTA_FLUSH_S:
-                    out.flush()
-                    flushed[0] = now
+                if broken.is_set():
+                    continue
+                try:
+                    out.write(line)
+                    now = time.monotonic()
+                    if not _is_delta(line) or now - flushed[0] >= headless.DELTA_FLUSH_S:
+                        out.flush()
+                        flushed[0] = now
+                except (OSError, ValueError):
+                    # The runners' pipes go on being read, so none stays
+                    # blocked writing to one while it ends.
+                    broken.set()
+                    threading.Thread(target=_end_runners, args=(children,), daemon=True).start()
+        with state:
+            ended[i] = True
+            settle()
 
-    readers = [threading.Thread(target=relay, args=(child,), daemon=True) for child in children]
+    readers = [threading.Thread(target=relay, args=(i, child), daemon=True) for i, child in enumerate(children)]
     for reader in readers:
         reader.start()
 
@@ -577,11 +734,15 @@ def run_sharded(path: str | os.PathLike[str], count: int, out: TextIO | None = N
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+        for fd in controls:
+            with contextlib.suppress(OSError):
+                os.close(fd)
         for child in children:
             with contextlib.suppress(OSError):
                 Path(child.args[-1]).unlink()
     code = 130 if 130 in codes or any(c < 0 for c in codes) else max(codes)
-    AgentEvents(out, lock, "").emit("run_end", agents=list(dict.fromkeys(names)), exit_code=code)
+    if not broken.is_set():
+        AgentEvents(out, lock, "").emit("run_end", agents=list(dict.fromkeys(names)), exit_code=code)
     return code
 
 

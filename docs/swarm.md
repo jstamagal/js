@@ -184,8 +184,8 @@ Events go to stdout as JSON lines, every one carrying `agent`. The runner adds
 `run_end`; see
 [headless-json.md](headless-json.md). An agent whose turn raises ends with
 `agent_end reason=error` and the others go on. The process ends when every
-agent has stopped or retired, so a `restart` has to land while another agent
-is still running. `SIGTERM` and `SIGINT` cancel every agent,
+agent of the swarm, in every runner, has stopped or retired, so a `restart`
+has to land while another agent is still running. `SIGTERM` and `SIGINT` cancel every agent,
 persist every session and exit 130.
 
 What an agent writes to stderr (a warning, an `on` handler's output, a
