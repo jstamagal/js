@@ -439,7 +439,8 @@ COMPACTION_REUSE_CACHE
     on: the summary request is the conversation's last request plus the
     summary instructions, so it reads the history from the prompt cache
     and sees whole tool results. Needs COMPACTION_EXTERNAL_MODEL same.
-    off, or when that request can't be used: a plain-text transcript.
+    off, or when that request can't be used, is refused, or is answered
+    with anything but the checkpoint: a plain-text transcript.
 
 COMPACTION_FAILURES_MAX
     Failed automatic summaries in a row that pause automatic compaction. A

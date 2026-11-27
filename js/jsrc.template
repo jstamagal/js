@@ -682,7 +682,8 @@
 # summary instructions appended, so it reads the history from the prompt
 # cache and sees every tool result whole. It needs the summary model to be
 # the conversation's (COMPACTION_EXTERNAL_MODEL same). off, or when that
-# request can't be used: the history goes out as a plain-text transcript.
+# request can't be used, is refused, or is answered with anything but the
+# checkpoint: the history goes out as a plain-text transcript.
 #set COMPACTION_REUSE_CACHE on
 
 # After this many automatic summaries fail in a row, automatic compaction

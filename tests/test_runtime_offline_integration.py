@@ -239,12 +239,12 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
 def test_scoped_model_factory_runs_tools_and_summary_compaction(tmp_path):
     import asyncio
 
-    from js import model_client, routing
+    from js import compaction_summary, model_client, routing
 
     replies = iter([
         _make_assistant_msg("", [ModelToolCall("observe-1", "observe", "{}")]),
         ai.assistant_message("observed"),
-        ai.assistant_message("summary"),
+        ai.assistant_message("\n".join(f"## {heading}\n-" for heading in compaction_summary._COMPACTION_HEADINGS)),
     ])
     calls, created, closed, ran = [], [], [], []
 

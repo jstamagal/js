@@ -265,8 +265,8 @@ def _max_output(cfg: Config, model: str, provider_id: str | None) -> int:
 async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history: Sequence[dict],
                               focus: str, guidance: str) -> str | None:
     """The summary from ``replayed`` plus the instructions, sent as ``cached``
-    went out but for its output cap; None when the request is too long for
-    the model or its reply holds no summary."""
+    went out but for its output cap; None when the provider refuses the
+    request or its reply is not a checkpoint under the six headings."""
     prompt = _replay_prompt(history, focus, guidance)
     if (flight := ACTIVE_FLIGHT.get()) is not None:
         flight.record("summary_replay", model=cached.model, replayed_messages=len(replayed), prompt=prompt)
@@ -292,13 +292,19 @@ async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history:
             stream_limits=cached.stream_limits,
         ), retry.Budget.from_settings(getattr(cfg, "settings", None)))
     except ai.ProviderAPIError as exc:
-        if not provider_errors.is_context_overflow_error(exc):
-            raise
+        # Too long, or a shape this endpoint does not take (two user messages
+        # in a row): the transcript request is one user message.
         if (flight := ACTIVE_FLIGHT.get()) is not None:
-            flight.record("summary_replay_overflow", error=str(exc))
+            flight.record("summary_replay_refused", error=str(exc),
+                          overflow=provider_errors.is_context_overflow_error(exc))
         return None
     _record_response(result, model=cached.model, provider_id=cached.provider_id, cfg=cfg)
-    return _summary_text(result)
+    text = _summary_text(result)
+    if text is None or not all(f"## {heading}" in text for heading in _COMPACTION_HEADINGS):
+        # The conversation's own system prompt is in force here, so a reply
+        # can be the agent carrying on; only a checkpoint replaces history.
+        return None
+    return text
 
 
 def _replayable(cfg: Config, cached: Any, route: Any) -> bool:

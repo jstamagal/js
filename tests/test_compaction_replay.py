@@ -8,10 +8,11 @@ import pytest
 from test_compaction_breaker_and_cache import _config, _turn
 from test_lazy_tool_discovery import _result
 
-from js import compaction, context_window, model_client, runtime
+from js import compaction, compaction_summary, context_window, model_client, runtime
 from js.toolkit import ToolContext
 
 BODY = "HEAD" + "y" * 10_000 + "TAIL"
+CHECKPOINT = "SUMMARY\n" + "\n".join(f"## {h}\n-" for h in compaction_summary._COMPACTION_HEADINGS)
 
 
 @pytest.fixture(autouse=True)
@@ -34,10 +35,11 @@ def _history() -> list[dict]:
 class _Provider:
     """Answers turns with "done" and summaries with "SUMMARY", keeping every request."""
 
-    def __init__(self, *, overflow_replay: bool = False):
+    def __init__(self, *, overflow_replay: bool = False, refuse_replay: str = "", replay_reply: str = CHECKPOINT):
         self.turns: list[dict] = []
         self.summaries: list[dict] = []
-        self.overflow_replay = overflow_replay
+        self.refuse_replay = "context_length_exceeded" if overflow_replay else refuse_replay
+        self.replay_reply = replay_reply
 
     def is_summary(self, kwargs) -> bool:
         last = kwargs["messages"][-1]
@@ -50,9 +52,11 @@ class _Provider:
             self.turns.append(kwargs)
             return _result(text="done")
         self.summaries.append(kwargs)
-        if self.overflow_replay and len(kwargs["messages"]) > 1:
-            raise ai.ProviderAPIError("context_length_exceeded", provider="openai")
-        return _result(text="SUMMARY")
+        if len(kwargs["messages"]) == 1:
+            return _result(text=CHECKPOINT)
+        if self.refuse_replay:
+            raise ai.ProviderAPIError(self.refuse_replay, provider="openai")
+        return _result(text=self.replay_reply)
 
 
 def _dump(messages) -> list[dict]:
@@ -131,6 +135,25 @@ def test_replay_too_long_falls_back_to_the_transcript(monkeypatch, tmp_path):
     replay, transcript = provider.summaries
     assert len(replay["messages"]) > 1
     assert len(transcript["messages"]) == 1
+
+
+def test_a_replay_the_endpoint_refuses_for_its_shape_falls_back_to_the_transcript(monkeypatch, tmp_path):
+    provider = _Provider(refuse_replay="Conversation roles must alternate user/assistant/user/assistant")
+    cfg, context, messages = _setup(monkeypatch, tmp_path, provider)
+    assert compaction.compacted(_compact(cfg, messages, context))
+    replay, transcript = provider.summaries
+    assert len(replay["messages"]) > 1
+    assert len(transcript["messages"]) == 1
+
+
+def test_a_replay_answered_as_the_agent_is_not_the_summary(monkeypatch, tmp_path):
+    provider = _Provider(replay_reply='{"status": "working", "next": "run the tests"}')
+    cfg, context, messages = _setup(monkeypatch, tmp_path, provider)
+    assert compaction.compacted(_compact(cfg, messages, context))
+    replay, transcript = provider.summaries
+    assert len(replay["messages"]) > 1 and len(transcript["messages"]) == 1
+    assert not any('"status": "working"' in str(m.get("content", "")) for m in messages)
+    assert any(str(m.get("content", "")).startswith("<compaction-summary>\nSUMMARY") for m in messages)
 
 
 def test_compaction_forgets_the_request_it_rewrote(monkeypatch, tmp_path):
