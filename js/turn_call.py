@@ -337,7 +337,8 @@ class ModelCaller:
             tool_names=[spec["function"]["name"] for spec in specs],
         )
         cache_keepalive.remember(self._context, request, messages=convo.ai, tools=ai_tools,
-                                 stream_limits=self._limits.stream)
+                                 stream_limits=self._limits.stream, history=convo.messages,
+                                 render=convo.render)
         pending = model_client.stream_model_async(
             model_id=request.model,
             provider_id=request.provider_id,

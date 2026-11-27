@@ -100,7 +100,7 @@ persists each completed turn.
 | `js/compaction.py` | the "history is too big" decision and the summary that replaces it (`compact_now`) |
 | `js/compaction_settings.py` | the compaction settings a run reads, each with its jsrc default when unset or out of range |
 | `js/microcompact.py` | old tool results cleared in place, for overflow recovery (`recover_overflow`) or a turn's budget (`clear_for_budget`) |
-| `js/compaction_summary.py` | the summary request: the conversation serialized for the summarizer, the prompt, the call |
+| `js/compaction_summary.py` | the summary request: the last request replayed with the instructions appended (`replay_messages`), else the conversation as a plain-text transcript; the prompt, the call |
 | `js/compaction_flight.py` | the flight record of every compaction attempt (`flight_log_dir`, `printing`) |
 | `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
 | `js/headless.py` | `js -p --json-stream`: typed runtime events as JSON Lines (docs/headless-json.md); `json_run` wraps a run so stdout ends with its result |

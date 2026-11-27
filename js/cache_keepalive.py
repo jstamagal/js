@@ -63,7 +63,10 @@ class CachedRequest:
     """One main-conversation model request as it went out: everything
     `model_client.stream_model_async` was given but its callbacks and output
     cap. ``sent_at`` is when it was sent; ``meter`` the usage meter it was
-    charged under."""
+    charged under. ``history`` holds the history records ``messages`` were
+    built from, and ``render`` builds the SDK messages of records added after
+    them, so a compaction summary can extend this request
+    (`compaction_summary.replay_messages`)."""
 
     model: str
     provider_id: str | None
@@ -81,10 +84,13 @@ class CachedRequest:
     tools: tuple | None
     sent_at: float
     meter: usage_mod.Meter | None = None
+    history: tuple = ()
+    render: Callable[[list[dict]], list] | None = None
 
 
 def remember(context: Any, request: Any, *, messages: list, tools: list | None,
-             stream_limits: Any, now: float | None = None) -> None:
+             stream_limits: Any, now: float | None = None, history: list[dict] | None = None,
+             render: Callable[[list[dict]], list] | None = None) -> None:
     """Record on ``context`` the request a turn is about to send. ``request``
     is the turn's `turn_call.ModelRequest`."""
     context.cached_request = CachedRequest(
@@ -94,6 +100,7 @@ def remember(context: Any, request: Any, *, messages: list, tools: list | None,
         cache_key=request.cache_key, settings=request.settings, stream_limits=stream_limits,
         messages=tuple(messages), tools=tuple(tools) if tools else None,
         sent_at=time.time() if now is None else now, meter=usage_mod.current_meter(),
+        history=tuple(history or ()), render=render,
     )
 
 

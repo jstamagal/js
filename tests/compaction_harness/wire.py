@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import sys
 import threading
 from dataclasses import replace
@@ -34,14 +35,22 @@ class Server(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         owner = self.server.owner
         owner.requests.append(body)
-        is_summary = len(body["messages"]) == 1 and "Summarize this js session" in str(
+        transcript = len(body["messages"]) == 1 and "Summarize this js session" in str(
             body["messages"][0]["content"]
         )
-        if is_summary:
-            content = str(body["messages"][0]["content"])
+        # A summary that reuses the cache is the conversation plus the summary
+        # instructions as its last message.
+        replayed = "checkpoint of this session for context compaction" in str(
+            body["messages"][-1]["content"]
+        )
+        if transcript or replayed:
+            content = (str(body["messages"][0]["content"]) if transcript
+                       else " ".join(str(m.get("content")) for m in body["messages"]))
             source = facts(content)
+            # A previous summary is a few words; only the history it updates is long.
+            history = facts(re.sub(r"<previous-summary>.*?</previous-summary>", "", content, flags=re.S))
             owner.summary_calls += 1
-            if len(source) > 2:
+            if len(history) > 2:
                 data = json.dumps(
                     {
                         "error": {
