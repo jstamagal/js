@@ -59,8 +59,12 @@ class Worker:
         # Set by the subagent's turn once it has them.
         self.session_file: Path | None = None
         self.messages: list[dict] | None = None
-        # Lines sent to it while it runs, read at its next tool boundary.
+        # Lines sent to it while it runs, read at its next tool boundary, or
+        # as a turn of their own when it makes no more tool calls.
         self.inbox: list[str] = []
+        self._inbox_lock = threading.Lock()
+        # False once its turn has found the inbox empty for the last time.
+        self.reading = True
         self._task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self.stopping = False
@@ -72,13 +76,25 @@ class Worker:
     def running(self) -> bool:
         return self.state in ("waiting", "running")
 
-    def take_inbox(self) -> dict | None:
-        """The lines sent since its last model call, as one user message."""
-        if not self.inbox:
+    def send(self, text: str) -> bool:
+        """Queue ``text`` for its next read; False when it reads no more."""
+        with self._inbox_lock:
+            if not self.reading:
+                return False
+            self.inbox.append(text)
+            return True
+
+    def take_inbox(self, *, last: bool = False) -> dict | None:
+        """The lines sent since its last read, as one user message. ``last``
+        is its turn's read after its answer: with nothing there, it reads no
+        more and `send` refuses."""
+        with self._inbox_lock:
+            lines, self.inbox = self.inbox, []
+            if last and not lines:
+                self.reading = False
+        if not lines:
             return None
-        text = "\n\n".join(self.inbox)
-        self.inbox.clear()
-        return {"role": "user", "content": text}
+        return {"role": "user", "content": "\n\n".join(lines)}
 
     def stop(self) -> bool:
         """Cancel this subagent alone; False when it is not running."""
@@ -125,6 +141,15 @@ def _one_line(text: str, width: int) -> str:
 
 # The worker of the subagent the current coroutine runs, inside a job.
 CURRENT_WORKER: ContextVar[Worker | None] = ContextVar("js_task_worker", default=None)
+
+
+def claim_worker() -> Worker | None:
+    """The job worker the calling subagent turn is, once: the subagents that
+    turn starts are no worker of the job, and get None."""
+    worker = CURRENT_WORKER.get()
+    if worker is not None:
+        CURRENT_WORKER.set(None)
+    return worker
 
 
 class TaskJob:

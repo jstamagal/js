@@ -522,3 +522,143 @@ def test_kill_of_one_subagent_leaves_the_others_running(chatty, ctx):
     result = job.future.result(timeout=5)
     assert "result of beta" in result and "STOPPED" in result
     assert chatty.cancelled == [1]
+
+
+def _agent(tmp_path, name: str = "worker") -> None:
+    agent = tmp_path / ".js" / "agents" / name
+    agent.mkdir(parents=True)
+    (agent / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("WORKER\n", encoding="utf-8")
+
+
+def _real_turns(monkeypatch, tmp_path, turn) -> ToolContext:
+    """A main agent's context whose subagents run their own turns through
+    ``turn``, in place of the model."""
+    from js.config import from_env
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(task_jobs, "_JOBS", {})
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    _agent(tmp_path)
+    main = ToolContext(cwd=tmp_path)
+    main.config = from_env()
+    main.delivers_task_results = True
+    return main
+
+
+def test_a_subagent_that_launches_its_own_stays_the_one_its_handle_reaches(monkeypatch, tmp_path, loop_sup):
+    loop, _sup = loop_sup
+    release = asyncio.Event()
+    inner_ended = threading.Event()
+
+    async def turn(cfg, system, messages, telemetry, *, tool_context=None, **kwargs):
+        if messages[-1]["content"] == "outer":
+            inner = await subagents.task_async(tasks=["inner"], agent_id="worker", context=tool_context)
+            inner_ended.set()
+            await release.wait()
+            messages.append({"role": "assistant", "content": f"outer saw {inner}"})
+        else:
+            messages.append({"role": "assistant", "content": "inner answer"})
+
+    main = _real_turns(monkeypatch, tmp_path, turn)
+
+    async def launch() -> str:
+        return await subagents.task_async(tasks=["outer"], agent_id="worker", context=main)
+
+    handle = _handle(asyncio.run_coroutine_threadsafe(launch(), loop).result(timeout=10))
+    [worker] = _job(handle, main).workers
+    assert inner_ended.wait(10)
+
+    # The inner subagent has come and gone: the handle still shows the outer one.
+    assert [m["content"] for m in worker.messages if m["role"] == "user"] == ["outer"]
+    outer_session = worker.session_file
+    loop.call_soon_threadsafe(release.set)
+    assert _job(handle, main).future.result(timeout=10) == "outer saw inner answer"
+    assert worker.session_file == outer_session
+
+
+def test_a_message_sent_after_a_subagents_last_tool_call_is_its_next_turn(monkeypatch, tmp_path, loop_sup):
+    loop, _sup = loop_sup
+    answering = threading.Event()
+    release = asyncio.Event()
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        # No tool call, so no tool boundary reads what is sent meanwhile.
+        if len([m for m in messages if m["role"] == "user"]) == 1:
+            answering.set()
+            await release.wait()
+        messages.append({"role": "assistant", "content": f"answer to {messages[-1]['content']}"})
+
+    main = _real_turns(monkeypatch, tmp_path, turn)
+
+    async def launch() -> str:
+        return await subagents.task_async(tasks=["alpha"], agent_id="worker", context=main)
+
+    handle = _handle(asyncio.run_coroutine_threadsafe(launch(), loop).result(timeout=10))
+    assert answering.wait(10)
+    assert subagents.task(action="send", handle=handle, message="and beta", context=main).startswith("sent to")
+    loop.call_soon_threadsafe(release.set)
+
+    assert _job(handle, main).future.result(timeout=10) == "answer to and beta"
+    [worker] = _job(handle, main).workers
+    assert not worker.send("too late")
+
+
+def test_a_job_worker_is_claimed_once_and_not_by_what_that_turn_starts():
+    seen: list = []
+
+    async def main() -> None:
+        worker = object()
+        task_jobs.CURRENT_WORKER.set(worker)
+        seen.append(task_jobs.claim_worker() is worker)
+        seen.append(await asyncio.ensure_future(_claims()))
+
+    async def _claims():
+        return task_jobs.claim_worker()
+
+    asyncio.run(main())
+    assert seen == [True, None]
+
+
+def test_a_result_due_with_a_typed_line_that_cannot_be_sent_still_reaches_the_model(workers, ctx, monkeypatch, tmp_path):
+    from js import attach
+
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    steered: list = []
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def turn(cfg, system, messages, telemetry, *, steer=None, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+            steered.append(await steer())
+
+    build = attach.build_user_message
+
+    def refusing(text, *args, **kwargs):
+        if "broken" in text:
+            raise ValueError("no such attachment")
+        return build(text, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    monkeypatch.setattr(attach, "build_user_message", refusing)
+
+    async def lines(on_line) -> None:
+        await on_line("first")
+        await asyncio.wait_for(entered.wait(), 10)
+        job = _job(_handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)), ctx)
+        workers.release.set()
+        while job.running():
+            await asyncio.sleep(0.01)
+        await on_line("a broken line")
+        release.set()
+
+    run_repl(monkeypatch, cfg, lines)
+
+    [message] = steered
+    assert "result of alpha" in message["content"]

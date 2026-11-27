@@ -623,7 +623,8 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
             raise
         except ValueError as e:
             msgs.say(msgs.FAILED, error=e)
-            return None
+            # The results taken above still go to the model.
+            return {"role": "user", "content": "\n\n".join(finished), "steered": True} if finished else None
         if (sink := transcript_mod.transcript_sink(telemetry)) is not None:
             sink.emit(output.event("transcript_user", text=text))
         return _with_notes({**built, "steered": True}, finished)
