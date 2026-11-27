@@ -304,11 +304,14 @@ async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history:
 def _replayable(cfg: Config, cached: Any, route: Any) -> bool:
     """Whether ``cached`` can carry the summary: reuse is on, the summarizer
     is the model the request went to, at the same provider, endpoint and
-    key, and the output cap leaves room above a fixed thinking budget."""
+    key and under the same headers, and the output cap leaves room above a
+    fixed thinking budget."""
     if cached is None or not compaction_settings.get_bool(cfg, "COMPACTION_REUSE_CACHE"):
         return False
     if ((route.model, route.provider_id, route.base_url, route.api_key)
             != (cached.model, cached.provider_id, cached.base_url, cached.api_key)):
+        return False
+    if model_client.turn_headers(route.headers, cfg) != dict(cached.headers or {}):
         return False
     return (cached.thinking_budget is None
             or _max_output(cfg, cached.model, cached.provider_id) > cached.thinking_budget)

@@ -140,11 +140,12 @@ def test_compaction_forgets_the_request_it_rewrote(monkeypatch, tmp_path):
     assert context.cached_request is None
 
 
-def test_a_changed_endpoint_or_key_sends_the_transcript(monkeypatch, tmp_path):
-    for change in ({"base_url": "https://elsewhere.invalid/v1"}, {"api_key": "another-key"}):
+def test_a_changed_endpoint_key_or_header_sends_the_transcript(monkeypatch, tmp_path):
+    for change in ({"base_url": "https://elsewhere.invalid/v1"}, {"api_key": "another-key"},
+                   {"headers": {"X-Tenant": "another"}}):
         provider = _Provider()
         cfg, context, messages = _setup(monkeypatch, tmp_path, provider)
-        # The last request went to another endpoint, or under another key, than a request sent now would.
+        # The last request went to another endpoint, or under another key or header, than one sent now would.
         context.cached_request = replace(context.cached_request, **change)
         assert compaction.compacted(_compact(cfg, messages, context))
         (summary,) = provider.summaries
@@ -163,3 +164,27 @@ def test_the_summary_output_cap_stays_under_the_models_output_limit(monkeypatch,
     assert compaction.compacted(_compact(cfg, messages, context))
     (transcript,) = provider.summaries
     assert transcript["params"].output.max_tokens == 4096
+
+
+def test_extra_headers_are_replayed_until_they_change(monkeypatch, tmp_path):
+    def after_a_turn(provider):
+        cfg = replace(_config(tmp_path, {"COMPACTION_KEEP_RECENT_TOKENS": 10, "COMPACTION_MIN_SAVINGS_TOKENS": 1}),
+                      extra_headers={"X-Tenant": "mine"})
+        context = ToolContext(cwd=tmp_path)
+        monkeypatch.setattr(model_client, "_stream_async", provider)
+        messages = _history()
+        _turn(cfg, messages, context)
+        assert context.cached_request.headers["X-Tenant"] == "mine"
+        return cfg, context, messages
+
+    provider = _Provider()
+    cfg, context, messages = after_a_turn(provider)
+    assert compaction.compacted(_compact(cfg, messages, context))
+    (summary,) = provider.summaries
+    assert len(summary["messages"]) > 1
+
+    provider = _Provider()
+    cfg, context, messages = after_a_turn(provider)
+    assert compaction.compacted(_compact(replace(cfg, extra_headers={"X-Tenant": "theirs"}), messages, context))
+    (summary,) = provider.summaries
+    assert len(summary["messages"]) == 1
