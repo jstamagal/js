@@ -248,6 +248,24 @@ def test_split_summary_folds_the_older_half_into_the_newer(monkeypatch, tmp_path
     assert summary == "part 3"
 
 
+def test_a_newer_half_too_long_beside_the_older_summary_is_summarized_alone(monkeypatch, tmp_path):
+    requests = []
+    overflow = ai.ProviderAPIError("context_length_exceeded", provider="openai")
+
+    async def sdk(**kwargs):
+        text = kwargs["messages"][0].parts[0].text
+        requests.append(text)
+        # Both entries together are too long, and so is the second beside a summary.
+        if ("entry 0" in text and "entry 1" in text) or ("entry 1" in text and "<previous-summary>" in text):
+            raise overflow
+        return _result(text=f"part {len(requests)}")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    messages = [{"role": "user", "content": f"entry {i}"} for i in range(2)]
+    summary = asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", ""))
+    assert summary == "part 2\n\npart 4"
+
+
 # --- cache-aware clearing ------------------------------------------------------
 
 

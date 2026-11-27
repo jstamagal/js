@@ -138,3 +138,28 @@ def test_compaction_forgets_the_request_it_rewrote(monkeypatch, tmp_path):
     cfg, context, messages = _setup(monkeypatch, tmp_path, provider)
     assert compaction.compacted(_compact(cfg, messages, context))
     assert context.cached_request is None
+
+
+def test_a_changed_endpoint_or_key_sends_the_transcript(monkeypatch, tmp_path):
+    for change in ({"base_url": "https://elsewhere.invalid/v1"}, {"api_key": "another-key"}):
+        provider = _Provider()
+        cfg, context, messages = _setup(monkeypatch, tmp_path, provider)
+        # The last request went to another endpoint, or under another key, than a request sent now would.
+        context.cached_request = replace(context.cached_request, **change)
+        assert compaction.compacted(_compact(cfg, messages, context))
+        (summary,) = provider.summaries
+        assert len(summary["messages"]) == 1
+
+
+def test_the_summary_output_cap_stays_under_the_models_output_limit(monkeypatch, tmp_path):
+    provider = _Provider()
+    cfg, context, messages = _setup(monkeypatch, tmp_path, provider)   # the model's limit here is 4096
+    assert compaction.compacted(_compact(cfg, messages, context))
+    (replay,) = provider.summaries
+    assert replay["params"].output.max_tokens == 4096
+
+    provider = _Provider()
+    cfg, context, messages = _setup(monkeypatch, tmp_path, provider, COMPACTION_REUSE_CACHE=False)
+    assert compaction.compacted(_compact(cfg, messages, context))
+    (transcript,) = provider.summaries
+    assert transcript["params"].output.max_tokens == 4096

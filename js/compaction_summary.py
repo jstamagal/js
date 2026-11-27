@@ -23,6 +23,7 @@ from . import (
     media,
     messages as msgs,
     model_client,
+    model_metadata,
     provider_errors,
     retry,
     routing,
@@ -250,10 +251,15 @@ def _record_response(result: Any, *, model: str, provider_id: str | None, cfg: C
                       provider_metadata=getattr(result, "provider_metadata", None))
 
 
-def _max_output(cfg: Config) -> int:
-    return compaction_settings.get_int(
+def _max_output(cfg: Config, model: str, provider_id: str | None) -> int:
+    """The output cap a summary request to ``model`` sends:
+    COMPACTION_SUMMARY_TOKENS_MAX, held to the model's own output limit where
+    that is known."""
+    cap = compaction_settings.get_int(
         cfg, "COMPACTION_SUMMARY_TOKENS_MAX",
         max_value=compaction_settings.get_int(cfg, "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX"))
+    known = model_metadata.resolve_max_output(model, provider_id)
+    return min(cap, known) if known else cap
 
 
 async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history: Sequence[dict],
@@ -272,7 +278,7 @@ async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history:
             provider_api_key=cached.api_key,
             messages=[*replayed, ai.user_message(prompt)],
             tools=list(cached.tools) if cached.tools else None,
-            max_output_tokens=_max_output(cfg),
+            max_output_tokens=_max_output(cfg, cached.model, cached.provider_id),
             reasoning_effort=cached.effort,
             thinking_budget=cached.thinking_budget,
             on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
@@ -297,13 +303,15 @@ async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history:
 
 def _replayable(cfg: Config, cached: Any, route: Any) -> bool:
     """Whether ``cached`` can carry the summary: reuse is on, the summarizer
-    is the model and provider the request went to, and the output cap leaves
-    room above a fixed thinking budget."""
+    is the model the request went to, at the same provider, endpoint and
+    key, and the output cap leaves room above a fixed thinking budget."""
     if cached is None or not compaction_settings.get_bool(cfg, "COMPACTION_REUSE_CACHE"):
         return False
-    if (route.model, route.provider_id) != (cached.model, cached.provider_id):
+    if ((route.model, route.provider_id, route.base_url, route.api_key)
+            != (cached.model, cached.provider_id, cached.base_url, cached.api_key)):
         return False
-    return cached.thinking_budget is None or _max_output(cfg) > cached.thinking_budget
+    return (cached.thinking_budget is None
+            or _max_output(cfg, cached.model, cached.provider_id) > cached.thinking_budget)
 
 
 async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, guidance: str, *,
@@ -346,7 +354,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_api_key=route.api_key,
                 messages=[ai.user_message(prompt)],
                 tools=None,
-                max_output_tokens=_max_output(cfg),
+                max_output_tokens=_max_output(cfg, route.model, route.provider_id),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=model_client.turn_headers(route.headers, cfg),
@@ -367,7 +375,14 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
             # previous summary the newer half updates, so the result is one
             # summary under one set of headings.
             older = await summarize_chunk(head[:middle], depth + 1, previous)
-            return await summarize_chunk(head[middle:], depth + 1, older)
+            try:
+                return await summarize_chunk(head[middle:], depth + 1, older)
+            except ai.ProviderAPIError as again:
+                if not provider_errors.is_context_overflow_error(again):
+                    raise
+                # The newer half has no room for the older half's summary
+                # beside it: it is summarized alone and the two are joined.
+                return older + "\n\n" + await summarize_chunk(head[middle:], depth + 1, "")
         _record_response(result, model=route.model, provider_id=route.provider_id, cfg=cfg)
         text = _summary_text(result)
         if text is None:
