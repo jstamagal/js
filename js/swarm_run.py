@@ -172,12 +172,13 @@ def _slots(cfg: Any, spec_slots: Any) -> int:
         return 0
 
 
-def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
+def _configure(spec: AgentSpec, *, save_session: bool = True) -> run_assembly.SettledRun:
     """The settled run of one agent: the bus tools on its surface and its
-    seat file after its system prompt."""
+    seat file after its system prompt. ``save_session`` off settles it
+    without making its session file."""
     extras = tuple(f"{k}={v}" for k, v in spec.opts.items())
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
-    cfg = from_env(save_session=True, sources=InvocationSources(extras=extras), agent_id=spec.agent,
+    cfg = from_env(save_session=save_session, sources=InvocationSources(extras=extras), agent_id=spec.agent,
                    session=spec.session, cwd=cwd)
     if spec.effort is not None:
         # The spec's own effort is set for this run like a flag; agent.yaml's
@@ -453,6 +454,21 @@ def processes_for(agents: int, setting: Any, slots: int = 0) -> int:
     return max(1, min(agents, wanted))
 
 
+# Seconds a runner whose launch is abandoned has to end before it is killed.
+RUNNER_END_WAIT = 5.0
+
+
+def _settled_slots(raw: dict) -> int:
+    """The cap a spec with no ``slots`` runs under: SWARM_ACTIVE_MAX as its
+    first agent's run settles it, which is the cap one runner takes; the
+    live setting when that run does not settle."""
+    try:
+        first = AgentSpec.from_dict((raw.get("agents") or [{}])[0])
+        return _slots(_configure(first, save_session=False).config, None)
+    except Exception:  # noqa: BLE001 - the agent's own runner reports why it does not settle
+        return _slots(None, _settings.live_value("SWARM_ACTIVE_MAX") or 0)
+
+
 def _shard_specs(raw: dict, count: int) -> list[dict]:
     """The spec split into ``count`` specs that each run in one process:
     the agents dealt out in turn, and a ``slots`` cap dealt out the same way."""
@@ -501,12 +517,17 @@ def run_sharded(path: str | os.PathLike[str], count: int, out: TextIO | None = N
             children.append(subprocess.Popen([sys.executable, "-m", "js.swarm", "run", str(shard)],
                                              stdout=subprocess.PIPE, text=True, encoding="utf-8"))
     except BaseException:
-        # A runner that could not start ends the ones already started.
+        # A runner that could not start ends the ones already started. Their
+        # stdout is closed first, so one blocked writing to it is not waited on.
         for child in children:
+            child.stdout.close()
             child.terminate()
         for child in children:
-            child.wait()
-            child.stdout.close()
+            try:
+                child.wait(timeout=RUNNER_END_WAIT)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
         for shard in written:
             shard.unlink(missing_ok=True)
         raise
@@ -561,15 +582,15 @@ def main(path: str) -> int:
     try:
         paths.configure_home()
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        agents = len(raw.get("agents") or [])
+        processes = raw["processes"] if "processes" in raw else _settings.live_value("SWARM_PROCESSES")
         slots = raw.get("slots")
-        if slots is None:
-            slots = _settings.live_value("SWARM_ACTIVE_MAX")
-        count = processes_for(len(raw.get("agents") or []), raw["processes"] if "processes" in raw
-                              else _settings.live_value("SWARM_PROCESSES"), int(slots or 0))
+        if slots is None and processes_for(agents, processes) > 1:
+            # One cap for the whole swarm, dealt out over its runners.
+            slots = _settled_slots(raw)
+        count = processes_for(agents, processes, int(slots or 0))
         if count > 1:
-            # A cap is dealt out over the runners. With none here, the spec
-            # goes on as written and each runner settles its own, as `run` does.
-            return run_sharded(path, count, raw={**raw, "slots": int(slots)} if int(slots or 0) > 0 else raw)
+            return run_sharded(path, count, raw={**raw, "slots": int(slots or 0)})
         return run(path)
     except (OSError, ValueError) as exc:
         print(msgs.SWARM_RUN_FAILED.format(exc=exc), file=sys.stderr)
