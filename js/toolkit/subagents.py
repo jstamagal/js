@@ -367,11 +367,12 @@ async def _run_one_task_async(
                 window.finished(resume)
 
     earlier = [answer for answer in answered if answer]
-    if error is not None:
-        # A further turn that failed leaves the answers before it.
-        return "\n\n".join([*earlier, error])
+    if error is not None and not earlier:
+        return error
 
-    final = "\n\n".join([*earlier, chat.answer().strip() or "(no final response)"])
+    # A further turn that failed leaves the answers before it, its error last.
+    last = error if error is not None else chat.answer().strip() or "(no final response)"
+    final = "\n\n".join([*earlier, last])
     # Give each child a FAIR SHARE of the aggregate budget, not the whole thing.
     # The parent's dispatch layer re-clips the joined TASK_RESULTS at
     # max_tool_result_bytes; if every child could fill that full budget, one fat
