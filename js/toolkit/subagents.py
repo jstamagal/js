@@ -304,6 +304,8 @@ async def _run_one_task_async(
                 output.sink_of(telemetry).emit(output.event("subagent_start", **launch))
         started = time.monotonic()
         call_stats: list[dict] = []
+        # Its answers to the turns before the one it ended on.
+        answered: list[str] = []
         outcome = "error"
         error: str | None = None
         turn_kwargs = {
@@ -327,8 +329,10 @@ async def _run_one_task_async(
                 await agent_messages.initialize(cfg, prompt_spec, chat.messages, telemetry, tool_registry=registry,
                                                 tool_context=child_context, checkpoint=chat.save, **turn_kwargs)
                 await chat.turn({"role": "user", "content": prompt}, call_stats=call_stats, **turn_kwargs)
-                # What was sent to it after its last tool call is its next turn.
+                # What was sent to it after its last tool call is its next
+                # turn; the answer it had given stays in its result.
                 while job_worker is not None and (sent := job_worker.take_inbox(last=True)) is not None:
+                    answered.append(chat.answer().strip())
                     await chat.turn(sent, call_stats=call_stats, **turn_kwargs)
             outcome = "ok"
         except snippets.SnippetError:
@@ -362,10 +366,12 @@ async def _run_one_task_async(
                 # runs as its own job, after this one has returned.
                 window.finished(resume)
 
+    earlier = [answer for answer in answered if answer]
     if error is not None:
-        return error
+        # A further turn that failed leaves the answers before it.
+        return "\n\n".join([*earlier, error])
 
-    final = chat.answer().strip() or "(no final response)"
+    final = "\n\n".join([*earlier, chat.answer().strip() or "(no final response)"])
     # Give each child a FAIR SHARE of the aggregate budget, not the whole thing.
     # The parent's dispatch layer re-clips the joined TASK_RESULTS at
     # max_tool_result_bytes; if every child could fill that full budget, one fat
