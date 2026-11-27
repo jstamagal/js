@@ -930,19 +930,23 @@ def test_two_runners_recruiting_one_name_at_once_start_one_agent(tmp_path, monke
     assert added == ["twig"]
 
 
-def test_a_sharded_swarm_runs_under_the_one_cap_its_first_agent_settles(tmp_path, monkeypatch):
+def test_a_sharded_swarm_runs_under_the_one_cap_its_first_agent_has(tmp_path, monkeypatch):
     # No ``slots`` in the spec and no cap in the launcher's own settings: the
     # cap is the one a single runner would take from its first agent's run.
     _agent_dir(tmp_path, monkeypatch)
+    expanded: list = []
+    monkeypatch.setattr(swarm_run.run_assembly, "expand", lambda spec, cfg: expanded.append(spec) or spec)
     monkeypatch.setenv("JS_SWARM_PROCESSES", "2")
-    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go", "cwd": str(tmp_path),
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go", "cwd": str(tmp_path), "session": f"s-a{i}",
                "opts": {"SWARM_ACTIVE_MAX": "3"} if i == 0 else {}} for i in range(4)]
     given: list[dict] = []
     monkeypatch.setattr(swarm_run, "run_sharded", lambda path, count, raw: given.append(raw) or 0)
 
     assert swarm_run.main(_spec(tmp_path, agents)) == 0
     assert [shard["slots"] for shard in swarm_run._shard_specs(given[0], 2)] == [2, 1]
-    assert not list(tmp_path.rglob("*.jsonl"))  # settling the cap made no session
+    # Reading the cap made no session and expanded no prompt: the inline
+    # directives of the agent's prompt run in its runner alone.
+    assert not list(tmp_path.rglob("*.jsonl")) and not expanded
 
     # A cap of one is one runner: there is no second to hold a slot of it.
     agents[0]["opts"] = {"SWARM_ACTIVE_MAX": "1"}
