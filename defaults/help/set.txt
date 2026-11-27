@@ -401,11 +401,19 @@ COMPACTION_EXTERNAL_MODEL
     Model used to write the compaction summary; 'same' = active model.
 
 COMPACTION_SUMMARY_TOKENS_MAX
-    Max tokens for the compaction summary. Capped at 8192.
+    Max tokens for the compaction summary. Capped at
+    COMPACTION_SUMMARY_REQUEST_TOKENS_MAX.
 
 COMPACTION_SUMMARY_RESULT_CHARS_MAX
     Longest tool result, in characters, that a summary request carries
     whole; a longer one keeps its head and tail. 0 = whole results.
+    Applies to the plain-text summary request only.
+
+COMPACTION_REUSE_CACHE
+    on: the summary request is the conversation's last request plus the
+    summary instructions, so it reads the history from the prompt cache
+    and sees whole tool results. Needs COMPACTION_EXTERNAL_MODEL same.
+    off, or when that request can't be used: a plain-text transcript.
 
 COMPACTION_FAILURES_MAX
     Failed automatic summaries in a row that pause automatic compaction. A

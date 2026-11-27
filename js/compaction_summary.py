@@ -1,9 +1,18 @@
-"""The summary a compaction replaces history with: the operator's hint command, the conversation serialized for the summarizer, the prompt, and the summarizer's call."""
+"""The summary a compaction replaces history with: the operator's hint command, the prompt, and the summarizer's call.
+
+The summary request is the conversation's last request extended to the
+current history, with the summary instructions as one more user message
+(`replay_messages`). That request starts with the prefix the provider just
+cached, so the summary reads it from the cache, and the summarizer sees every
+tool result whole. Without such a request (another summarizer model, a history
+rewritten since, ``COMPACTION_REUSE_CACHE`` off), or when it does not fit, the
+history goes out as a plain-text transcript in a request of its own."""
 
 from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import ai
@@ -187,7 +196,125 @@ def _summary_prompt(conversation: str, previous: str, focus: str, guidance: str,
     )
 
 
-async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, guidance: str) -> str:
+def replay_messages(cached: Any, history: Sequence[dict]) -> list | None:
+    """The SDK messages of ``cached`` (a `cache_keepalive.CachedRequest`)
+    followed by those of the records ``history`` has added since, or None
+    when ``history`` no longer starts with the records that request was built
+    from."""
+    if cached is None or cached.render is None:
+        return None
+    sent = cached.history
+    if len(history) < len(sent) or any(a != b for a, b in zip(sent, history, strict=False)):
+        return None
+    added = list(history[len(sent):])
+    return [*cached.messages, *(cached.render(added) if added else [])]
+
+
+def _replay_prompt(history: Sequence[dict], focus: str, guidance: str) -> str:
+    headings = "\n".join(f'## {h}' for h in _COMPACTION_HEADINGS)
+    has_previous = any(
+        m.get("role") == "user" and isinstance(m.get("content"), str) and m["content"].startswith(_SUMMARY_OPEN)
+        for m in history
+    )
+    task = snippets.render('compaction-replay-update' if has_previous else 'compaction-start')
+    extra = ""
+    if focus:
+        extra += f'\nFocus: {focus.strip()}\n'
+    if guidance:
+        extra += f'\nPre-hook guidance/stdout:\n{guidance}\n'
+    return snippets.render('compaction-replay', TASK=task, HEADINGS=headings, EXTRA=extra)
+
+
+def _summary_text(result: Any) -> str | None:
+    """The summary in ``result``, or None when the reply is empty or calls a
+    tool; raises ValueError when it is cut short."""
+    incomplete = (getattr(result, "incomplete_reason", None)
+                  or provider_errors.incomplete_reason_from_metadata(getattr(result, "provider_metadata", None)))
+    finish = str(getattr(result, "finish_reason", ""))
+    if incomplete or finish.startswith("incomplete") or provider_errors.is_max_output_incomplete(finish):
+        raise ValueError(msgs.SUMMARY_RESPONSE_INCOMPLETE.words(value=incomplete or finish))
+    text = result.text.strip()
+    if not text or getattr(result, "tool_calls", None):
+        return None
+    return text
+
+
+def _record_response(result: Any, *, model: str, provider_id: str | None, cfg: Config) -> None:
+    usage_mod.record(getattr(result, "usage", None), model=model, provider_id=provider_id,
+                     session_file=getattr(cfg, "session_file", None))
+    if (flight := ACTIVE_FLIGHT.get()) is not None:
+        flight.record("summary_response", text=result.text,
+                      usage=getattr(result, "usage", None),
+                      finish_reason=getattr(result, "finish_reason", None),
+                      incomplete_reason=getattr(result, "incomplete_reason", None),
+                      provider_metadata=getattr(result, "provider_metadata", None))
+
+
+def _max_output(cfg: Config) -> int:
+    return compaction_settings.get_int(
+        cfg, "COMPACTION_SUMMARY_TOKENS_MAX",
+        max_value=compaction_settings.get_int(cfg, "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX"))
+
+
+async def _summarize_replayed(cfg: Config, cached: Any, replayed: list, history: Sequence[dict],
+                              focus: str, guidance: str) -> str | None:
+    """The summary from ``replayed`` plus the instructions, sent as ``cached``
+    went out but for its output cap; None when the request is too long for
+    the model or its reply holds no summary."""
+    prompt = _replay_prompt(history, focus, guidance)
+    if (flight := ACTIVE_FLIGHT.get()) is not None:
+        flight.record("summary_replay", model=cached.model, replayed_messages=len(replayed), prompt=prompt)
+    try:
+        result = await retry.call(lambda: model_client.stream_model_async(
+            model_id=cached.model,
+            provider_id=cached.provider_id,
+            provider_base_url=cached.base_url,
+            provider_api_key=cached.api_key,
+            messages=[*replayed, ai.user_message(prompt)],
+            tools=list(cached.tools) if cached.tools else None,
+            max_output_tokens=_max_output(cfg),
+            reasoning_effort=cached.effort,
+            thinking_budget=cached.thinking_budget,
+            on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
+            provider_headers=cached.headers,
+            provider_extra=cached.extra,
+            sampling=cached.sampling,
+            cache_key=cached.cache_key,
+            settings=cached.settings,
+            trace_request=ACTIVE_FLIGHT.get() is not None,
+            trace_sink=ACTIVE_FLIGHT.get(),
+            stream_limits=cached.stream_limits,
+        ), retry.Budget.from_settings(getattr(cfg, "settings", None)))
+    except ai.ProviderAPIError as exc:
+        if not provider_errors.is_context_overflow_error(exc):
+            raise
+        if (flight := ACTIVE_FLIGHT.get()) is not None:
+            flight.record("summary_replay_overflow", error=str(exc))
+        return None
+    _record_response(result, model=cached.model, provider_id=cached.provider_id, cfg=cfg)
+    return _summary_text(result)
+
+
+def _replayable(cfg: Config, cached: Any, route: Any) -> bool:
+    """Whether ``cached`` can carry the summary: reuse is on, the summarizer
+    is the model and provider the request went to, and the output cap leaves
+    room above a fixed thinking budget."""
+    if cached is None or not compaction_settings.get_bool(cfg, "COMPACTION_REUSE_CACHE"):
+        return False
+    if (route.model, route.provider_id) != (cached.model, cached.provider_id):
+        return False
+    return cached.thinking_budget is None or _max_output(cfg) > cached.thinking_budget
+
+
+async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, guidance: str, *,
+                    cached: Any = None, history: Sequence[dict] | None = None) -> str:
+    """The summary of ``messages``, the history before the kept tail.
+
+    ``cached`` is the conversation's last request
+    (`cache_keepalive.CachedRequest`) and ``history`` the whole current
+    history; with both, and `replay_messages` able to extend that request to
+    ``history``, the summary request replays it."""
+
     route = routing.resolve_model_route(
         model,
         configured_provider_id=cfg.provider_id,
@@ -196,6 +323,12 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
         configured_headers=getattr(cfg, "provider_headers", None),
         explicit_model=True,
     )
+    if history is not None and _replayable(cfg, cached, route):
+        replayed = replay_messages(cached, history)
+        if replayed is not None:
+            summary = await _summarize_replayed(cfg, cached, replayed, history, focus, guidance)
+            if summary is not None:
+                return summary
     previous, rest = _split_previous_summary(list(messages))
     tool_result_chars = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_SUMMARY_RESULT_CHARS_MAX")
     settings = getattr(cfg, "settings", None)
@@ -213,7 +346,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_api_key=route.api_key,
                 messages=[ai.user_message(prompt)],
                 tools=None,
-                max_output_tokens=compaction_settings.get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=compaction_settings.get_int(cfg, "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX")),
+                max_output_tokens=_max_output(cfg),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=model_client.turn_headers(route.headers, cfg),
@@ -230,26 +363,14 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
             if (flight := ACTIVE_FLIGHT.get()) is not None:
                 flight.record("summary_overflow", depth=depth, split_at=middle, error=str(exc), messages=head)
             compaction_flight.notice(msgs.SUMMARY_SPLIT, depth=depth + 1, stderr=False, flush=True)
-            # The previous summary travels with the older half only, so each
-            # request carries at most one summary's worth of extra text.
-            left = await summarize_chunk(head[:middle], depth + 1, previous)
-            right = await summarize_chunk(head[middle:], depth + 1, "")
-            return left + "\n\n" + right
-        usage_mod.record(getattr(result, "usage", None), model=route.model, provider_id=route.provider_id,
-                         session_file=getattr(cfg, "session_file", None))
-        if (flight := ACTIVE_FLIGHT.get()) is not None:
-            flight.record("summary_response", text=result.text,
-                          usage=getattr(result, "usage", None),
-                          finish_reason=getattr(result, "finish_reason", None),
-                          incomplete_reason=getattr(result, "incomplete_reason", None),
-                          provider_metadata=getattr(result, "provider_metadata", None))
-        incomplete = (getattr(result, "incomplete_reason", None)
-                      or provider_errors.incomplete_reason_from_metadata(getattr(result, "provider_metadata", None)))
-        finish = str(getattr(result, "finish_reason", ""))
-        if incomplete or finish.startswith("incomplete") or provider_errors.is_max_output_incomplete(finish):
-            raise ValueError(msgs.SUMMARY_RESPONSE_INCOMPLETE.words(value=incomplete or finish))
-        text = result.text.strip()
-        if not text or getattr(result, "tool_calls", None):
+            # The older half is summarized first and its summary is the
+            # previous summary the newer half updates, so the result is one
+            # summary under one set of headings.
+            older = await summarize_chunk(head[:middle], depth + 1, previous)
+            return await summarize_chunk(head[middle:], depth + 1, older)
+        _record_response(result, model=route.model, provider_id=route.provider_id, cfg=cfg)
+        text = _summary_text(result)
+        if text is None:
             raise ValueError(msgs.SUMMARY_RESPONSE_NO_TEXT.words())
         return text
 

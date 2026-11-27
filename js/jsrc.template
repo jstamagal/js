@@ -664,12 +664,21 @@
 #   example:  set COMPACTION_EXTERNAL_MODEL cpa/claude-haiku-5-5
 #set COMPACTION_EXTERNAL_MODEL same
 
-# Longest summary allowed, in tokens. It can't go over 8192.
-#set COMPACTION_SUMMARY_TOKENS_MAX 8192
+# Longest summary allowed, in tokens. It can't go over
+# COMPACTION_SUMMARY_REQUEST_TOKENS_MAX.
+#set COMPACTION_SUMMARY_TOKENS_MAX 32000
 
 # Tool results sent to the summary model are cut to this many characters,
-# keeping the start and the end. 0: send them whole.
+# keeping the start and the end. 0: send them whole. Only the plain-text
+# summary request clips; a summary that reuses the cache sees them whole.
 #set COMPACTION_SUMMARY_RESULT_CHARS_MAX 2000
+
+# on: the summary request is the conversation's last request with the
+# summary instructions appended, so it reads the history from the prompt
+# cache and sees every tool result whole. It needs the summary model to be
+# the conversation's (COMPACTION_EXTERNAL_MODEL same). off, or when that
+# request can't be used: the history goes out as a plain-text transcript.
+#set COMPACTION_REUSE_CACHE on
 
 # After this many automatic summaries fail in a row, automatic compaction
 # pauses. A successful /compact turns it back on.
@@ -924,7 +933,7 @@
 #set COMPACTION_HINT_TIMEOUT 30
 
 # Upper bound on COMPACTION_SUMMARY_TOKENS_MAX for the summary request.
-#set COMPACTION_SUMMARY_REQUEST_TOKENS_MAX 8192
+#set COMPACTION_SUMMARY_REQUEST_TOKENS_MAX 32000
 
 # Automatic compactions in a row before automatic compaction pauses.
 #set COMPACTION_CONSECUTIVE_MAX 2

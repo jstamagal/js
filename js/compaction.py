@@ -319,7 +319,9 @@ async def compact_now(
         guidance = await asyncio.to_thread(compaction_summary.run_pre_hook, cfg)
         flight.record("summary_input", model=compact_model, guidance=guidance,
                       messages=messages[:keep_from])
-        summary = await compaction_summary.summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
+        owner = context or T.STOCK_CONTEXT
+        summary = await compaction_summary.summarize(cfg, compact_model, messages[:keep_from], focus, guidance,
+                                                     cached=owner.cached_request, history=messages)
         recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
                             **({"flight_path": str(flight.path)} if flight.path else {})}
         rehydrated = _post_compact_rehydration(

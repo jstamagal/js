@@ -344,6 +344,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("COMPACTION_EXTERNAL_MODEL", "str", group="compaction"),
     SettingSpec("COMPACTION_SUMMARY_TOKENS_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_REUSE_CACHE", "bool", group="compaction"),
     SettingSpec("COMPACTION_FAILURES_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_CACHE_TTL", "int", group="compaction"),
     SettingSpec("CACHE_KEEPALIVE", "bool", group="compaction"),
