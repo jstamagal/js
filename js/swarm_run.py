@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import json
 import os
 import signal
@@ -197,6 +198,16 @@ def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
     ))
 
 
+@contextlib.contextmanager
+def _recruiting(root: Path):
+    """Hold the bus's recruit lock: one recruit at a time over every runner
+    process and tool thread on ``root``."""
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / ".recruit.lock", "a", encoding="utf-8") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        yield
+
+
 class Runner:
     def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO, *, configure=None) -> None:
         self.configure = configure
@@ -305,17 +316,20 @@ class Runner:
         def recruit(name: str, opener: str) -> None:
             swarm.check_name(name)
             home = self.root / name
-            if name in agent.room.members() or name in self.tasks or (home / "spawned").is_file():
-                raise ValueError(f"{name} is already on the bus")
-            spawned = sum(1 for p in self.root.iterdir() if (p / "spawned").is_file()) if self.root.is_dir() else 0
-            maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
-            if spawned >= maximum:
-                raise ValueError(f"this bus already has {spawned} recruited agents; the cap is {maximum}")
-            child = replace(parent, name=name, opener=opener,
-                            session=f"{parent.session}-{name}" if parent.session else None)
-            home.mkdir(parents=True, exist_ok=True)
-            (home / "spawned").write_text(json.dumps({"by": agent.name, "pid": os.getpid(), "inproc": True}),
-                                          encoding="utf-8")
+            # The name and the cap are checked and the marker written under
+            # the bus's recruit lock, which every runner on the bus takes.
+            with _recruiting(self.root):
+                if name in agent.room.members() or name in self.tasks or (home / "spawned").is_file():
+                    raise ValueError(f"{name} is already on the bus")
+                spawned = sum(1 for p in self.root.iterdir() if (p / "spawned").is_file())
+                maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
+                if spawned >= maximum:
+                    raise ValueError(f"this bus already has {spawned} recruited agents; the cap is {maximum}")
+                child = replace(parent, name=name, opener=opener,
+                                session=f"{parent.session}-{name}" if parent.session else None)
+                home.mkdir(parents=True, exist_ok=True)
+                (home / "spawned").write_text(json.dumps({"by": agent.name, "pid": os.getpid(), "inproc": True}),
+                                              encoding="utf-8")
             self.specs.append(child)
             loop.call_soon_threadsafe(self.add, child)
         return recruit
@@ -478,11 +492,24 @@ def run_sharded(path: str | os.PathLike[str], count: int, out: TextIO | None = N
     # The spec's agents and every one a runner started besides (a recruit).
     names: list[str] = [str(a.get("name")) for a in raw.get("agents") or []]
     children: list[subprocess.Popen] = []
-    for i, spec in enumerate(_shard_specs(raw, count)):
-        shard = shards / f"{os.getpid()}-{i}.json"
-        shard.write_text(json.dumps(spec), encoding="utf-8")
-        children.append(subprocess.Popen([sys.executable, "-m", "js.swarm", "run", str(shard)],
-                                         stdout=subprocess.PIPE, text=True, encoding="utf-8"))
+    written: list[Path] = []
+    try:
+        for i, spec in enumerate(_shard_specs(raw, count)):
+            shard = shards / f"{os.getpid()}-{i}.json"
+            written.append(shard)
+            shard.write_text(json.dumps(spec), encoding="utf-8")
+            children.append(subprocess.Popen([sys.executable, "-m", "js.swarm", "run", str(shard)],
+                                             stdout=subprocess.PIPE, text=True, encoding="utf-8"))
+    except BaseException:
+        # A runner that could not start ends the ones already started.
+        for child in children:
+            child.terminate()
+        for child in children:
+            child.wait()
+            child.stdout.close()
+        for shard in written:
+            shard.unlink(missing_ok=True)
+        raise
 
     flushed = [0.0]
 
@@ -540,7 +567,9 @@ def main(path: str) -> int:
         count = processes_for(len(raw.get("agents") or []), raw["processes"] if "processes" in raw
                               else _settings.live_value("SWARM_PROCESSES"), int(slots or 0))
         if count > 1:
-            return run_sharded(path, count, raw={**raw, "slots": int(slots or 0)})
+            # A cap is dealt out over the runners. With none here, the spec
+            # goes on as written and each runner settles its own, as `run` does.
+            return run_sharded(path, count, raw={**raw, "slots": int(slots)} if int(slots or 0) > 0 else raw)
         return run(path)
     except (OSError, ValueError) as exc:
         print(msgs.SWARM_RUN_FAILED.format(exc=exc), file=sys.stderr)

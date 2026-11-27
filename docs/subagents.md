@@ -223,7 +223,9 @@ running; `/cancel <id>` stops one by its supervisor job id.
 
 - a running worker gets it in its inbox (`Worker.inbox`), joined with any line
   typed in its window, as a user message at its next tool boundary (the
-  child turn's `steer`);
+  child turn's `steer`). What arrives after its last tool call it answers in
+  a further turn before the job has its result, and that turn's answer is
+  its result;
 - a finished worker answers it in a new turn on its own session file, with
   everything it did before: the call starts a new job with `session_id` set to
   that file and returns its handle. A worker whose parent session is not saved

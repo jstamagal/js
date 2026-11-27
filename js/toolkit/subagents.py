@@ -281,7 +281,7 @@ async def _run_one_task_async(
         telemetry = Telemetry(debug_log=cfg.debug_log)
         chat = Conversation(cfg, system, registry=registry, context=child_context, telemetry=telemetry,
                             run_turn=assembly.turn)
-        job_worker = task_jobs.CURRENT_WORKER.get()
+        job_worker = task_jobs.claim_worker()
         if job_worker is not None:
             # What a poll of its handle shows, and where a sent message goes.
             job_worker.agent = agent
@@ -327,6 +327,9 @@ async def _run_one_task_async(
                 await agent_messages.initialize(cfg, prompt_spec, chat.messages, telemetry, tool_registry=registry,
                                                 tool_context=child_context, checkpoint=chat.save, **turn_kwargs)
                 await chat.turn({"role": "user", "content": prompt}, call_stats=call_stats, **turn_kwargs)
+                # What was sent to it after its last tool call is its next turn.
+                while job_worker is not None and (sent := job_worker.take_inbox(last=True)) is not None:
+                    await chat.turn(sent, call_stats=call_stats, **turn_kwargs)
             outcome = "ok"
         except snippets.SnippetError:
             raise
@@ -682,8 +685,10 @@ def _handle_action(action: str, handle: Any, message: Any, context: ToolContext)
             handles = ", ".join(w.handle for w in job.workers)
             return f"ERROR: task {job.id} has several subagents; send to one of {handles}"
         if worker.running():
-            worker.inbox.append(text)
-            return f"sent to {worker.handle}; it reads it at its next tool call"
+            if worker.send(text):
+                return (f"sent to {worker.handle}; it reads it at its next tool call, "
+                        "or as its next turn when it makes none")
+            return f"ERROR: {worker.handle} is ending; send again once it has"
         if worker.session_file is None:
             return f"ERROR: {worker.handle} has no saved session to continue"
         return _Resume(worker.agent, str(worker.session_file), text)

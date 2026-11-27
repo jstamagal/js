@@ -79,7 +79,8 @@ Running, watching, stopping and talking to workers:
   worker its state, the tools it has called, the text it last wrote and its
   session file; the result once it is done. `handle="t1.2"` shows one worker.
 - `action="send", handle="t1.2", message="..."`: talk to a worker. A running
-  one reads it at its next tool call. A finished one answers it in a new turn
+  one reads it at its next tool call, or answers it in a further turn before
+  it finishes when it makes none. A finished one answers it in a new turn
   on its own session, with everything it did before, started as a new task
   whose handle the call returns.
 - `action="wait", handle="t1", timeout=N`: block up to N seconds, or until it
