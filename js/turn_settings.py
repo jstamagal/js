@@ -200,7 +200,6 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("max_download_bytes", "DOWNLOAD_MAX", integer, on_context=True),
     TurnSetting("task_max_depth", "SUBAGENT_DEPTH_MAX", integer, on_context=True),
     TurnSetting("subagent_max_workers", "SUBAGENT_WORKERS_MAX", integer, on_context=True),
-    TurnSetting("subagent_wait_seconds", "SUBAGENT_WAIT", integer, on_context=True),
     TurnSetting("shell_env_allow", "SHELL_ENV_KEEP", names, on_context=True),
     TurnSetting("user_agent", "HTTP_USER_AGENT", text, on_context=True),
     TurnSetting("terminal_cols", "TERMINAL_COLUMNS", integer, on_context=True),

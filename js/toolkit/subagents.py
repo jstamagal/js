@@ -281,6 +281,13 @@ async def _run_one_task_async(
         telemetry = Telemetry(debug_log=cfg.debug_log)
         chat = Conversation(cfg, system, registry=registry, context=child_context, telemetry=telemetry,
                             run_turn=assembly.turn)
+        job_worker = task_jobs.CURRENT_WORKER.get()
+        if job_worker is not None:
+            # What a poll of its handle shows, and where a sent message goes.
+            job_worker.agent = agent
+            job_worker.messages = chat.messages
+            if Path(cfg.session_file) != Path(os.devnull):
+                job_worker.session_file = Path(cfg.session_file)
         parent_hooks = parent_context.tool_call_hooks
         parent_approval = parent_context.tool_approval
         launch = _launch_fields(idx, total, agent, cfg, registry)
@@ -306,8 +313,11 @@ async def _run_one_task_async(
             "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
             "approve": parent_approval,
         }
-        if window is not None:
-            turn_kwargs["steer"] = window.steer
+        steers = [steer for steer in (window.steer if window is not None else None,
+                                      job_worker.take_inbox if job_worker is not None else None)
+                  if steer is not None]
+        if steers:
+            turn_kwargs["steer"] = _joined_steer(steers)
         if reasoning:
             # Every request resolves the effort from the layers again; the
             # tool call's reasoning is told to the turn so it is what is sent.
@@ -367,6 +377,18 @@ async def _run_one_task_async(
         cap = budget // max(1, total)
         final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
     return final
+
+
+def _joined_steer(steers):
+    """One steer from several: the lines each has, as one user message."""
+    if len(steers) == 1:
+        return steers[0]
+
+    def steer() -> dict | None:
+        taken = [message["content"] for message in (each() for each in steers) if message is not None]
+        return {"role": "user", "content": "\n\n".join(taken)} if taken else None
+
+    return steer
 
 
 def close_child_tools(child_context: ToolContext) -> None:
@@ -582,12 +604,13 @@ def _job_action(action: Any) -> str:
     return (text_or_default(action, "run") or "run").strip().lower()
 
 
+ACTIONS = ("run", "list", "poll", "wait", "kill", "send")
+
+
 def _find_job(action: str, handle: Any, context: ToolContext) -> tuple[str | None, task_jobs.TaskJob | None]:
-    if action not in ("poll", "wait", "kill"):
-        return f"ERROR: unknown action {action!r}; expected run, poll, wait, or kill", None
-    job = task_jobs.find(text_or_default(handle) or None, context.task_owner)
+    job = task_jobs.find(str(text_or_default(handle) or "").partition(".")[0] or None, context.task_owner)
     if job is None:
-        return f"ERROR: no background task{' ' + str(handle) if handle else ''} to {action}", None
+        return f"ERROR: no task{' ' + str(handle) if handle else ''} to {action}", None
     return None, job
 
 
@@ -596,6 +619,11 @@ def _wait_limit(timeout: Any) -> float | None:
     if timeout is None:
         return None
     return float(int_or_default(timeout, 0, minimum=0))
+
+
+def _pollable(context: ToolContext) -> bool:
+    registry = context.tool_registry
+    return registry is None or registry.resolve("task") is not None
 
 
 def _start_background(indexed_items, coro_factory, agent_id: str, session_id: str | None,
@@ -611,7 +639,73 @@ def _start_background(indexed_items, coro_factory, agent_id: str, session_id: st
         on_done=context.invalidate_search_cache,
         on_loop=on_loop,
     )
-    return task_jobs.started_text(job)
+    return task_jobs.started_text(job, pollable=_pollable(context))
+
+
+def _in_background(background: Any, context: ToolContext) -> bool:
+    """``background`` as given; unset, on where the result of a task left
+    running is handed back (``ToolContext.delivers_task_results``): the
+    REPL's main agent and a `-p` run, not a subagent, whose turn ends with
+    its answer."""
+    if background is None or background == "":
+        return context.task_depth == 0 and context.delivers_task_results
+    return _flag(background)
+
+
+@dataclass(frozen=True)
+class _Resume:
+    """A message for a finished subagent: a new turn on its session."""
+
+    agent_id: str
+    session_id: str
+    message: str
+
+
+def _handle_action(action: str, handle: Any, message: Any, context: ToolContext):
+    """What list, poll, kill (of one subagent) and send answer without
+    waiting: the reply text, a `_Resume` to start, or a job for the caller to
+    wait on, kill or report (``(job, was_running)``)."""
+    if action not in ACTIONS:
+        return f"ERROR: unknown action {action!r}; expected one of {', '.join(ACTIONS)}"
+    if action == "list":
+        return task_jobs.list_text(context.task_owner)
+    error, job = _find_job(action, handle, context)
+    if job is None:
+        return error
+    wanted = str(text_or_default(handle) or "").strip()
+    _job, worker = task_jobs.find_worker(wanted or job.id, context.task_owner)
+    if action == "send":
+        text = str(text_or_default(message) or "").strip()
+        if not text:
+            return 'ERROR: send needs a message'
+        if worker is None:
+            handles = ", ".join(w.handle for w in job.workers)
+            return f"ERROR: task {job.id} has several subagents; send to one of {handles}"
+        if worker.running():
+            worker.inbox.append(text)
+            return f"sent to {worker.handle}; it reads it at its next tool call"
+        if worker.session_file is None:
+            return f"ERROR: {worker.handle} has no saved session to continue"
+        return _Resume(worker.agent, str(worker.session_file), text)
+    if "." in wanted:
+        if worker is None:
+            return f"ERROR: task {job.id} has no subagent {wanted}"
+        if action == "poll":
+            return worker.report()
+        if action == "kill":
+            if not worker.stop():
+                return f"{worker.handle} is not running ({worker.state})"
+            return f"stopping {worker.handle}; the rest of task {job.id} carries on"
+    return job, job.running()
+
+
+def _resumed(resume: _Resume, model: str, reasoning: str, context: ToolContext, *, on_loop: bool) -> str:
+    error, prepared = _prepare_fan_out([resume.message], resume.agent_id, resume.session_id, model, context,
+                                       reasoning, "background")
+    if prepared is None:
+        return error  # type: ignore[return-value]
+    indexed_items, coro_factory = prepared
+    return _start_background(indexed_items, coro_factory, resume.agent_id, None, context, on_loop=on_loop)
 
 
 def task(
@@ -619,27 +713,32 @@ def task(
     agent_id: str = "",
     session_id: str | None = None,
     model: str = "",
-    background: bool = False,
+    background: bool | None = None,
     action: str = "run",
     handle: str | None = None,
     timeout: int | None = None,
     context: ToolContext | None = None,
     reasoning: str = "",
+    message: str = "",
 ) -> str:
     return _run_task(tasks, agent_id, session_id, model, background, action, handle, timeout, context,
-                     reasoning, launch="task")
+                     reasoning, launch="task", message=message)
 
 
 def _run_task(tasks, agent_id, session_id, model, background, action, handle, timeout, context, reasoning,
-              *, launch: str) -> str:
+              *, launch: str, message: str = "") -> str:
     """`task`, launched as ``launch`` ("task" or "agent")."""
     assert context is not None
     action = _job_action(action)
+    model = str(model or "").strip()
+    reasoning = str(reasoning or "").strip().lower()
     if action != "run":
-        error, job = _find_job(action, handle, context)
-        if job is None:
-            return error  # type: ignore[return-value]
-        was_running = job.running()
+        answer = _handle_action(action, handle, message, context)
+        if isinstance(answer, str):
+            return answer
+        if isinstance(answer, _Resume):
+            return _resumed(answer, model, reasoning, context, on_loop=False)
+        job, was_running = answer
         if action == "kill":
             job.kill()
             task_jobs.wait(job, task_jobs.KILL_GRACE_S)
@@ -647,14 +746,13 @@ def _run_task(tasks, agent_id, session_id, model, background, action, handle, ti
             task_jobs.wait(job, _wait_limit(timeout))
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
-    model = str(model or "").strip()
-    reasoning = str(reasoning or "").strip().lower()
-    kind = "background" if _flag(background) else launch
+    in_background = _in_background(background, context)
+    kind = "background" if in_background else launch
     error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning, kind)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
-    if _flag(background):
+    if in_background:
         return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=False)
     results = _fan_out(indexed_items, coro_factory)
     # A subagent runs with its own ToolContext and can write anything under any
@@ -671,29 +769,31 @@ async def task_async(
     agent_id: str = "",
     session_id: str | None = None,
     model: str = "",
-    background: bool = False,
+    background: bool | None = None,
     action: str = "run",
     handle: str | None = None,
     timeout: int | None = None,
     context: ToolContext | None = None,
     reasoning: str = "",
     launch: str = "task",
-    detach: bool = True,
+    message: str = "",
 ) -> str:
     """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
     dispatch thread. The runtime routes fan-out calls here
     (see ``turn_dispatch.dispatch_batch``). ``launch`` is "agent" for a
-    named-agent tool's call. With ``detach`` the main agent's foreground
-    call can hand back a handle (:func:`_detachable`); a caller that shows
-    the result itself passes False."""
+    named-agent tool's call."""
     assert context is not None
     action = _job_action(action)
+    model = str(model or "").strip()
+    reasoning = str(reasoning or "").strip().lower()
     if action != "run":
-        error, job = _find_job(action, handle, context)
-        if job is None:
-            return error  # type: ignore[return-value]
-        was_running = job.running()
+        answer = _handle_action(action, handle, message, context)
+        if isinstance(answer, str):
+            return answer
+        if isinstance(answer, _Resume):
+            return _resumed(answer, model, reasoning, context, on_loop=True)
+        job, was_running = answer
         if action == "kill":
             job.kill()
             await task_jobs.wait_async(job, task_jobs.KILL_GRACE_S)
@@ -705,72 +805,18 @@ async def task_async(
                 await task_jobs.wait_async(job, limit)
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
-    model = str(model or "").strip()
-    reasoning = str(reasoning or "").strip().lower()
-    kind = "background" if _flag(background) else launch
+    in_background = _in_background(background, context)
+    kind = "background" if in_background else launch
     error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning, kind)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
-    if _flag(background):
+    if in_background:
         return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=True)
-    wait_s = _subagent_wait(context)
-    if detach and context.task_depth == 0 and (context.subagent_detach is not None or wait_s > 0):
-        return await _detachable(indexed_items, coro_factory, agent_id, session_id, context, wait_s)
     async with subagent_gate.lend_slot():
         results = await _fan_out_async(indexed_items, coro_factory)
     context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)
-
-
-def _subagent_wait(context: ToolContext) -> int:
-    """SUBAGENT_WAIT as ``context`` has it: seconds a foreground call waits
-    before handing back its handle, 0 for no limit."""
-    return int_or_default(getattr(context, "subagent_wait_seconds", 0), 0, minimum=0)
-
-
-async def _detachable(indexed_items, coro_factory, agent_id: str, session_id: str | None,
-                      context: ToolContext, wait_s: int) -> str:
-    """A foreground call of the main agent: its workers run as a task job and
-    the call waits for the job. It returns the result when the job ends, or
-    the job's handle once ``context.subagent_detach`` is set (the operator
-    typed) or ``wait_s`` seconds pass, and the job keeps running. Cancelling
-    the call before then kills the job."""
-    job = task_jobs.start(
-        indexed_items, coro_factory,
-        lambda results: _assemble_task_results(results, agent_id, session_id),
-        agent_id=agent_id, depth=context.task_depth, owner=context.task_owner,
-        on_done=context.invalidate_search_cache, on_loop=True, label="task {id}",
-    )
-    loop = asyncio.get_running_loop()
-    ended = asyncio.Event()
-    job.future.add_done_callback(lambda _done: loop.call_soon_threadsafe(ended.set))
-    waits = {asyncio.ensure_future(ended.wait())}
-    signal = context.subagent_detach
-    if signal is not None:
-        waits.add(asyncio.ensure_future(signal.wait()))
-    try:
-        await asyncio.wait(waits, timeout=wait_s or None, return_when=asyncio.FIRST_COMPLETED)
-    except asyncio.CancelledError:
-        # The turn that waited is cancelled with it: nobody is owed a note.
-        job.delivered = True
-        job.kill()
-        await task_jobs.wait_async(job, task_jobs.KILL_GRACE_S)
-        raise
-    finally:
-        for waiting in waits:
-            waiting.cancel()
-    if not job.running():
-        job.delivered = True
-        if job.cancelled():
-            return f"ERROR task {job.id} was cancelled"
-        return job.result()
-    why = ("the operator wrote to you; read their message, the subagents carry on"
-           if signal is not None and signal.is_set()
-           else f"SUBAGENT_WAIT ({wait_s}s) passed")
-    registry = context.tool_registry
-    pollable = registry is not None and registry.resolve("task") is not None
-    return task_jobs.started_text(job, why=why, pollable=pollable)
 
 
 def is_fan_out_handler(handler: Any) -> bool:
@@ -794,20 +840,21 @@ async def dispatch_fan_out_async(tool: Tool, args: dict[str, Any], context: Tool
         agent_id=agent_id,
         session_id=args.get("session_id"),
         model=args.get("model", ""),
-        background=args.get("background", False),
+        background=args.get("background"),
         action=args.get("action", "run"),
         handle=args.get("handle"),
         timeout=args.get("timeout"),
         context=context,
         reasoning=args.get("reasoning", ""),
         launch=launch,
+        message=args.get("message", ""),
     )
 
 
 def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     def run_named_agent(tasks: list[Any], model: str = "", reasoning: str = "",
-                        context: ToolContext | None = None) -> str:
-        return _run_task(tasks, agent_id, None, model, False, "run", None, None, context, reasoning,
+                        background: bool | None = None, context: ToolContext | None = None) -> str:
+        return _run_task(tasks, agent_id, None, model, background, "run", None, None, context, reasoning,
                          launch="agent")
 
     # Tag so the runtime recognizes this as fan-out and awaits it on-loop under a
@@ -824,7 +871,8 @@ def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
         run_named_agent,
         {"tasks": {"type": "array", "items": {"type": "string"}, "description": load_parameter_description('named_agent', 'tasks')},
          "model": {"type": "string", "description": load_parameter_description('named_agent', 'model')},
-         "reasoning": {"type": "string", "description": load_parameter_description('named_agent', 'reasoning')}},
+         "reasoning": {"type": "string", "description": load_parameter_description('named_agent', 'reasoning')},
+         "background": {"type": "boolean", "description": load_parameter_description('named_agent', 'background')}},
         required=("tasks",),
     )
 
@@ -834,9 +882,10 @@ def _task_params(flags: tuple[str, ...]) -> dict:
         "tasks": {"type": "array", "items": {"type": "string"}, "description": load_parameter_description('task', 'tasks')},
         "agent_id": {"type": "string", "description": load_parameter_description('task', 'agent_id')},
         "session_id": {"type": "string", "description": load_parameter_description('task', 'session_id')},
-        "background": {"type": "boolean", "default": False, "description": load_parameter_description('task', 'background')},
-        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": load_parameter_description('task', 'action')},
+        "background": {"type": "boolean", "description": load_parameter_description('task', 'background')},
+        "action": {"type": "string", "enum": list(ACTIONS), "default": "run", "description": load_parameter_description('task', 'action')},
         "handle": {"type": "string", "description": load_parameter_description('task', 'handle')},
+        "message": {"type": "string", "description": load_parameter_description('task', 'message')},
         "timeout": {"type": "integer", "description": load_parameter_description('task', 'timeout')},
     }
     if "model_override" in flags:

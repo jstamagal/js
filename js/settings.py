@@ -286,7 +286,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("PARALLEL_RESULTS_MAX", "int", group="limits"),
     SettingSpec("SUBAGENT_DEPTH_MAX", "int", group="limits"),
     SettingSpec("SUBAGENT_WORKERS_MAX", "int", group="limits"),
-    SettingSpec("SUBAGENT_WAIT", "int", group="limits"),
     # --- swarm ---
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
     SettingSpec("SWARM_PROCESSES", "int", group="shell"),

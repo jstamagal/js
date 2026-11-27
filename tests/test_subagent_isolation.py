@@ -541,7 +541,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
     actual = call_tool(tool, {"tasks": ["hello from named tool"]}, ToolContext(cwd=tmp_path))
 
     assert tool.required == ("tasks",)
-    assert set(tool.params) == {"tasks", "model", "reasoning"}
+    assert set(tool.params) == {"tasks", "model", "reasoning", "background"}
     assert actual == "NAMED_AGENT_DONE"
     assert "WORKER SYSTEM" in str(seen["system"])
     assert set(seen["tools"]) == {"plan", "tool_discovery"}

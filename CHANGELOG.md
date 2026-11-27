@@ -6,12 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Subagents no longer hold the main session hostage.**
-  - A line typed to the main agent while its `task` call (or a named-agent call) waits on subagents hands the call back at once: the model gets the task's handle, then your line, and the subagents keep running.
-  - `SUBAGENT_WAIT` (default 0, no limit): seconds the main agent's task call waits before handing back its handle on its own.
-  - A finished background task's result reaches the main agent without you typing: at its next tool call, with your next line, or, when it is idle, in a turn of its own (`SUBAGENT_WAKE`, default on). The reminder carries the result itself, cut at `TOOL_RESULT_MAX`, not only the file it is in.
-  - `js -p` waits for the background tasks the agent left running and hands it their results before the run ends, instead of killing them; `SUBAGENT_WAKE off` keeps the old ending.
-  - `/jobs` lists the main agent's task handles with how many workers are done.
+- **Subagents run alongside the main agent, which watches, stops and talks to them.** Modelled on Claude Code's background agents and Codex CLI's multi-agent tools; `docs/subagents.md` has the comparison.
+  - The main agent's `task` and named-agent calls return handles at once (`t1` for the task, `t1.1`, `t1.2` for its subagents) and the subagents run while it works or answers you. `background=false` waits as before; a subagent's own calls still wait by default.
+  - `task` actions: `list`; `poll` shows each subagent's state, tool calls, latest text and session file; `kill` stops the task or one subagent; `send` talks to a subagent, read at its next tool call while it runs, or answered in a new turn on its own session once it has finished; `wait` as before.
+  - A finished result reaches the main agent without you typing: at its next tool call, with your next line, or, when it is idle, in a turn of its own (`SUBAGENT_WAKE`, default on). The reminder carries the result itself, cut at `TOOL_RESULT_MAX`.
+  - `js -p` waits for the subagents the agent left running and hands it their results before the run ends; `SUBAGENT_WAKE off` keeps the old ending.
+  - `/jobs` lists the main agent's task handles with how many subagents are done.
 
 - **Swarms use every core, and each agent costs less.** Numbers and causes are in `docs/swarm-performance.md`; `just swarmbench` measures it against a fake model.
   - `python -m js.swarm run` spreads its agents over runner processes: `SWARM_PROCESSES` (or the spec's `"processes"`), default one per 16 agents up to one per CPU; 1 is the old single process.

@@ -2,8 +2,8 @@ Launch one or more delegated worker agent turns for complex, multi-step work.
 
 Use this when the work benefits from isolated investigation, parallel research,
 or a specialized agent persona. Each worker runs autonomously and returns a
-single compressed result back to the parent turn. The worker's result is not
-shown directly to the operator; you must synthesize it in your final response.
+single compressed result back to you. The worker's result is not shown
+directly to the operator; you must synthesize it in your final response.
 
 When to use:
 - Open-ended searches that may require multiple search/read rounds.
@@ -63,27 +63,35 @@ Parallelism:
   back to the model. One task returns the worker's reply verbatim; a fan-out
   returns them numbered under a `TASK_RESULTS` header.
 
-Background:
-- A call waits for its workers, unless the operator writes to you while it
-  waits or `SUBAGENT_WAIT` seconds pass: then it returns their handle and the
-  workers keep running. With `background=true` it returns the handle at once:
+Running, watching, stopping and talking to workers:
+- A call starts its workers and returns their handles at once; they run while
+  you keep working or answer the operator:
 
-      task running in the background (handle t1): ...
+      task t1 started: 2 subagents of agent `explore` (t1.1, t1.2), ...
       HANDLE t1 RUNNING
 
-- `action="poll", handle="t1"` says whether it is still running and returns the
-  result once it is done. `action="wait", handle="t1", timeout=N` blocks up to
-  N seconds, or until the end without `timeout`. `action="kill", handle="t1"`
-  stops it. `handle` defaults to your most recent running task. You see only
-  the tasks you started. `tasks` and
-  `agent_id` are needed only to start one.
+  `t1` is the task, `t1.1` and `t1.2` its workers. `background=false` waits
+  for the workers instead and returns their result; do that when your very
+  next step needs it. Inside a subagent a call waits unless you pass
+  `background=true`.
+- `action="list"`: your tasks and each worker's state.
+- `action="poll", handle="t1"`: whether it is still running, and for each
+  worker its state, the tools it has called, the text it last wrote and its
+  session file; the result once it is done. `handle="t1.2"` shows one worker.
+- `action="send", handle="t1.2", message="..."`: talk to a worker. A running
+  one reads it at its next tool call. A finished one answers it in a new turn
+  on its own session, with everything it did before, started as a new task
+  whose handle the call returns.
+- `action="wait", handle="t1", timeout=N`: block up to N seconds, or until it
+  ends without `timeout`.
+- `action="kill", handle="t1"`: stop the task. `handle="t1.2"` stops that
+  worker alone; the others carry on.
+- `handle` defaults to your most recent running task. You see only the tasks
+  you started; `tasks` and `agent_id` are needed only to start one.
 - When a task you have not polled finishes, its result comes to you in a
   `<js-reminder>`: at your next tool call, with the next user message, or, if
-  you are idle, in a message of its own. The result is also written to the
-  file the handle names.
-- Use it for slow, independent work you do not need before your next step:
-  start it, carry on, and use the result when it arrives. When the next step
-  depends on the result, run it in the foreground.
+  you are idle, in a message of its own. It is also written to the file the
+  start line names. Do not poll in a loop to wait for it; carry on, or `wait`.
 
 Prompting guidance:
 - Include the expected output shape.
@@ -100,14 +108,14 @@ Failure behavior:
 - One worker failure returns that worker's error without discarding sibling
   results.
 - A task recursion limit prevents unbounded worker spawning.
-- A foreground call is not a controllable job; its progress is visible only
-  through streamed child tool activity and the final worker result.
+- A call with `background=false` is not a controllable task; its progress is
+  visible only through streamed child tool activity and the final result.
 
 <!--parameters-->
 
 ### action
 
-run starts workers; poll, wait and kill act on a background handle.
+run starts workers; list, poll, wait, kill and send act on your tasks by handle.
 
 ### agent_id
 
@@ -115,11 +123,15 @@ Worker agent id; loads that agent's persona and selected tools.
 
 ### background
 
-Return a handle at once and run the workers in the background.
+true (the default for the main agent): return the handles at once while the workers run. false: wait for their result.
 
 ### handle
 
-Background task id from a HANDLE line, for poll/wait/kill.
+A task (t1) or one of its workers (t1.2), for poll, wait, kill and send.
+
+### message
+
+What send says to the worker.
 
 ### model
 

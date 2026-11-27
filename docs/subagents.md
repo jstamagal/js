@@ -1,10 +1,10 @@
 # Subagents
 
 Subagents in `js` are implemented by the `task` tool and generated
-prompt-directory tools. They are parallel worker turns. A `task` call waits for
-them, or with `background=true` returns a handle at once. The main agent's
-waiting call hands back the handle too when the operator types or
-`SUBAGENT_WAIT` passes, and a finished result comes back to it on its own.
+prompt-directory tools. They are parallel worker turns. The main agent's call
+starts them and returns their handles at once; it lists, polls, waits on,
+kills and sends messages to them through the `task` tool, and a finished
+result comes back to it on its own.
 
 Agents are created using prompt directories under `defaults/agents/` (for bundled agents)
 or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
@@ -170,79 +170,95 @@ What exists today:
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
   `js --commit` wrapper.
 
-## Foreground And Background
+## Launch, Watch, Stop, Talk
 
-A foreground `task` call waits until all children complete. One task
-returns the worker's text verbatim; a fan-out returns one `TASK_RESULTS` string
-with the results numbered in task order.
+The shape follows what other harnesses give their main agent. Claude Code's
+`Agent` tool runs a subagent in the background (`run_in_background`), the
+parent is notified when it completes, `SendMessage` continues an agent by id
+(a running one reads it, a finished one resumes with its context) and
+`TaskStop` stops one. Codex CLI's multi-agent tools are `spawn_agent`,
+`send_input` (steer a running agent), `wait_agent`, `list_agents` and
+`close_agent` ([Codex subagents](https://developers.openai.com/codex/subagents.md),
+[multi-agent v2 write-up](https://codex.danielvaughan.com/2026/03/30/codex-cli-multi-agent-v2-path-addressing-structured-messaging)).
+opencode 2.x replaced the background-agents plugin, whose `delegate`,
+`delegation_list` and `delegation_read` returned an id at once and sent a
+notification on completion, with native background subagents
+([plugin README](https://github.com/kdcokenny/opencode-background-agents)).
+js keeps one `task` tool with actions, as its shell and kernel handles do.
 
-The main agent's foreground call (depth 0, the `task` tool or a named-agent
-tool) runs its children as a task job and waits on the job
-(`subagents._detachable`). It stops waiting and returns the job's handle, with
-the children still running, when:
-
-- the operator types a line to the main agent during the turn at
-  `STEER_MODE now` (the REPL sets `ToolContext.subagent_detach`); the line is
-  the next thing the model reads, so typing never waits on subagents;
-- `SUBAGENT_WAIT` seconds pass, when it is above 0 (default 0: no limit).
-
-^C before then cancels the turn and kills the job, as before. A window's
-subagent launched with `/window new` never hands back; subagents' own calls
-(depth 1 and below) always wait.
-
-`background=true` starts the same fan-out and returns at once:
+**Launch.** A `task` call (or a named-agent call) of the main agent starts its
+workers as a task job and returns at once. `background` unset means on where
+something hands the context a result it left running
+(`ToolContext.delivers_task_results`): the REPL's main agent, and a `-p` run
+with `SUBAGENT_WAKE` on. Elsewhere (a swarm agent, a program on
+`Conversation`, a subagent) it waits:
 
 ```text
-task running in the background (handle t1): 2 tasks for agent `explore`. ...
-When it finishes its result is written to <state>/tool-results/task-t1-<random>.txt, ...
+task t1 started: 2 subagents of agent `explore` (t1.1, t1.2), running while you work.
+...
 HANDLE t1 RUNNING
 ```
 
-The handle works like a shell handle, through the same tool:
+`t1` is the job, `t1.K` its K-th worker. `background=false` waits and returns
+the result: one task returns the worker's text verbatim, a fan-out one
+`TASK_RESULTS` string numbered in task order. A subagent's own calls wait
+unless they pass `background=true`, since a subagent's turn ends with its
+answer and nobody would hand it a later result.
 
-- `action="poll", handle="t1"`: still running (with how many workers are done),
-  or the result.
-- `action="wait", handle="t1", timeout=N`: block up to N seconds; without
-  `timeout`, until it ends.
-- `action="kill", handle="t1"`: cancel the workers.
-- `handle` defaults to the caller's newest running task.
+**Watch.** `action="list"` lists the caller's jobs and each worker's state.
+`action="poll", handle="t1"` returns, while it runs, each worker's
+`task_jobs.Worker.report`: state (waiting, running, done, error, stopped),
+seconds, its tool calls so far and the latest few, the tail of the text it last
+wrote and its session file; once the job is done, the result.
+`handle="t1.2"` polls one worker. `action="wait", handle="t1", timeout=N`
+blocks up to N seconds, or until it ends. In the REPL every worker also has a
+window (`subagent_windows`), and `/jobs` lists the handles with progress.
 
-Each run belongs to the context that started it (`ToolContext.task_owner`): the
-main agent and each subagent see, poll, wait on and kill only their own runs.
-`/reset` and `/wipe` drop the reminder for runs of the conversation they end.
+**Stop.** `action="kill", handle="t1"` cancels the job. `handle="t1.2"`
+cancels that worker alone (`Worker.stop`): its slot in the result reads
+`STOPPED`, and the others carry on. ^C on the main turn leaves background jobs
+running; `/cancel <id>` stops one by its supervisor job id.
 
-Under the REPL the run is one `subagent` job on the REPL's loop
-(`js/toolkit/task_jobs.py`), so it outlives the turn that started it, shows in
-`/jobs`, and `/cancel <id>` stops it. Without a supervisor (`-p`) it runs on a
-private loop in a daemon thread; with `SUBAGENT_WAKE` off it ends with the
-process.
+**Talk.** `action="send", handle="t1.2", message="..."`:
 
-When a run started by the main agent finishes and the model has not read its
-result through poll, wait or kill, a `<js-reminder>` hands the model the
-result (cut at `TOOL_RESULT_MAX`; the file holds all of it), whichever comes
-first:
+- a running worker gets it in its inbox (`Worker.inbox`), joined with any line
+  typed in its window, as a user message at its next tool boundary (the
+  child turn's `steer`);
+- a finished worker answers it in a new turn on its own session file, with
+  everything it did before: the call starts a new job with `session_id` set to
+  that file and returns its handle. A worker whose parent session is not saved
+  has no session to continue.
+
+A job of several workers needs the worker's handle to send to; a job of one
+takes `t1` too.
+
+Each job belongs to the context that started it (`ToolContext.task_owner`): the
+main agent and each subagent see and act on only their own. `/reset` and
+`/wipe` drop the reminder for jobs of the conversation they end.
+
+Under the REPL a job is one `subagent` job on the REPL's loop
+(`js/toolkit/task_jobs.py`), so it outlives the turn that started it. Without
+a supervisor (`-p`) it runs on a private loop in a daemon thread.
+
+**Results.** When a job started by the main agent finishes and the model has
+not read its result through poll, wait or kill, a `<js-reminder>` hands the
+model the result (cut at `TOOL_RESULT_MAX`; the file holds all of it),
+whichever comes first:
 
 - the main agent's next tool boundary, if a turn is running (the REPL's and
   `-p`'s `steer`);
 - the next user message (`repl._take_pending_notes`);
 - with `SUBAGENT_WAKE` on (default), a turn of its own: in the REPL, when the
   main agent is idle and nothing is queued (`task_jobs.listener`, the
-  consumer's `_WAKE`); in `-p`, the run waits for every outstanding task after
+  consumer's `_WAKE`); in `-p`, the run waits for every outstanding job after
   the prompt's turn and runs one turn per batch of results
   (`prompt_run._background_turns`), so the run's answer is the last of them.
+  With it off, `-p` ends with jobs still running and they end with the process.
 
-A run a subagent started gets no reminder; that subagent polls it itself.
-`/jobs` lists the main agent's task handles with their progress.
-
-Children run through the same `_prepare_fan_out` as a foreground call, so they
-get the same inherited context and, under `-C`, the same jail.
-
-Direct agent tools have no `background` argument; their main-agent calls hand
-back a handle the same way a `task` call does.
+A job a subagent started gets no reminder; that subagent polls or waits on it.
 
 Not implemented:
 
-- listing background tasks to the model
 - per-task timeout setting
 - model-facing per-task endpoint override
 

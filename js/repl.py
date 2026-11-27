@@ -608,8 +608,6 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
             return {"role": "user", "content": "\n\n".join(finished), "steered": True}
         text = "\n".join(steer_inbox)
         steer_inbox.clear()
-        if (detach := runtime.T.STOCK_CONTEXT.subagent_detach) is not None:
-            detach.clear()
         steer_text, steer_attachments = attach.split_repl_attachments(text)
         repl_state.emit_repl_event(state, telemetry, "input", text=steer_text, attachments=steer_attachments)
         try:
@@ -630,8 +628,6 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
             sink.emit(output.event("transcript_user", text=text))
         return _with_notes({**built, "steered": True}, finished)
 
-    if (detach := runtime.T.STOCK_CONTEXT.subagent_detach) is not None and not steer_inbox:
-        detach.clear()
     job = sup.spawn(
         _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,
                  steer=take_steer, notes=notes),
@@ -892,16 +888,11 @@ class Repl:
             context.config = state.config_for_turn(cfg)
             turn_settings.install(context, context.config)
             context.tool_call_hooks = state.events
-            context.subagent_detach = None
+            context.delivers_task_results = False
             return context
 
         child_windows.parent_context = window_parent_context
         opener_token = subagents.window_opener.set(child_windows.open)
-        # A line typed to the main agent during its turn sets it: a task call
-        # waiting on subagents hands back its handle, so the line is read.
-        detach = asyncio.Event()
-        runtime.T.STOCK_CONTEXT.subagent_detach = detach
-
         def wake() -> None:
             if not (sup.turn_active() or steer_inbox or not queue.empty()) and _wake_due(state):
                 queue.put_nowait(_WAKE)
@@ -912,6 +903,7 @@ class Repl:
                     loop.call_soon_threadsafe(wake)
 
         task_jobs.listener = task_settled
+        runtime.T.STOCK_CONTEXT.delivers_task_results = True
 
         channel_instructed: set[str] = set()
 
@@ -1006,7 +998,6 @@ class Repl:
             if sup.turn_active() and _steer_mode(state) == "now":
                 # The turn writes it to the transcript where the model receives it.
                 steer_inbox.append(line)
-                detach.set()
                 return
             queue.put_nowait(line)
             if sup.turn_active() or queue.qsize() > 1:
@@ -1144,7 +1135,7 @@ class Repl:
             telemetry.exchange_factory = previous_exchange_factory
             supervisor.set_current(None)
             task_jobs.listener = None
-            runtime.T.STOCK_CONTEXT.subagent_detach = None
+            runtime.T.STOCK_CONTEXT.delivers_task_results = False
             subagents.window_opener.reset(opener_token)
             state.windows = None
             consumer.cancel()

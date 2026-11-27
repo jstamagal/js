@@ -369,6 +369,10 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
         return {"role": "user", "content": "\n\n".join(notes), "steered": True} if notes else None
 
     turn_kwargs.setdefault("steer", finished_tasks)
+    # The run hands back what its tasks return before it ends (`_background_turns`).
+    delivered_before = chat.context.delivers_task_results
+    chat.context.delivers_task_results = settings.live_bool_setting(
+        getattr(cfg, "settings", None) or {}, ("SUBAGENT_WAKE",), True)
 
     def turns() -> None:
         _turns(prepared, chat, transcript, turn_kwargs)
@@ -398,6 +402,7 @@ def _run_turns(prepared: _PreparedRun, opened: dict) -> int | None:
                 headless.emit_failure(events, network_display.error_text(e), code)
             return code
     finally:
+        chat.context.delivers_task_results = delivered_before
         try:
             if inputs.save:
                 chat.save()

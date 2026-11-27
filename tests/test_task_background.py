@@ -62,6 +62,7 @@ def workers(monkeypatch):
 def ctx(monkeypatch):
     """The main agent's context, as the REPL's turns use it."""
     main = _ctx()
+    main.delivers_task_results = True
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", main)
     return main
 
@@ -109,6 +110,7 @@ def _sent(monkeypatch, tmp_path, *lines: str) -> list[str]:
 
 def _subagent_ctx() -> ToolContext:
     child = _ctx()
+    child.delivers_task_results = True
     child.task_depth = 1
     return child
 
@@ -239,7 +241,7 @@ def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):
 
 def test_foreground_task_still_returns_the_result(workers, ctx):
     workers.release.set()
-    assert subagents.task(tasks=["alpha"], agent_id="worker", context=ctx) == "result of alpha"
+    assert subagents.task(tasks=["alpha"], agent_id="worker", background=False, context=ctx) == "result of alpha"
 
 
 def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers, ctx, loop_sup):
@@ -342,79 +344,6 @@ def _on_loop(loop, coro, timeout: float = 10):
     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
 
 
-def _detach_event(loop) -> asyncio.Event:
-    async def make() -> asyncio.Event:
-        return asyncio.Event()
-
-    return _on_loop(loop, make())
-
-
-def test_typing_hands_back_a_waiting_foreground_call_and_the_workers_carry_on(workers, ctx, loop_sup):
-    loop, _sup = loop_sup
-    ctx.subagent_detach = _detach_event(loop)
-    call = asyncio.run_coroutine_threadsafe(
-        subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx), loop)
-    assert workers.started.wait(5)
-    assert not call.done()
-    loop.call_soon_threadsafe(ctx.subagent_detach.set)
-    handed = call.result(timeout=5)
-    handle = _handle(handed)
-    job = _job(handle, ctx)
-    assert job.running() and not workers.cancelled.is_set()
-
-    workers.release.set()
-    job.future.result(timeout=5)
-    [note] = _notes(ctx)
-    assert handle in note and "result of alpha" in note
-
-
-def test_a_foreground_call_that_finishes_first_returns_the_result_and_leaves_no_note(workers, ctx, loop_sup):
-    loop, _sup = loop_sup
-    ctx.subagent_detach = _detach_event(loop)
-    workers.release.set()
-    assert _on_loop(loop, subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx)) == "result of alpha"
-    assert _notes(ctx) == []
-
-
-def test_subagent_wait_hands_back_the_handle_when_it_passes(workers, ctx, loop_sup):
-    loop, _sup = loop_sup
-    ctx.subagent_wait_seconds = 1
-    began = time.monotonic()
-    handed = _on_loop(loop, subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx))
-    assert 0.9 <= time.monotonic() - began < 5
-    assert _job(_handle(handed), ctx).running()
-
-
-def test_cancelling_a_waiting_foreground_call_kills_its_workers(workers, ctx, loop_sup):
-    loop, _sup = loop_sup
-    ctx.subagent_detach = _detach_event(loop)
-    holder: list[asyncio.Task] = []
-
-    async def start() -> None:
-        holder.append(asyncio.ensure_future(
-            subagents.task_async(tasks=["alpha"], agent_id="worker", context=ctx)))
-
-    _on_loop(loop, start())
-    assert workers.started.wait(5)
-    loop.call_soon_threadsafe(holder[0].cancel)
-    assert workers.cancelled.wait(5)
-
-    async def ended() -> bool:
-        await asyncio.wait(holder, timeout=5)
-        return holder[0].cancelled()
-
-    assert _on_loop(loop, ended())
-    assert _notes(ctx) == []
-
-
-def test_a_subagents_own_call_waits_whatever_subagent_wait_says(workers, ctx, loop_sup):
-    loop, _sup = loop_sup
-    child = _subagent_ctx()
-    child.subagent_wait_seconds = 1
-    threading.Timer(1.5, workers.release.set).start()
-    assert _on_loop(loop, subagents.task_async(tasks=["alpha"], agent_id="worker", context=child)) == "result of alpha"
-
-
 def test_an_idle_repl_wakes_the_agent_with_a_finished_result(workers, ctx, monkeypatch, tmp_path):
     cfg = offline_config(tmp_path)
     cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
@@ -478,33 +407,118 @@ def test_a_prompt_run_gives_the_agent_each_background_result_before_it_ends(work
     assert task_jobs.outstanding(ctx.task_owner) == []
 
 
-def test_a_line_typed_during_a_waiting_task_call_is_read_without_waiting_on_it(workers, ctx, monkeypatch, tmp_path):
-    cfg = offline_config(tmp_path)
-    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
-    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
-    seen: dict[str, object] = {}
 
-    async def turn(cfg, system, messages, telemetry, **kwargs):
-        if "handed" in seen:
-            return
-        seen["handed"] = await subagents.task_async(tasks=["alpha"], agent_id="worker",
-                                                    context=runtime.T.STOCK_CONTEXT)
-        seen["running"] = _job(_handle(seen["handed"]), runtime.T.STOCK_CONTEXT).running()
-        seen["steered"] = await kwargs["steer"]()
+class Chatty:
+    """Child turns that read what is sent to them: each keeps a transcript in
+    its worker, answers a sent "finish" by ending, and a resumed session
+    answers its message at once."""
 
-    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    def __init__(self, tmp_path) -> None:
+        self.tmp_path = tmp_path
+        self.heard: list[str] = []
+        self.cancelled: list[int] = []
 
-    async def lines(on_line) -> None:
-        await on_line("go")
-        while not workers.started.is_set():
-            await asyncio.sleep(0.01)
-        await on_line("/set STEER_MODE now")
-        await on_line("are you there?")
-        deadline = time.monotonic() + 10
-        while "steered" not in seen and time.monotonic() < deadline:
-            await asyncio.sleep(0.01)
-        workers.release.set()
+    async def run(self, idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
+        if session_id:
+            return f"resumed {session_id}: {item}"
+        worker = task_jobs.CURRENT_WORKER.get()
+        worker.session_file = self.tmp_path / f"worker-{idx}.jsonl"
+        worker.messages = [{"role": "user", "content": item},
+                           {"role": "assistant", "content": f"working on {item}",
+                            "tool_calls": [{"function": {"name": "read"}}]}]
+        try:
+            while True:
+                sent = worker.take_inbox()
+                if sent is not None:
+                    self.heard.append(sent["content"])
+                    if "finish" in sent["content"]:
+                        return f"result of {item}"
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.cancelled.append(idx)
+            raise
 
-    run_repl(monkeypatch, cfg, lines)
-    assert seen["running"]
-    assert "are you there?" in str(seen["steered"]["content"])
+
+@pytest.fixture
+def chatty(monkeypatch, tmp_path):
+    fake = Chatty(tmp_path)
+    monkeypatch.setattr(subagents, "_run_one_task_async", fake.run)
+    monkeypatch.setattr(task_jobs, "_JOBS", {})
+    return fake
+
+
+def _until(check, what: str, timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, what
+        time.sleep(0.01)
+
+
+def test_the_main_agent_gets_a_handle_at_once_by_default(workers, ctx):
+    started = subagents.task(tasks=["alpha", "beta"], agent_id="worker", context=ctx)
+    job = _job(_handle(started), ctx)
+    assert job.running()
+    assert [w.handle for w in job.workers] == [f"{job.id}.1", f"{job.id}.2"]
+
+
+def test_a_context_nothing_hands_results_to_waits_by_default(workers, ctx):
+    workers.release.set()
+    assert subagents.task(tasks=["alpha"], agent_id="worker", context=_ctx()) == "result of alpha"
+
+
+def test_a_subagent_waits_for_its_own_subagents_by_default(workers, ctx):
+    workers.release.set()
+    assert subagents.task(tasks=["alpha"], agent_id="worker", context=_subagent_ctx()) == "result of alpha"
+
+
+def test_poll_shows_each_subagent_at_work(chatty, ctx):
+    job = _job(_handle(subagents.task(tasks=["alpha", "beta"], agent_id="worker", context=ctx)), ctx)
+    _until(lambda: all(w.messages for w in job.workers), "workers started")
+    polled = subagents.task(action="poll", handle=job.id, context=ctx)
+    for worker in job.workers:
+        assert worker.handle in polled and str(worker.session_file) in polled
+    assert "working on beta" in polled and "read" in polled
+    one = subagents.task(action="poll", handle=f"{job.id}.2", context=ctx)
+    assert "working on beta" in one and "working on alpha" not in one
+    listed = subagents.task(action="list", context=ctx)
+    assert job.id in listed and f"{job.id}.1" in listed
+
+
+def test_send_reaches_a_running_subagent(chatty, ctx):
+    job = _job(_handle(subagents.task(tasks=["alpha"], agent_id="worker", context=ctx)), ctx)
+    _until(lambda: job.workers[0].messages, "worker started")
+    assert not subagents.task(action="send", handle=job.id, message="please finish", context=ctx).startswith("ERROR")
+    assert job.future.result(timeout=5) == "result of alpha"
+    assert chatty.heard == ["please finish"]
+
+
+def test_send_to_one_of_several_needs_its_handle(chatty, ctx):
+    job = _job(_handle(subagents.task(tasks=["alpha", "beta"], agent_id="worker", context=ctx)), ctx)
+    assert subagents.task(action="send", handle=job.id, message="hi", context=ctx).startswith("ERROR")
+    subagents.task(action="send", handle=f"{job.id}.2", message="finish", context=ctx)
+    _until(lambda: job.workers[1].state == "done", "second worker done")
+    assert job.workers[0].running()
+
+
+def test_send_to_a_finished_subagent_continues_its_session(chatty, ctx):
+    job = _job(_handle(subagents.task(tasks=["alpha"], agent_id="worker", context=ctx)), ctx)
+    _until(lambda: job.workers[0].messages, "worker started")
+    subagents.task(action="send", handle=job.id, message="finish", context=ctx)
+    job.future.result(timeout=5)
+    again = _job(_handle(subagents.task(action="send", handle=f"{job.id}.1", message="and the tests?",
+                                        context=ctx)), ctx)
+    assert again.id != job.id
+    assert again.future.result(timeout=5) == f"resumed {job.workers[0].session_file}: and the tests?"
+
+
+def test_kill_of_one_subagent_leaves_the_others_running(chatty, ctx):
+    job = _job(_handle(subagents.task(tasks=["alpha", "beta"], agent_id="worker", context=ctx)), ctx)
+    _until(lambda: all(w.messages for w in job.workers), "workers started")
+    stopped = subagents.task(action="kill", handle=f"{job.id}.1", context=ctx)
+    assert not stopped.startswith("ERROR")
+    _until(lambda: job.workers[0].state == "stopped", "first worker stopped")
+    assert job.workers[1].running() and job.running()
+    subagents.task(action="send", handle=f"{job.id}.2", message="finish", context=ctx)
+    result = job.future.result(timeout=5)
+    assert "result of beta" in result and "STOPPED" in result
+    assert chatty.cancelled == [1]
