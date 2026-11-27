@@ -7,6 +7,7 @@ import asyncio
 import io
 import json
 import os
+import select
 import sys
 import threading
 import time
@@ -929,19 +930,26 @@ def test_two_runners_recruiting_one_name_at_once_start_one_agent(tmp_path, monke
     assert added == ["twig"]
 
 
-def test_a_sharded_swarm_with_no_cap_of_its_own_leaves_the_cap_to_each_runner(tmp_path, monkeypatch):
-    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(4)]
+def test_a_sharded_swarm_runs_under_the_one_cap_its_first_agent_settles(tmp_path, monkeypatch):
+    # No ``slots`` in the spec and no cap in the launcher's own settings: the
+    # cap is the one a single runner would take from its first agent's run.
+    _agent_dir(tmp_path, monkeypatch)
+    monkeypatch.setenv("JS_SWARM_PROCESSES", "2")
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go", "cwd": str(tmp_path),
+               "opts": {"SWARM_ACTIVE_MAX": "3"} if i == 0 else {}} for i in range(4)]
     given: list[dict] = []
-    monkeypatch.setattr(swarm_run.paths, "configure_home", lambda: None)
-    monkeypatch.setattr(swarm_run._settings, "live_value", lambda key: {"SWARM_ACTIVE_MAX": 0, "SWARM_PROCESSES": 2}[key])
     monkeypatch.setattr(swarm_run, "run_sharded", lambda path, count, raw: given.append(raw) or 0)
 
     assert swarm_run.main(_spec(tmp_path, agents)) == 0
-    assert all("slots" not in shard for shard in swarm_run._shard_specs(given[0], 2))
+    assert [shard["slots"] for shard in swarm_run._shard_specs(given[0], 2)] == [2, 1]
+    assert not list(tmp_path.rglob("*.jsonl"))  # settling the cap made no session
 
-    monkeypatch.setattr(swarm_run._settings, "live_value", lambda key: {"SWARM_ACTIVE_MAX": 3, "SWARM_PROCESSES": 2}[key])
+    # A cap of one is one runner: there is no second to hold a slot of it.
+    agents[0]["opts"] = {"SWARM_ACTIVE_MAX": "1"}
+    ran: list[str] = []
+    monkeypatch.setattr(swarm_run, "run", lambda path: ran.append(path) or 0)
     assert swarm_run.main(_spec(tmp_path, agents)) == 0
-    assert [shard["slots"] for shard in swarm_run._shard_specs(given[1], 2)] == [2, 1]
+    assert len(given) == 1 and len(ran) == 1
 
 
 def test_a_sharded_run_that_cannot_start_a_runner_ends_the_ones_it_started(tmp_path, monkeypatch):
@@ -950,10 +958,16 @@ def test_a_sharded_run_that_cannot_start_a_runner_ends_the_ones_it_started(tmp_p
     started: list[subprocess.Popen] = []
     real = subprocess.Popen
 
+    # The first runner is deaf to SIGTERM, as one blocked writing events to a
+    # full pipe is, and has filled its pipe by the time the second fails.
+    deaf = ("import signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "sys.stdout.write('x' * 1_000_000); sys.stdout.flush(); time.sleep(60)")
+
     def popen(_args, **kwargs):
         if started:
+            select.select([started[0].stdout], [], [], 10)
             raise OSError("no more processes")
-        started.append(real([sys.executable, "-c", "import time; time.sleep(60)"], **kwargs))
+        started.append(real([sys.executable, "-c", deaf], **kwargs))
         return started[0]
 
     monkeypatch.setattr(subprocess, "Popen", popen)
