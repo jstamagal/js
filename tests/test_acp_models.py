@@ -215,6 +215,38 @@ def test_a_cancel_no_prompt_follows_ends_the_turn(cached_models, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_a_cancel_whose_turn_ended_does_not_end_the_next_turn(cached_models, monkeypatch):
+    monkeypatch.setenv("JS_ACP_STEER_WAIT", "1")
+    finish_first = asyncio.Event()
+    finished = []
+
+    async def run_turn(*, text, **kwargs):
+        if text == "first":
+            await finish_first.wait()
+        else:
+            # Past the first turn's cancel timer.
+            await asyncio.sleep(1.3)
+        finished.append(text)
+
+    async def scenario():
+        monkeypatch.setattr(acp_turn, "run_turn", run_turn)
+        agent = acp_agent.Agent([])
+        agent.on_connect(SimpleNamespace())
+        session_id = (await agent.new_session(str(cached_models))).session_id
+        first = asyncio.create_task(agent.prompt(session_id, [TextContentBlock(text="first")]))
+        await asyncio.sleep(0.05)
+        await agent.cancel(session_id)
+        assert (await first).stop_reason == "cancelled"
+        turn = agent.sessions[session_id].turn
+        finish_first.set()
+        await asyncio.wait_for(asyncio.shield(turn), 10)
+        second = await agent.prompt(session_id, [TextContentBlock(text="second")])
+        assert second.stop_reason == "end_turn"
+
+    asyncio.run(scenario())
+    assert finished == ["first", "second"]
+
+
 def test_an_image_in_a_prompt_is_a_file_the_turn_attaches(cached_models, monkeypatch):
     from acp.schema import ImageContentBlock
 

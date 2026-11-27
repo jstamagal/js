@@ -363,6 +363,10 @@ class Agent:
             await session.steers.steer(text, files)
             await session.updates.resume()
         else:
+            if session.stop is not None:
+                # The turn that cancel was for has ended: its timer is not this turn's.
+                session.stop.cancel()
+                session.stop = None
             if session.updates is not None:
                 # What the last turn said after its prompt request was answered.
                 await session.updates.resume()
@@ -437,11 +441,14 @@ class Agent:
             if session.turn is turn and turn.done():
                 session.turn = None
 
-    def _stop(self, session: Session) -> None:
+    def _stop(self, session: Session, turn: asyncio.Task | None = None) -> None:
+        """End ``turn``, the turn a cancel was for (None: the session's turn),
+        if it is still the session's and still running."""
         session.stop = None
-        if session.turn is not None and not session.turn.done():
+        turn = turn or session.turn
+        if turn is not None and turn is session.turn and not turn.done():
             session.cancelled = True
-            session.turn.cancel()
+            turn.cancel()
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
         """End the session's turn, unless a prompt comes within ACP_STEER_WAIT
@@ -456,7 +463,7 @@ class Agent:
             self._stop(session)
             return
         session.updates.held = []
-        session.stop = asyncio.get_running_loop().call_later(wait, self._stop, session)
+        session.stop = asyncio.get_running_loop().call_later(wait, self._stop, session, session.turn)
         if session.released is not None:
             session.released.set()
 
