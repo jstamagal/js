@@ -899,3 +899,68 @@ def test_a_sharded_run_relays_every_runner_and_ends_once(tmp_path):
     assert sorted(e["agent"] for e in events if e["type"] == "agent_end") == ["a0", "a1", "a2"]
     assert [e["type"] for e in events].count("run_end") == 1 and events[-1]["agents"] == ["a0", "a1", "a2"]
     assert not list((tmp_path / "bus" / ".runners").iterdir())
+
+
+def test_two_runners_recruiting_one_name_at_once_start_one_agent(tmp_path, monkeypatch):
+    # Two runners on one bus, as a sharded run has; each recruit takes long
+    # enough between its check and its marker for the other to arrive.
+    root = tmp_path / "bus"
+    added: list[str] = []
+    monkeypatch.setattr(swarm_run.Runner, "add", lambda self, spec: added.append(spec.name))
+
+    def cap(_key):
+        time.sleep(0.2)
+        return 5
+
+    monkeypatch.setattr(swarm_run._settings, "live_value", cap)
+    parent = swarm_run.AgentSpec.from_dict({"name": "a", "agent": "voice", "opener": "go"})
+
+    async def both() -> list:
+        recruits = [swarm_run.Runner(root, [], None, io.StringIO()).recruiter(parent, swarm.Agent(root / name))
+                    for name in ("a", "b")]
+        outcomes = await asyncio.gather(*(asyncio.to_thread(recruit, "twig", "hello") for recruit in recruits),
+                                        return_exceptions=True)
+        await asyncio.sleep(0)
+        return outcomes
+
+    outcomes = asyncio.run(both())
+
+    assert sorted(type(o).__name__ for o in outcomes) == ["NoneType", "ValueError"]
+    assert added == ["twig"]
+
+
+def test_a_sharded_swarm_with_no_cap_of_its_own_leaves_the_cap_to_each_runner(tmp_path, monkeypatch):
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(4)]
+    given: list[dict] = []
+    monkeypatch.setattr(swarm_run.paths, "configure_home", lambda: None)
+    monkeypatch.setattr(swarm_run._settings, "live_value", lambda key: {"SWARM_ACTIVE_MAX": 0, "SWARM_PROCESSES": 2}[key])
+    monkeypatch.setattr(swarm_run, "run_sharded", lambda path, count, raw: given.append(raw) or 0)
+
+    assert swarm_run.main(_spec(tmp_path, agents)) == 0
+    assert all("slots" not in shard for shard in swarm_run._shard_specs(given[0], 2))
+
+    monkeypatch.setattr(swarm_run._settings, "live_value", lambda key: {"SWARM_ACTIVE_MAX": 3, "SWARM_PROCESSES": 2}[key])
+    assert swarm_run.main(_spec(tmp_path, agents)) == 0
+    assert [shard["slots"] for shard in swarm_run._shard_specs(given[1], 2)] == [2, 1]
+
+
+def test_a_sharded_run_that_cannot_start_a_runner_ends_the_ones_it_started(tmp_path, monkeypatch):
+    import subprocess
+
+    started: list[subprocess.Popen] = []
+    real = subprocess.Popen
+
+    def popen(_args, **kwargs):
+        if started:
+            raise OSError("no more processes")
+        started.append(real([sys.executable, "-c", "import time; time.sleep(60)"], **kwargs))
+        return started[0]
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(2)]
+
+    with pytest.raises(OSError):
+        swarm_run.run_sharded(_spec(tmp_path, agents), 2, out=io.StringIO())
+
+    assert started[0].poll() is not None
+    assert not list((tmp_path / "bus" / ".runners").iterdir())
