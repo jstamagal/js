@@ -26,9 +26,10 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    changes the js the owner uses. Work on a branch in its own worktree:
    `git worktree add ~/.js/worktrees/js-<topic> -b <topic>`.
 4. **`just lint`** before calling it clean. ruff is the gate.
-5. **Done means merged and installed.** Merge the branch into main in `~/js`,
-   then run `just install` there (it refuses to run from a worktree), so the
-   `js` on PATH runs the change.
+5. **Done means merged, pushed and installed.** Merge the branch into main in
+   `~/js`, push main to origin, then run `just install` there (it refuses to
+   run from a worktree), so the `js` on PATH runs the change and the other
+   machines get it with a pull.
 
 ## Where the suite runs
 
