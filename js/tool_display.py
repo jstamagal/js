@@ -8,12 +8,14 @@ with the metrics. The colours are /fset's `COLOR_*` entries (`js.fset`).
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 from collections.abc import Callable
 from typing import Any
 
+from rich.control import strip_control_codes
 from rich.syntax import Syntax
 from rich.text import Text
 
@@ -56,13 +58,19 @@ _PAD = 1
 _HANG = 2
 
 
+@functools.lru_cache(maxsize=8)
+def _transcript_patterns(rail: str, marks: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    return (re.compile(rf"^{re.escape(rail)} ?", re.M),
+            re.compile(rf"^(?:{'|'.join(re.escape(mark) for mark in marks)}) +", re.M))
+
+
 def for_transcript(rendered: str) -> str:
     """`rendered` as the transcript log records it: plain text without the
     rail, every exchange header opening with `TOOL_MARKER` whatever mark the
     screen drew."""
-    rail = re.compile(rf"^{re.escape(fset.setting_value('EXCHANGE_RAIL'))} ?", re.M)
-    marks = "|".join(re.escape(fset.setting_value(key)) for key in ("EXCHANGE_MARK_RUNNING", "EXCHANGE_MARK_OK", "EXCHANGE_MARK_FAILED"))
-    header = re.compile(rf"^(?:{marks}) +", re.M)
+    rail, header = _transcript_patterns(
+        fset.setting_value("EXCHANGE_RAIL"),
+        tuple(fset.setting_value(key) for key in ("EXCHANGE_MARK_RUNNING", "EXCHANGE_MARK_OK", "EXCHANGE_MARK_FAILED")))
     return header.sub(f"{TOOL_MARKER} ", rail.sub("", SGR.sub("", rendered)))
 
 
@@ -202,15 +210,58 @@ def _lexer(name: str, args: dict, body: str) -> str:
     return _path_lexer(args, body) if language is None else language
 
 
+@functools.lru_cache(maxsize=256)
+def _claiming_lexers(filename: str) -> tuple[tuple[Any, bool], ...]:
+    """Every pygments lexer that takes a file named ``filename``, each with
+    whether the name is one of its own (not one it shares)."""
+    from pygments.lexers import _fn_matches, _iter_lexerclasses
+
+    claiming: dict[Any, bool] = {}
+    for lexer in _iter_lexerclasses():
+        if any(_fn_matches(filename, pattern) for pattern in lexer.filenames):
+            claiming[lexer] = True
+        elif any(_fn_matches(filename, pattern) for pattern in lexer.alias_filenames):
+            claiming[lexer] = False
+    return tuple(claiming.items())
+
+
+def _filename_lexer(path: str, body: str) -> str | None:
+    """The lexer pygments' `guess_lexer_for_filename` picks for ``body`` in a
+    file at ``path``, without its walk over every lexer on each call; None
+    when no lexer takes the name. Of several lexers certain of the text, the
+    first registered."""
+    try:
+        claiming = _claiming_lexers(os.path.basename(path))
+    except ImportError:
+        return None
+    if not claiming:
+        return None
+    chosen = claiming[0][0]
+    if len(claiming) > 1:
+        ranked = []
+        for lexer, own in claiming:
+            score = lexer.analyse_text(body)
+            if score == 1.0:
+                ranked = [((score, own, lexer.priority, lexer.__name__), lexer)]
+                break
+            ranked.append(((score, own, lexer.priority, lexer.__name__), lexer))
+        chosen = max(ranked, key=lambda pair: pair[0])[1]
+    return chosen.aliases[0] if chosen.aliases else chosen.name
+
+
 def _path_lexer(args: dict, body: str) -> str:
     """The lexer for `body`, guessed from the call's path."""
     path = args.get("file_path") or args.get("path")
     if isinstance(path, str) and path:
         try:
-            return Syntax.guess_lexer(path, body)
+            return (body and _filename_lexer(path, body)) or Syntax.guess_lexer(path, body)
         except Exception:  # noqa: BLE001 - pygments lookup on an odd path
             return "text"
     return "text"
+
+
+# rich.syntax.Syntax's default tab_size.
+_SYNTAX_TAB = 4
 
 
 def _highlight(lines: list[str], lexer: str) -> list[Text]:
@@ -218,14 +269,27 @@ def _highlight(lines: list[str], lexer: str) -> list[Text]:
     if lexer in ("text", "default"):
         return [Text(line) for line in lines]
     code = "\n".join(lines)
-    parts = list(Syntax(code, lexer, theme=fset.code_style(), background_color="default")
+    parts = list(Syntax(code, lexer, theme=fset.code_style(), background_color="default", tab_size=_SYNTAX_TAB)
                  .highlight(code).split("\n", allow_blank=True))[:len(lines)]
     return parts if len(parts) == len(lines) else [Text(line) for line in lines]
+
+
+def _unhighlighted(lines: list[str], lexer: str) -> list[Text]:
+    """`_highlight` without the colour: each line as text, its tabs as wide
+    as the highlighter makes them."""
+    rows = [Text(line) for line in lines]
+    if lexer not in ("text", "default"):
+        for row in rows:
+            row.expand_tabs(_SYNTAX_TAB)
+    return rows
 
 
 def _fit(text: Text, room: int) -> list[Text]:
     """`text` as rows of at most `room` cells: a long line breaks at the
     column, as a terminal wraps it, and keeps all of itself."""
+    plain = text.plain
+    if len(plain) <= room and plain.isascii() and plain.isprintable():
+        return [text]
     text = text.copy()
     text.expand_tabs(TAB)
     cuts = cut_points(text.plain, room, words=False)[:-1]
@@ -245,6 +309,7 @@ class _Block:
         self.state = state
         self.rows: list[Text] = []
         self.whole = False  # TOOLS_DISPLAY 3: the header shows every argument whole
+        self.plain = False  # for a reader that drops colour: no highlighting, rendered as text
 
     def colour(self) -> str:
         return {MARK: self.theme.warn, OK: self.theme.ok, FAIL: self.theme.error}[self.state]
@@ -319,10 +384,10 @@ class _Block:
         gutter = max((len(number) for number, _ in lines), default=1)
         room = self.inner - _INDENT - 2 * _PAD - gutter - 2 - sign
         for number, text in lines:
-            head = text[:sign]
-            for index, piece in enumerate(_fit(text[sign:], room)):
+            head, body = (text[:sign], text[sign:]) if sign else ("", text)
+            for index, piece in enumerate(_fit(body, room)):
                 label = number.rjust(gutter) if index == 0 else " " * gutter
-                lead = head if index == 0 else Text(" " * sign)
+                lead = head if index == 0 else " " * sign
                 self._panel_row(Text.assemble((label, self.theme.dim), "  ", lead, piece))
 
     def note(self, text: str | list[fset.Run], style: str = "") -> None:
@@ -333,10 +398,14 @@ class _Block:
     def render(self) -> str:
         if not self.rows:
             return ""
+        if self.plain:
+            rail = fset.setting_value("EXCHANGE_RAIL") + " "
+            plains = (row.plain for row in self.rows)
+            return "".join(f"{rail}{plain if plain.isprintable() else strip_control_codes(plain)}\n" for plain in plains)
         console = render_console(self.width)
         rail = Text.assemble((fset.setting_value("EXCHANGE_RAIL") + " ", self.colour()))
-        for row in self.rows:
-            console.print(rail + row, soft_wrap=True)
+        # One print for the block: a print a row costs more than the row.
+        console.print(Text("\n").join(rail + row for row in self.rows), soft_wrap=True)
         return console.file.getvalue()  # type: ignore[attr-defined]
 
 
@@ -391,13 +460,20 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     return block.render()
 
 
-def _read_view(output: ScreenResult, args: dict | None) -> tuple[list[tuple[str, Text]], int | None] | None:
+def _read_view(output: ScreenResult, args: dict | None, *, limit: int | None = None,
+               plain: bool = False) -> tuple[list[tuple[str, Text]], int | None] | None:
+    """The read result as numbered rows. Only the first ``limit`` rows are
+    drawn, so only those are highlighted; ``plain`` highlights none."""
     if output.read is None:
         return None
     rows, total = output.read
     kept = [(number, text) for number, text in rows if number]
     notes = [(number, Text(text)) for number, text in rows if not number]
-    code = _highlight([text for _, text in kept], _path_lexer(args or {}, "\n".join(t for _, t in kept)))
+    drawn = len(kept) if limit is None else min(limit, len(kept))
+    head = [text for _, text in kept[:drawn]]
+    lexer = _path_lexer(args or {}, "\n".join(head))
+    code = _unhighlighted(head, lexer) if plain else _highlight(head, lexer)
+    code += [Text(text) for _, text in kept[drawn:]]
     return [(number, text) for (number, _), text in zip(kept, code, strict=True)] + notes, total
 
 
@@ -426,7 +502,8 @@ def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> 
         return
     hidden = len(lines) - preview if level == 2 and len(lines) > preview else 0
     lines = lines[:len(lines) - hidden]
-    code = _highlight(lines, _lexer(name, args, "\n".join(lines)))
+    lexer = _lexer(name, args, "\n".join(lines))
+    code = _unhighlighted(lines, lexer) if block.plain else _highlight(lines, lexer)
     if shown.body_is_file:
         block.numbered([(str(n), text) for n, text in enumerate(code, 1)])
     else:
@@ -512,7 +589,7 @@ def _finished_full(block: _Block, name: str, args: dict, output: ScreenResult, l
     if not output.lines:
         block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.body_runs(), note_style)
         return
-    read = _read_view(output, args)
+    read = _read_view(output, args, limit=limit, plain=block.plain)
     diff = _diff_view(output, colours)
     if read is not None:
         rows, of = read
@@ -529,10 +606,12 @@ def _finished_full(block: _Block, name: str, args: dict, output: ScreenResult, l
 
 def render_exchange(name: str, args: dict | None, result: Any = None, *, level: int,
                     preview: int = 12, width: int | None = None, malformed: bool = False,
-                    settings: Any = None, live: list[str] | None = None, elapsed: str = "") -> str:
+                    settings: Any = None, live: list[str] | None = None, elapsed: str = "",
+                    plain: bool = False) -> str:
     """One tool exchange behind its rail. `result` None is a call still
     running: `live` is the tail of its output so far, `elapsed` how long it
-    has run.
+    has run. `plain` is the exchange as text without colour, for
+    `for_transcript`: the same rows with no escape sequences in them.
 
     TOOLS_DISPLAY  1  what `call_kind` says of the call: a quiet call is one
                       row, a command its last line, a patch its diff, anything
@@ -559,6 +638,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     output = tool_output(name, result)
     block = _Block(width or block_width(), colours, FAIL if output.failed else OK)
     block.whole = level >= 3
+    block.plain = plain
     if level == 1:
         _finished_brief(block, name, args, output, call_kind(name, args, settings), preview, malformed)
     else:

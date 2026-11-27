@@ -8,9 +8,13 @@ types (messages, tools, errors) import `ai` themselves.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
+import importlib
+import threading
 import time
 import uuid
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
@@ -177,6 +181,7 @@ def resolve_model(
         )
     provider = ai.get_provider(
         wire.sdk,
+        client=_shared_http_client(wire.sdk),
         base_url=provider_base_url,
         # With no provider a missing key goes out as "" (a keyless local
         # server), never as the SDK's env key.
@@ -185,6 +190,58 @@ def resolve_model(
         protocol=protocol,
     )
     return ai.Model(id=model_id, provider=provider)
+
+
+# One HTTP client per event loop and SDK, shared by every model call on the
+# loop: its connections stay open between calls, and the TLS setup (reading
+# the CA bundle, several milliseconds) is done once instead of per call. Each
+# call's hooks reach only its own requests (`stream_transport.own_responses`).
+# A client is closed with its loop's `close_shared_http_clients`, or dropped
+# with the loop.
+_shared_clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, Any]] = weakref.WeakKeyDictionary()
+
+
+def _shared_http_client(sdk: str) -> Any:
+    """The running loop's HTTP client for ``sdk``'s provider SDK; None off a
+    loop or for an SDK js builds no client for (the provider builds its own)."""
+    if sdk not in ("openai", "anthropic"):
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    # A loop that was closed without `close_shared_http_clients` is let go
+    # here: its clients' connections hold it, so the weak key alone never does.
+    for closed in [known for known in _shared_clients if known.is_closed()]:
+        _shared_clients.pop(closed, None)
+    clients = _shared_clients.setdefault(loop, {})
+    client = clients.get(sdk)
+    if client is None or client.is_closed:
+        if sdk == "openai":
+            from openai import DefaultAsyncHttpxClient
+        else:
+            from anthropic import DefaultAsyncHttpxClient
+        client = clients[sdk] = DefaultAsyncHttpxClient()
+    return client
+
+
+def load_sdk_in_background(provider_id: str | None, provider_base_url: str | None) -> None:
+    """Start importing the provider SDK a call to this route goes through, on
+    a thread of its own. The import is a few hundred milliseconds the first
+    call would otherwise spend; a REPL has them while its operator types."""
+    try:
+        sdk = routing.resolve_wire(provider_id, base_url=provider_base_url).sdk
+    except Exception:  # noqa: BLE001 - the call itself reports a route that does not resolve
+        return
+    if sdk in ("openai", "anthropic"):
+        threading.Thread(target=importlib.import_module, args=(sdk,), daemon=True, name="sdk-import").start()
+
+
+async def close_shared_http_clients() -> None:
+    """Close the running loop's shared HTTP clients."""
+    for client in _shared_clients.pop(asyncio.get_running_loop(), {}).values():
+        with contextlib.suppress(Exception):
+            await client.aclose()
 
 
 def tool_specs_to_ai_tools(specs: list[dict]) -> list[ai.types.tools.Tool]:
@@ -279,18 +336,13 @@ async def _open_stream(
             sdk_client.max_retries = 0
         http_client = _http_client(model)
         if http_client is not None:
+            headers = dict(getattr(model.provider, "headers", None) or {})
             await cleanup.enter_async_context(stream_transport.own_responses(
                 http_client, stream_transport.current_call(),
                 on_request=on_request, on_bytes=on_bytes,
                 timeout={"connect": connect_timeout, "read": None},
+                request_hooks=(_lay_headers(sdk_client, headers),) if headers else (),
             ))
-        if sdk_client is not None:
-            headers = dict(getattr(model.provider, "headers", None) or {})
-            if headers:
-                hooks = sdk_client._client.event_hooks["request"]
-                lay = _lay_headers(sdk_client, headers)
-                hooks.append(lay)
-                cleanup.callback(hooks.remove, lay)
         async with ai.stream(model=model, messages=messages, tools=tools, params=params) as stream:
             yield stream
 

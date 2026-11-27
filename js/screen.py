@@ -819,8 +819,13 @@ def build_app(
     def _editing_mode() -> EditingMode:
         return EditingMode.VI if editing_mode() == "vi" else EditingMode.EMACS
 
+    def _redraw_interval() -> float | None:
+        cap = float(fset.setting_value("SCREEN_REDRAWS_MAX") or 0)
+        return 1.0 / cap if cap > 0 else None
+
     def _sync_editing_mode(app: Application) -> None:
         app.editing_mode = _editing_mode()
+        app.min_redraw_interval = _redraw_interval()
 
     if layout_factory is not None:
         layout = layout_factory(layout)
@@ -836,6 +841,7 @@ def build_app(
         before_render=_sync_editing_mode,
         full_screen=True,
         mouse_support=False,
+        min_redraw_interval=_redraw_interval(),
     )
     return app, scrollback
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import functools
 import json
 import os
 import re
@@ -407,6 +408,14 @@ def _open_locked(session_file: Path, mode: str, **open_kw):
     raise OSError(errno.ESTALE, "session file kept being replaced", str(session_file))
 
 
+@functools.lru_cache(maxsize=4096)
+def file_key(session_file: str) -> str:
+    """The resolved path that names ``session_file`` in this process's
+    per-file state. Resolved once per path: a session file does not move
+    under a running js."""
+    return str(Path(session_file).resolve(strict=False))
+
+
 def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
     """Append `record` to `session_file` under an exclusive lock, with a fresh
     id and its parent, and fsync. Returns the record as written. A record for
@@ -415,7 +424,7 @@ def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
     if session_file == Path(os.devnull):
         return dict(record)
     session_file.parent.mkdir(parents=True, exist_ok=True)
-    key = str(session_file.resolve(strict=False))
+    key = file_key(str(session_file))
     with _open_locked(session_file, "a+b") as stream:
         fd = stream.fileno()
         with _chains_lock:

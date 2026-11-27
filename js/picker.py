@@ -14,10 +14,12 @@ from typing import Any
 from prompt_toolkit.application import Application, in_terminal
 from prompt_toolkit.application.current import get_app_or_none
 from prompt_toolkit.data_structures import Point
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout import HSplit, Layout, ScrollOffsets, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
@@ -47,6 +49,101 @@ class ProviderRow:
 class ModelRow:
     id: str
     provider: str
+
+
+# ---------------------------------------------------------------------------
+# A list picker: one searchable list on the whole screen (sessions, skills)
+# ---------------------------------------------------------------------------
+
+class _Closed:
+    pass
+
+
+# What a list picker's `press` returns when the operator closed it.
+CLOSED = _Closed()
+PAGE = 10
+MOVES = {"up": -1, "down": 1, "page_up": -PAGE, "page_down": PAGE}
+_KEY_NAMES = {Keys.ControlM: "enter", Keys.ControlJ: "enter", Keys.ControlH: "backspace",
+              Keys.Backspace: "backspace", Keys.Escape: "escape", Keys.ControlC: "c-c",
+              Keys.ControlU: "c-u", Keys.ControlW: "c-w", Keys.Up: "up", Keys.Down: "down",
+              Keys.PageUp: "pageup", Keys.PageDown: "pagedown", Keys.Home: "home", Keys.End: "end"}
+
+
+def search_key(state: Any, key: Any) -> None:
+    """One key on a list picker's search screen: it moves the highlight,
+    leaves the search, or edits ``state.query_text`` and refreshes the list.
+    A keymap without an action never gets it."""
+    action = keys.action_for(state.keymaps[state.screen], key)
+    text = state.query_text
+    if action in MOVES:
+        state.move(MOVES[action])
+        return
+    if action == "choose":
+        state.screen = "list"
+        return
+    if action == "back":
+        state.query_text = ""
+        state.screen = "list"
+    elif action == "backspace":
+        state.query_text = text[:-1]
+    elif action == "clear":
+        state.query_text = ""
+    elif action == "delete_word":
+        state.query_text = text.rstrip()[: len(text.rstrip()) - len(text.rstrip().split(" ")[-1])]
+    elif isinstance(key, str) and len(key) == 1 and key.isprintable():
+        state.query_text = text + key
+    if state.query_text != text:
+        state.refresh()
+
+
+def list_application(state: Any, style: Style, *, rows_below: Any = 0,
+                     input: Input | None = None, output: Output | None = None) -> Application[Any]:
+    """A list picker on the screen: a title row, a subtitle, and the list.
+    Every key goes to ``state.press``; the application exits with what it
+    returns, or with None on `CLOSED`. ``rows_below`` is how many rows stay
+    visible under the highlighted one."""
+    kb = KeyBindings()
+
+    def dispatch(event: KeyPressEvent) -> None:
+        pressed = event.key_sequence[0].key
+        key = _KEY_NAMES.get(pressed, pressed if isinstance(pressed, str) and len(pressed) == 1 else None)
+        if key is None:
+            key = event.data if len(event.data) == 1 and event.data.isprintable() else ""
+        if not key:
+            return
+        if len(event.key_sequence) > 1:
+            key = tuple(_KEY_NAMES.get(press.key, press.key) for press in event.key_sequence)
+        result = state.press(key)
+        if result is CLOSED:
+            event.app.exit(result=None)
+        elif result is not None:
+            event.app.exit(result=result)
+
+    kb.add(Keys.Any)(dispatch)
+    kb.add("escape", eager=Condition(
+        lambda: keys.action_for(state.keymaps[state.screen], "escape") is not None,
+    ))(dispatch)
+
+    for keymap in state.keymaps.values():
+        for sequences in keymap.values():
+            for sequence in sequences:
+                if len(sequence) > 1:
+                    kb.add(*sequence)(dispatch)
+
+    body = FormattedTextControl(
+        lambda: state.body()[0],
+        get_cursor_position=lambda: Point(0, state.body()[1]),
+        show_cursor=False,
+    )
+    root = HSplit(
+        [
+            Window(FormattedTextControl(state.title), height=1),
+            Window(FormattedTextControl(state.subtitle), height=lambda: Dimension.exact(state.subtitle_height())),
+            Window(body, wrap_lines=False, always_hide_cursor=True, scroll_offsets=ScrollOffsets(bottom=rows_below)),
+        ]
+    )
+    return Application(layout=Layout(root), key_bindings=kb, style=style, full_screen=True,
+                       input=input, output=output)
 
 
 def _provider_rows() -> list[ProviderRow]:

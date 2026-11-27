@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -75,5 +77,11 @@ def run_owning_loop(coro: Any) -> Any:
     try:
         return runner.run(coro)
     finally:
+        # The model calls' shared HTTP clients die with this loop; close their
+        # connections on it. Only a process that made a model call has them.
+        model_client = sys.modules.get(f"{__package__}.model_client")
+        if model_client is not None:
+            with contextlib.suppress(Exception):
+                runner.run(model_client.close_shared_http_clients())
         install_asyncgen_shutdown_filter(runner.get_loop())
         runner.close()

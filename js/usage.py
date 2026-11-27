@@ -207,7 +207,7 @@ def _key(session_file: Path | str | None) -> str:
         return str(session_file)
     if not _persisted(session_file):
         return os.devnull
-    return str(Path(session_file).resolve(strict=False))
+    return session_store.file_key(str(session_file))
 
 
 def load(session_file: Path) -> UsageTotals:

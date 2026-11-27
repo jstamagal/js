@@ -39,7 +39,7 @@ from . import (
     settings as _settings,
     turn_settings,
 )
-from .sampling import SAMPLING_FIELDS, Sampling
+from .sampling import SAMPLING_FIELDS, Sampling, split_entries
 
 KEYS: tuple[str, ...] = (
     "CONTEXT_SIZE",
@@ -74,26 +74,7 @@ def parse(text: str) -> dict[str, Any]:
 def _entries(text: str) -> list[str]:
     """``text`` split at each ',' outside a JSON list and outside a JSON
     string, so a `DRY_SEQUENCE_BREAKERS` list stays one entry."""
-    entries, start, depth, quoted, escaped = [], 0, 0, False, False
-    for index, char in enumerate(text):
-        if quoted:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                quoted = False
-        elif char == '"':
-            quoted = True
-        elif char == "[":
-            depth += 1
-        elif char == "]":
-            depth = max(0, depth - 1)
-        elif char == "," and depth == 0:
-            entries.append(text[start:index])
-            start = index + 1
-    entries.append(text[start:])
-    return entries
+    return split_entries(text, containers="[]")
 
 
 def render(values: dict[str, Any] | None) -> str:

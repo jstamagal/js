@@ -8,7 +8,7 @@ This is the architecture guide for contributors and agents working on `js`.
 
 ```toml
 [project.scripts]
-js = "js.cli:main"
+js = "js.entry:main"
 ```
 
 `js/__main__.py` delegates to the same CLI path.
@@ -330,7 +330,7 @@ tool-result clearing resets that baseline, because the drop it causes is
 expected; so do `/reset` and `/wipe`. A response without usage keeps the
 baseline. The channel
 prints only while the async REPL has installed a sink; elsewhere every hook is
-a no-op, and the models.dev refresh lines print to stderr as before.
+a no-op.
 
 `run_turn_async` also starts a usage meter (`js/usage.py`, a context variable)
 naming the session file and the `ToolContext.usage_chain` above it. Each

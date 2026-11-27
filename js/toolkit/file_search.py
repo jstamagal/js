@@ -24,14 +24,6 @@ def _glob_literal(text: str) -> str:
     return re.sub(r"([\\\[\]*?{}])", r"\\\1", text)
 
 
-def _real_dir(path: Path) -> Path:
-    """``path`` with symlinks resolved, or as given when it cannot be."""
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError):
-        return Path(os.path.abspath(path))
-
-
 _RG_MISSING = 'ERROR: rg (ripgrep) not found in tools/bin or PATH; run `just install` to provision it.'
 _RG_TIMEOUT_S = 120
 # ripgrep's line for a path its walk could not open or read, e.g.
@@ -430,6 +422,6 @@ def _hidden_globs(base: Path, context: ToolContext) -> tuple[str, ...]:
     leave out every `JAIL_HIDE` path inside it."""
     out: list[str] = []
     for hidden in jail.hidden_under(base, context):
-        rel = _glob_literal(hidden.relative_to(_real_dir(base)).as_posix())
+        rel = _glob_literal(hidden.relative_to(jail.real_path(base)).as_posix())
         out += [f"!/{rel}", f"!/{rel}/**"]
     return tuple(out)

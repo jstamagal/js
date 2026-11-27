@@ -409,7 +409,7 @@ def discover_skills(
             root_records: dict[str, _SkillRecord] = {}
             for path in _skill_paths(root):
                 try:
-                    record = _index_skill(path, source)
+                    record = _indexed(path, source)
                 except (ValueError, OSError) as exc:
                     _warn_once(msgs.SKILL_SKIPPED.said(path=path, error=exc))
                     continue
@@ -442,6 +442,24 @@ def _skill_paths(root: Path) -> tuple[Path, ...]:
     except OSError as exc:
         _warn_once(msgs.SKILL_SKIPPED.said(path=root, error=exc))
         return ()
+
+
+# A skill file's record by path and source, with the file's size and
+# modification time when it was read.
+_INDEXED: dict[tuple[str, str], tuple[tuple[int, int], _SkillRecord]] = {}
+
+
+def _indexed(path: Path, source: str) -> _SkillRecord:
+    """`_index_skill`, read again only when the file has changed."""
+    info = path.stat()
+    stamp = (info.st_size, info.st_mtime_ns)
+    key = (str(path), source)
+    known = _INDEXED.get(key)
+    if known is not None and known[0] == stamp:
+        return known[1]
+    record = _index_skill(path, source)
+    _INDEXED[key] = (stamp, record)
+    return record
 
 
 def _index_skill(path: Path, source: str) -> _SkillRecord:

@@ -7,6 +7,7 @@ import asyncio
 import io
 import json
 import os
+import select
 import sys
 import threading
 import time
@@ -868,3 +869,116 @@ def test_what_an_agent_writes_to_stderr_is_tagged_and_kept_in_its_own_file(tmp_p
     assert "[a] trouble in a" in err and "[b] trouble in b" in err
     for name in ("a", "b"):
         assert (tmp_path / "bus" / name / "stderr").read_text(encoding="utf-8") == f"trouble in {name}\n"
+
+
+def test_a_swarm_is_spread_over_one_process_per_sixteen_agents_up_to_the_cpus(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 8)
+    assert [swarm_run.processes_for(n, 0) for n in (1, 16, 17, 100, 500)] == [1, 1, 2, 7, 8]
+    assert swarm_run.processes_for(100, 1) == 1
+    assert swarm_run.processes_for(3, 12) == 3  # never more runners than agents
+    assert swarm_run.processes_for(100, 0, slots=2) == 2  # each runner holds a slot
+
+
+def test_a_sharded_spec_deals_every_agent_out_once_and_shares_the_slots():
+    raw = {"root": "/tmp/bus", "slots": 6, "agents": [{"name": f"a{i}"} for i in range(10)]}
+    shards = swarm_run._shard_specs(raw, 3)
+    names = [a["name"] for shard in shards for a in shard["agents"]]
+    assert sorted(names) == sorted(a["name"] for a in raw["agents"])
+    assert all(shard["processes"] == 1 and shard["root"] == "/tmp/bus" for shard in shards)
+    assert [shard["slots"] for shard in shards] == [2, 2, 2]
+    assert all("slots" not in s or s["slots"] == 0 for s in swarm_run._shard_specs({**raw, "slots": 0}, 3))
+
+
+def test_a_sharded_run_relays_every_runner_and_ends_once(tmp_path):
+    # An agent dir that does not exist fails each agent at configure, in its
+    # own runner process; the parent relays their events and ends the run.
+    agents = [{"name": f"a{i}", "agent": "no-such-agent", "opener": "go", "cwd": str(tmp_path)} for i in range(3)]
+    out = io.StringIO()
+
+    assert swarm_run.run_sharded(_spec(tmp_path, agents), 3, out=out) == 1
+    events = _events(out)
+    assert sorted(e["agent"] for e in events if e["type"] == "agent_end") == ["a0", "a1", "a2"]
+    assert [e["type"] for e in events].count("run_end") == 1 and events[-1]["agents"] == ["a0", "a1", "a2"]
+    assert not list((tmp_path / "bus" / ".runners").iterdir())
+
+
+def test_two_runners_recruiting_one_name_at_once_start_one_agent(tmp_path, monkeypatch):
+    # Two runners on one bus, as a sharded run has; each recruit takes long
+    # enough between its check and its marker for the other to arrive.
+    root = tmp_path / "bus"
+    added: list[str] = []
+    monkeypatch.setattr(swarm_run.Runner, "add", lambda self, spec: added.append(spec.name))
+
+    def cap(_key):
+        time.sleep(0.2)
+        return 5
+
+    monkeypatch.setattr(swarm_run._settings, "live_value", cap)
+    parent = swarm_run.AgentSpec.from_dict({"name": "a", "agent": "voice", "opener": "go"})
+
+    async def both() -> list:
+        recruits = [swarm_run.Runner(root, [], None, io.StringIO()).recruiter(parent, swarm.Agent(root / name))
+                    for name in ("a", "b")]
+        outcomes = await asyncio.gather(*(asyncio.to_thread(recruit, "twig", "hello") for recruit in recruits),
+                                        return_exceptions=True)
+        await asyncio.sleep(0)
+        return outcomes
+
+    outcomes = asyncio.run(both())
+
+    assert sorted(type(o).__name__ for o in outcomes) == ["NoneType", "ValueError"]
+    assert added == ["twig"]
+
+
+def test_a_sharded_swarm_runs_under_the_one_cap_its_first_agent_has(tmp_path, monkeypatch):
+    # No ``slots`` in the spec and no cap in the launcher's own settings: the
+    # cap is the one a single runner would take from its first agent's run.
+    _agent_dir(tmp_path, monkeypatch)
+    expanded: list = []
+    monkeypatch.setattr(swarm_run.run_assembly, "expand", lambda spec, cfg: expanded.append(spec) or spec)
+    monkeypatch.setenv("JS_SWARM_PROCESSES", "2")
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go", "cwd": str(tmp_path), "session": f"s-a{i}",
+               "opts": {"SWARM_ACTIVE_MAX": "3"} if i == 0 else {}} for i in range(4)]
+    given: list[dict] = []
+    monkeypatch.setattr(swarm_run, "run_sharded", lambda path, count, raw: given.append(raw) or 0)
+
+    assert swarm_run.main(_spec(tmp_path, agents)) == 0
+    assert [shard["slots"] for shard in swarm_run._shard_specs(given[0], 2)] == [2, 1]
+    # Reading the cap made no session and expanded no prompt: the inline
+    # directives of the agent's prompt run in its runner alone.
+    assert not list(tmp_path.rglob("*.jsonl")) and not expanded
+
+    # A cap of one is one runner: there is no second to hold a slot of it.
+    agents[0]["opts"] = {"SWARM_ACTIVE_MAX": "1"}
+    ran: list[str] = []
+    monkeypatch.setattr(swarm_run, "run", lambda path: ran.append(path) or 0)
+    assert swarm_run.main(_spec(tmp_path, agents)) == 0
+    assert len(given) == 1 and len(ran) == 1
+
+
+def test_a_sharded_run_that_cannot_start_a_runner_ends_the_ones_it_started(tmp_path, monkeypatch):
+    import subprocess
+
+    started: list[subprocess.Popen] = []
+    real = subprocess.Popen
+
+    # The first runner is deaf to SIGTERM, as one blocked writing events to a
+    # full pipe is, and has filled its pipe by the time the second fails.
+    deaf = ("import signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "sys.stdout.write('x' * 1_000_000); sys.stdout.flush(); time.sleep(60)")
+
+    def popen(_args, **kwargs):
+        if started:
+            select.select([started[0].stdout], [], [], 10)
+            raise OSError("no more processes")
+        started.append(real([sys.executable, "-c", deaf], **kwargs))
+        return started[0]
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    agents = [{"name": f"a{i}", "agent": "voice", "opener": "go"} for i in range(2)]
+
+    with pytest.raises(OSError):
+        swarm_run.run_sharded(_spec(tmp_path, agents), 2, out=io.StringIO())
+
+    assert started[0].poll() is not None
+    assert not list((tmp_path / "bus" / ".runners").iterdir())

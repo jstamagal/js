@@ -84,6 +84,7 @@ def _warn_once(message: str) -> None:
 def reset_cache() -> None:
     """Drop the descriptions read; the next load reads its file again."""
     _load_description.cache_clear()
+    _parameter_sections.cache_clear()
 
 
 def description_dir() -> Path:
@@ -128,23 +129,34 @@ def _load_description(path: Path, flags: tuple[str, ...]) -> str:
     return _IF_BLOCK.sub(_resolve, text.split(_PARAMETERS, 1)[0]).strip()
 
 
+@cache
+def _parameter_sections(path: Path, stamp: tuple[int, int] | None) -> dict[str, str] | None:
+    """The prose under each parameter heading of one description file as it
+    stands at ``stamp``; None for a blank file."""
+    text = _read_description(path)
+    if not text.strip():
+        return None
+    _, _, parameters = text.partition(_PARAMETERS)
+    headings = list(_PARAMETER_HEADING.finditer(parameters))
+    sections: dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(parameters)
+        sections.setdefault(heading[1], parameters[heading.end():end].strip())
+    return sections
+
+
 def load_parameter_description(name: str, parameter: str, **values: object) -> str:
     """Read parameter prose from the same markdown file as its tool contract."""
     path = _description_path(name)
-    text = _read_description(path)
-    if not text.strip():
+    sections = _parameter_sections(path, paths.file_stamp(path))
+    if sections is None:
         return ""
-    _, separator, parameters = text.partition(_PARAMETERS)
-    if separator:
-        headings = list(_PARAMETER_HEADING.finditer(parameters))
-        for index, heading in enumerate(headings):
-            if heading[1] == parameter:
-                end = headings[index + 1].start() if index + 1 < len(headings) else len(parameters)
-                try:
-                    return snippets.substitute(parameters[heading.end():end].strip(), values)
-                except KeyError as exc:
-                    raise ValueError(f"parameter {parameter!r} in {path} needs {{{{{exc.args[0]}}}}}") from None
-    raise ValueError(f"missing parameter description {parameter!r} in {path}")
+    if parameter not in sections:
+        raise ValueError(f"missing parameter description {parameter!r} in {path}")
+    try:
+        return snippets.substitute(sections[parameter], values)
+    except KeyError as exc:
+        raise ValueError(f"parameter {parameter!r} in {path} needs {{{{{exc.args[0]}}}}}") from None
 
 
 def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = "") -> str:

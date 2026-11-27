@@ -323,9 +323,7 @@ def _observe(name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Obse
     case = CASES[name]
     endpoint = _Endpoint(case.replies, _fallback(case))
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(endpoint.respond))
-    get_provider = model_client.ai.get_provider
-    monkeypatch.setattr(model_client.ai, "get_provider",
-                        lambda *args, **kwargs: get_provider(*args, **kwargs, client=client))
+    monkeypatch.setattr(model_client, "_shared_http_client", lambda _sdk: client)
     convos: list = []
 
     class KeptConvo(runtime.TurnConvo):

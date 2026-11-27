@@ -125,6 +125,8 @@ def cells(text: str) -> int:
     """Terminal columns ``text`` takes on one line from column 0: colour
     escapes not counted, a tab out to the next stop, a wide character two.
     Every measure in js goes through here."""
+    if text.isascii() and text.isprintable():
+        return len(text)
     return sum(get_cwidth(char) for char in fset.plain(text).expandtabs(TAB))
 
 
@@ -136,6 +138,8 @@ def cut_points(plain: str, room: int, rest: int | None = None, *, words: bool = 
     holds at least one character. One pass, with running column counts.
     Every wrapping in js goes through here."""
     rest = room if rest is None else rest
+    if len(plain) <= room and plain.isascii() and plain.isprintable():
+        return [len(plain)]
     cuts: list[int] = []
     start, used, space, width = 0, 0, -1, room
     widths = [get_cwidth(char) for char in plain]

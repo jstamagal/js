@@ -18,6 +18,7 @@ from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
 from ..toolkit.descriptions import load_description
 from ..toolkit.discovery import ranked_entries, schema_search_text, search_tokens
 from .client import MCPClient
+from .redaction import redact_value
 from .transports import StdioTransport, StreamableHTTPTransport
 
 _NAME_RE = re.compile(r"[^a-z0-9_]+")
@@ -210,18 +211,7 @@ def _collision_public_name(
 
 def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
     """Recursively scrub configured credentials from server-controlled data."""
-    if isinstance(value, str):
-        return _redact_text(value, secrets)
-    if isinstance(value, dict):
-        return {
-            _redact_value(key, secrets) if isinstance(key, str) else key: _redact_value(item, secrets)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_value(item, secrets) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_value(item, secrets) for item in value)
-    return value
+    return redact_value(value, lambda text: _redact_text(text, secrets))
 
 
 def _safe_media_data(data: Any, secrets: tuple[str, ...]) -> bool:

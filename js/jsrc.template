@@ -344,6 +344,10 @@
 # time. 0: no limit.
 #set SWARM_ACTIVE_MAX 0
 
+# How many processes a swarm's agents are spread over. 0: one per 16 agents,
+# up to one per CPU. 1: every agent in one process.
+#set SWARM_PROCESSES 0
+
 
 ################################################################################
 #  TOOL OUTPUT SIZES  --  how much a tool result can hand the model
@@ -1107,6 +1111,10 @@
 # Lines the full-screen view keeps in scrollback.
 #set SCROLLBACK_LINES_MAX 5000
 
+# Times a second the full-screen view redraws at most, however fast text
+# arrives. 0: redraw on every change.
+#set SCREEN_REDRAWS_MAX 30
+
 # Windows open at once on the REPL screen, window 1 included. A subagent
 # launched with this many open runs without one.
 #set WINDOW_MAX 9
@@ -1186,7 +1194,7 @@
 # API key for an endpoint URI that names none.
 #set ENDPOINT_DEFAULT_KEY sk-dummy-key
 
-# on: a stale model catalog is refreshed at startup.
+# on: a stale model catalog is refreshed by a background process.
 #set MODEL_CATALOG_AUTO_REFRESH on
 
 # Seconds before the model catalog counts as stale.

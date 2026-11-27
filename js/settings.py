@@ -142,6 +142,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SPELLCHECK_LANGUAGE", "str", group="input"),
     SettingSpec("SPINNER_FRAMES", "str", group="display"),
     SettingSpec("SCROLLBACK_LINES_MAX", "int", group="display"),
+    SettingSpec("SCREEN_REDRAWS_MAX", "int", group="display"),
     SettingSpec("WINDOW_MAX", "int", group="display"),
     SettingSpec("WINDOW_KEEP_UNSEEN", "bool", group="display"),
     SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),
@@ -286,6 +287,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SUBAGENT_WORKERS_MAX", "int", group="limits"),
     # --- swarm ---
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
+    SettingSpec("SWARM_PROCESSES", "int", group="shell"),
     # --- kernel ---
     SettingSpec("SHELL_PROGRAM", "str", group="shell"),
     SettingSpec("SHELL_WAIT", "int", group="shell"),
