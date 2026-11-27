@@ -894,7 +894,9 @@ both of these agents can live under `~/.js/agents/meta/`.
 child. Each uses the prompt files and `agent.yaml` directly in its own
 directory. js recognizes a nested agent by its `agent.yaml` or an agent
 file such as `01-prompt.md`. Intermediate directories can group children
-at any depth.
+at any depth. A symlinked directory is read like a real one: a symlinked
+group lists the agents beneath it, and a nested symlink is an agent only
+when its target holds agent files.
 
 js looks up each full agent name in stock `defaults/agents/`, home `agents/`,
 and project `.js/agents/`. The nearest matching agent supplies all its files.

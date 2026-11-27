@@ -224,11 +224,11 @@ def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsy
     assert "asleep" in capsys.readouterr().err
 
 
-def test_symlinked_agent_is_a_tool_without_following_the_link(tmp_path, monkeypatch, capsys):
-    """Startup must not follow an agent symlink: following it wakes the host behind it.
+def test_symlinked_agent_is_a_tool_before_its_target_is_checked(tmp_path, monkeypatch, capsys):
+    """A top-level agent symlink is named a tool before its target is touched,
+    so an unreachable target costs only the agents nested beneath it.
 
-    Seen live: sheape lists `research` (-> ~/darkstar/..., lid closed). Following
-    the link stalled every run 5s and dropped `research` from her tools.
+    Seen live: sheape lists `research` (-> ~/darkstar/..., lid closed).
     """
     root = tmp_path / "agents"
     target = _agent_dir(tmp_path / "elsewhere", "research")
@@ -301,3 +301,85 @@ def test_an_unlistable_project_agent_does_not_fall_back(tmp_path):
             paths.agent_dirs("worker", (repo_root, global_root, project_root))
     finally:
         project_agent.chmod(0o700)
+
+
+def _listed_and_tools(root: Path) -> tuple[list[str], set[str]]:
+    from js import paths
+    from js.toolkit.registry import _agent_tools
+
+    return paths.agent_names((root,)), {tool.name for tool in _agent_tools(root, set())}
+
+
+def test_an_agent_beneath_a_symlinked_group_is_listed_and_a_tool(tmp_path):
+    """Discovery agrees with lookup: what `js -a meta:writer` runs is listed and has a tool."""
+    from js import paths
+
+    root = tmp_path / "agents"
+    root.mkdir()
+    writer = _agent_dir(tmp_path / "somewhere" / "meta", "writer")
+    (root / "meta").symlink_to(writer.parent)
+
+    names, tools = _listed_and_tools(root)
+
+    assert paths.agent_dirs("meta:writer", (root,)) == (root / "meta" / "writer",)
+    assert "meta:writer" in names
+    assert "meta__writer" in tools
+
+
+def test_a_nested_symlink_to_a_directory_without_agent_files_is_not_an_agent(tmp_path):
+    """Below the top level a symlinked directory passes the test a real one does."""
+    from js import paths
+
+    root = tmp_path / "agents"
+    (root / "meta").mkdir(parents=True)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "notes.txt").write_text("not an agent file\n", encoding="utf-8")
+    (root / "meta" / "docs").symlink_to(docs)
+    group = tmp_path / "group"
+    _agent_dir(group, "leaf")
+    (root / "meta" / "group").symlink_to(group)
+
+    names, tools = _listed_and_tools(root)
+
+    assert "meta:docs" not in names and "meta__docs" not in tools
+    assert "meta:group" not in names and "meta__group" not in tools
+    assert "meta:group:leaf" in names and "meta__group__leaf" in tools
+    with pytest.raises(ValueError):
+        paths.agent_dirs("meta:docs", (root,))
+
+
+def test_a_symlink_back_up_the_tree_ends_discovery(tmp_path):
+    root = tmp_path / "agents"
+    leaf = _agent_dir(root / "meta", "leaf")
+    (leaf / "loop").symlink_to(root / "meta")
+    (root / "back").symlink_to(root)
+
+    names, _ = _listed_and_tools(root)
+
+    assert names == ["back", "meta", "meta:leaf"]
+
+
+def test_an_unlistable_symlinked_agent_target_stays_a_tool_silently(tmp_path, monkeypatch, capsys):
+    """Listing a top-level link's target looks for nested agents only; a
+    sleeping mount behind it keeps the agent's tool and prints nothing."""
+    import errno
+
+    root = tmp_path / "agents"
+    target = _agent_dir(tmp_path / "elsewhere", "research")
+    root.mkdir()
+    link = root / "research"
+    link.symlink_to(target)
+    real_iterdir = Path.iterdir
+
+    def iterdir(self):
+        if self == link:
+            raise OSError(errno.ENODEV, "No such device", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+
+    names, tools = _listed_and_tools(root)
+
+    assert names == ["research"] and tools == {"research"}
+    assert capsys.readouterr().err == ""

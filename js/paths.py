@@ -352,7 +352,7 @@ def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Pa
         try:
             if candidate.is_dir():
                 entries = tuple(candidate.iterdir())
-                if ":" not in agent_id or candidate.is_symlink() or agent_files.has_agent_source(entries):
+                if ":" not in agent_id or agent_files.has_agent_source(entries):
                     selected = candidate
                 else:
                     found_non_agent = True
@@ -368,34 +368,46 @@ def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Pa
 
 
 def walk_agent_dirs(root: Path, *, on_error: Callable[[OSError], None] | None = None) -> Iterator[tuple[str, Path]]:
-    """Discover flat agents and nested agents with source files. Directory
-    symlinks are leaves, so discovery never wakes a linked mount or follows a cycle."""
-    def visit(directory: Path, prefix: str) -> Iterator[tuple[str, Path]]:
+    """Discover flat agents and nested agents with source files, the same test
+    `agent_dirs` applies. Every top-level entry that is a directory or a
+    symlink is an agent; a top-level symlink is yielded before its target is
+    touched, and a failure to list that target is silent, so an unreachable
+    mount keeps its agent. Directory symlinks are followed below that, through
+    the link's own path; a directory already on the current descent is not
+    entered again."""
+    def visit(directory: Path, prefix: str, ancestors: frozenset[tuple[int, int]],
+              report: Callable[[OSError], None] | None) -> Iterator[tuple[str, Path]]:
         try:
+            status = directory.stat()
+            identity = (status.st_dev, status.st_ino)
+            if identity in ancestors:
+                return
             entries = sorted(directory.iterdir())
             if ":" in prefix and agent_files.has_agent_source(entries):
                 yield prefix, directory
         except OSError as exc:
-            if on_error:
-                on_error(exc)
+            if report:
+                report(exc)
             return
+        ancestors |= {identity}
         for entry in entries:
             if not _AGENT_COMPONENT.fullmatch(entry.name):
                 continue
             agent_id = f"{prefix}:{entry.name}" if prefix else entry.name
             try:
-                if entry.is_symlink():
+                if not prefix and entry.is_symlink():
                     yield agent_id, entry
+                    yield from visit(entry, agent_id, ancestors, None)
                 elif entry.is_dir():
                     if not prefix:
                         yield agent_id, entry
-                    yield from visit(entry, agent_id)
+                    yield from visit(entry, agent_id, ancestors, on_error)
             except OSError as exc:
                 if on_error:
                     on_error(exc)
 
     if root.is_dir():
-        yield from visit(root, "")
+        yield from visit(root, "", frozenset(), on_error)
 
 
 def agent_names(roots: tuple[Path, ...] | None = None) -> list[str]:

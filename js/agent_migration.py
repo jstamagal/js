@@ -395,16 +395,22 @@ def _finish_old(result: Result, old: Path, new_body: str | None, *, undo: Callab
 
 
 def migrate_root(root: Path, *, apply: bool = False, keep: Keep | None = None) -> list[Result]:
-    """Convert agents throughout `root`. A symlinked agent is converted where it lives."""
+    """Convert agents throughout `root`. An agent reached through a symlink is
+    converted where it lives."""
     keep = keep if keep is not None else tool_matcher(default_roots(root))
     results: list[Result] = []
 
     def report_error(exc: OSError) -> None:
         results.append(Result(Path(exc.filename) if exc.filename else root, "error", _one_line(exc)))
 
+    links: set[Path] = set()
     for _, agent_dir in paths.walk_agent_dirs(root, on_error=report_error):
-        if agent_dir.is_symlink():
-            results.append(Result(agent_dir, "skip", msgs.AGENT_MIGRATE_SYMLINK.text(target=agent_dir.readlink())))
+        link = next((path for path in (agent_dir, *agent_dir.parents)
+                     if path != root and path.is_relative_to(root) and path.is_symlink()), None)
+        if link is not None:
+            if link not in links:
+                links.add(link)
+                results.append(Result(link, "skip", msgs.AGENT_MIGRATE_SYMLINK.text(target=link.readlink())))
             continue
         results.append(migrate_agent_dir(agent_dir, apply=apply, keep=keep))
     return results
