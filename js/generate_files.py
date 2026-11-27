@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import base64
 import io
+import ipaddress
 import json
 import mimetypes
 import os
+import socket
+import struct
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+from urllib.request import getproxies
 
 import httpx
 
@@ -101,6 +105,51 @@ def image_bytes(data, fmt):
     return out.getvalue()
 
 
+def mp4_boxes(data):
+    while len(data) >= 8:
+        size, kind = struct.unpack_from(">I4s", data)
+        header = 8
+        if size == 1 and len(data) >= 16:
+            size, = struct.unpack_from(">Q", data, 8)
+            header = 16
+        elif size == 0:
+            size = len(data)
+        if not header <= size <= len(data):
+            raise ValueError("invalid MP4 box size")
+        yield kind, data[header:size]
+        data = data[size:]
+    if data:
+        raise ValueError("truncated MP4 box")
+
+
+def mp4_has_video(movie):
+    for kind, track in mp4_boxes(movie):
+        if kind != b"trak":
+            continue
+        for kind, media in mp4_boxes(track):
+            if kind == b"mdia" and any(
+                field == b"hdlr" and value[8:12] == b"vide" for field, value in mp4_boxes(media)
+            ):
+                return True
+    return False
+
+
+def check_video(data):
+    boxes = {"format": False, "video": False, "samples": False}
+    try:
+        for kind, payload in mp4_boxes(memoryview(data)):
+            if kind == b"ftyp":
+                boxes["format"] |= len(payload) >= 8
+            elif kind == b"moov":
+                boxes["video"] |= mp4_has_video(payload)
+            elif kind == b"mdat":
+                boxes["samples"] |= bool(payload)
+    except ValueError as exc:
+        raise ValueError("expected an MP4 video artifact") from exc
+    if not all(boxes.values()):
+        raise ValueError("expected an MP4 video artifact")
+
+
 def save(outputs, results, fmt, a):
     if len(results) != len(outputs):
         raise ValueError(f"endpoint returned {len(results)} artifacts for {len(outputs)} outputs")
@@ -112,6 +161,8 @@ def save(outputs, results, fmt, a):
                 raise ValueError("endpoint returned an empty artifact")
             if a.kind == "image":
                 data = image_bytes(data, fmt)
+            elif a.kind == "video":
+                check_video(data)
             if path == Path("-"):
                 sys.stdout.buffer.write(data)
                 return
@@ -148,15 +199,99 @@ def checked(response):
     return response
 
 
-def download(client, url, base, headers):
-    dest = httpx.URL(base).join(url)
-    origin = httpx.URL(base)
-    same_origin = (dest.scheme, dest.host, dest.port) == (origin.scheme, origin.host, origin.port)
-    # Follow redirects explicitly so saved-login custom headers stay on their origin.
+def resolved_addresses(url):
+    try:
+        answers = socket.getaddrinfo(url.raw_host.decode("ascii"), url.port, type=socket.SOCK_STREAM)
+        addresses = list(dict.fromkeys(ipaddress.ip_address(answer[4][0]) for answer in answers))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot resolve artifact host: {url}") from exc
+    if not addresses:
+        raise ValueError(f"cannot resolve artifact host: {url}")
+    return addresses
+
+
+def public_address(address):
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped:
+            address = address.ipv4_mapped
+        elif address.is_site_local or address in ipaddress.IPv6Network("64:ff9b::/96"):
+            return False
+    return address.is_global and not (address.is_multicast or address.is_reserved)
+
+
+def record_peer(response):
+    # Capture the peer while the response still holds its connection.
+    stream = response.extensions.get("network_stream")
+    if stream is not None:
+        try:
+            peer = stream.get_extra_info("server_addr")
+        except OSError:
+            return
+        if peer:
+            response.extensions["generate_peer"] = (ipaddress.ip_address(peer[0]), peer[1])
+
+
+def local_endpoint(response):
+    address, port = response.extensions.get("generate_peer", (None, None))
+    origin = response.url
+    if address is None or public_address(address) or port != endpoint_port(origin):
+        return False
+    # A proxy's TCP peer can also be on the local network.
+    proxies = getproxies()
+    try:
+        for key in (origin.scheme, "all"):
+            if proxy := proxies.get(key):
+                proxy_url = httpx.URL(proxy if "://" in proxy else "http://" + proxy)
+                if port == endpoint_port(proxy_url) and address in resolved_addresses(proxy_url):
+                    return False
+        return address in resolved_addresses(origin)
+    except ValueError:
+        return False
+
+
+def endpoint_port(url):
+    return url.port or {"http": 80, "https": 443, "socks5": 1080, "socks5h": 1080}.get(url.scheme)
+
+
+def public_get(client, url, headers):
+    addresses = resolved_addresses(url)
+    if not all(public_address(address) for address in addresses):
+        raise ValueError(f"artifact URL resolves to a non-public address: {url}")
+
+    # Use the checked IP for TCP and the URL hostname for HTTP and TLS.
+    request = client.build_request("GET", url, headers=headers,
+                                   extensions={"sni_hostname": url.raw_host.decode("ascii")})
+    request.headers["Host"] = url.netloc.decode("ascii")
+    verify = httpx.create_ssl_context() if url.scheme == "https" else True
+    with httpx.Client(timeout=client.timeout, trust_env=False, verify=verify) as direct:
+        for address in addresses:
+            request.url = url.copy_with(host=str(address))
+            try:
+                response = direct.send(request, follow_redirects=False)
+                break
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if address == addresses[-1]:
+                    raise
+        request.url = url
+        client.cookies.extract_cookies(response)
+        return response
+
+
+def download(client, url, source, headers):
+    origin = source.url
+    dest = origin.join(url)
+    local = local_endpoint(source)
+    # Compare each hop to the endpoint so its custom headers stay on its origin.
     for _ in range(10):
-        response = client.get(dest, headers=headers if same_origin else {})
+        if dest.scheme not in {"http", "https"} or not dest.host or dest.userinfo:
+            raise ValueError(f"invalid artifact URL: {dest}")
+        same_origin = (dest.scheme, dest.host, dest.port) == (origin.scheme, origin.host, origin.port)
+        request_headers = headers if same_origin else {}
+        if local:
+            response = client.get(dest, headers=request_headers, follow_redirects=False)
+        else:
+            response = public_get(client, dest, request_headers)
         if not response.is_redirect:
             return checked(response).content
         dest = dest.join(response.headers["location"])
-        same_origin = (dest.scheme, dest.host, dest.port) == (origin.scheme, origin.host, origin.port)
-    raise ValueError("too many artifact redirects")
+    raise ValueError(f"too many artifact redirects: {dest}")

@@ -100,6 +100,8 @@ def eleven(req, a, model, fmt):
     formats = {"mp3": "mp3_44100_128", "wav": "wav_44100", "pcm": "pcm_44100"}
     req.query["output_format"] = formats.get(fmt, fmt)
     if a.op == "tts":
+        if a.enhance:
+            raise ValueError("ElevenLabs speech takes delivery cues in the script; omit --enhance")
         if not a.voice or a.instructions:
             raise ValueError("ElevenLabs speech needs --voice ID and takes delivery cues in the script")
         add(body, text=a.prompt, language_code=a.language)
@@ -207,8 +209,8 @@ def prepare(a, route, fmt):
         req.method = "GET"
         req.fields.clear()
     elif host == "api.x.ai" or route.provider_id == "xai":
-        if a.instructions:
-            raise ValueError("native Grok TTS takes delivery cues in the spoken script")
+        if a.instructions or a.enhance:
+            raise ValueError("native Grok TTS takes delivery cues in the spoken script; omit --instructions and --enhance")
         path = "/tts"
         req.fields = {"text": a.prompt, "output_format": {"codec": fmt}}
         add(req.fields, voice_id=a.voice, language=a.language)

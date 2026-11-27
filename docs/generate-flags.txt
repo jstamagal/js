@@ -9,7 +9,7 @@
 --prompt-file FILE           Read the prompt or script verbatim from a file.
 -o, --output PATH            Save the result here. Use - for one artifact on stdout.
 --format NAME                Request the output encoding from the endpoint.
---force                      Replace an existing output file.
+--force                      Replace an existing output file after validating the artifact.
 --param-json KEY=JSON        Send an extra endpoint field as a typed value; repeatable.
 --dry-run                    Show the resolved model, request and output path before making calls.
 --enhance                    Have a writing model refine the prompt using a guide for the target model and operation. Preserve quoted text, lyrics and spoken scripts.
@@ -17,6 +17,7 @@
 --enhance-url SPEC           Route the writer for this run, e.g. http://refiner-27b@localhost:8080/v1.
 --enhance-model ID           Select a writer by its configured provider/model ID for this run.
 # Any writer override enables enhancement. Without a CLI writer route, use the agent’s model or the normal js text-model default.
+# Native Grok and ElevenLabs speech take delivery cues in the script and reject enhancement.
 
 # Image — OpenAI-style generation and edits
 --t2i                        Generate an image from text.
@@ -24,7 +25,7 @@
 --image FILE                 Supply the source image for an edit.
 --ref PATH_OR_URL            Add an ordered reference image for an edit or reference-guided video; repeatable.
 --mask FILE                  Specify the editable area on a masked edit.
--n, --count N                Request multiple images in one call.
+-n, --count N                Request multiple images in one call, or set the expected count when resuming a Space image job.
 --size WxH                   Request exact pixel dimensions.
 --quality LEVEL              Request a quality tier (GPT Image, Grok Imagine).
 --background MODE            Request transparent, opaque or auto (GPT Image).
@@ -32,13 +33,15 @@
 --aspect-ratio W:H           Request proportions such as 16:9 (Grok, Google).
 --resolution NAME            Request a tier such as 2K for a still or 720p for a clip.
 
+# Retrievable jobs
+--resume REQUEST_ID          Retrieve an existing video or Space job without submitting a new job.
+
 # Video — Grok Imagine. Print the request ID to stderr as soon as the job is accepted.
 --t2v                        Generate a clip from text.
 --i2v                        Animate a starting image.
 --r2v                        Use reference images to guide a shot.
 --v2v                        Edit an existing clip.
 --extend-video               Continue a clip from its ending.
---resume REQUEST_ID          Wait for an already submitted video and save its output without starting another render.
 --video FILE                 Supply the source clip for editing or extension.
 --first-frame FILE           Pin the opening frame.
 --last-frame FILE            Pin the closing frame on a compatible model.

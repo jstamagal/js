@@ -123,10 +123,13 @@ def read_args(argv):
             p.error("image count needs one positive integer from --count or --param-json n=...")
         a.count = n
     passive = a.resume or a.list_voices
+    passive_options = {"resume", "list_voices"}
+    if a.resume and not a.list_voices and a.kind == "image":
+        passive_options.add("count")
     if passive and (a.enhance or a.prompt is not None or a.prompt_file or a.params or
                     any(getattr(a, k) is not None and getattr(a, k) is not False
-                        for k in allowed if k not in {"resume", "list_voices"})):
-        p.error("resume and voice listings take routing and output options only")
+                        for k in allowed if k not in passive_options)):
+        p.error("resume and voice listings take routing and output options, with --count for Space image resumes")
     if a.prompt_file:
         a.prompt = a.prompt_file.read_bytes().decode()
     elif a.prompt == "-":
@@ -180,7 +183,8 @@ def run(a):
     if a.enhance:
         generate_writer.enhance(a, target, values)
         req = generate_space.prepare(a, fmt) if a.space else generate_request.prepare(a, route, fmt)
-    with httpx.Client(timeout=httpx.Timeout(600, connect=15)) as client:
+    with httpx.Client(timeout=httpx.Timeout(600, connect=15),
+                      event_hooks={"response": [generate_files.record_peer]}) as client:
         results = (generate_space.execute(client, req, a) if a.space else
                    execute(client, req, a, route))
         if not a.submit_only:

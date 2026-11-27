@@ -63,7 +63,7 @@ def execute(client, req, a, route):
             if item.get("b64_json"):
                 results.append(base64.b64decode(item["b64_json"], validate=True))
             else:
-                results.append(download(client, item["url"], req.url, headers))
+                results.append(download(client, item["url"], response, headers))
         return results
     if a.kind == "video":
         job = response.json().get("request_id")
@@ -81,10 +81,11 @@ def execute(client, req, a, route):
 
 def wait_video(client, url, headers):
     while True:
-        data = checked(client.get(url, headers=headers)).json()
+        response = checked(client.get(url, headers=headers))
+        data = response.json()
         status = data.get("status")
         if status == "done":
-            return download(client, data["video"]["url"], url, headers)
+            return download(client, data["video"]["url"], response, headers)
         if status not in {"pending", "queued", "in_progress", "processing", "running"}:
             raise ValueError(f"video job {status}: {data.get('error') or data.get('message') or status}")
         time.sleep(5)

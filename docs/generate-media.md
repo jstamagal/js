@@ -1,6 +1,9 @@
 # A media generation command for js
 
 For the installed command, see [Generate media](user-guide.md#generate-media).
+Repeat `--count N` when resuming a multi-image Space job. Artifact downloads
+from public endpoints use checked public addresses on each hop. Image and
+video payloads are checked before publication.
 
 Research and proposed interface, 2026-11-24. The `js generate` examples below are designs. The GitHub examples identify the tools that already implement the underlying behaviors.
 
@@ -99,7 +102,7 @@ Resolve the **target** first. Pick the writing profile by exact model and operat
 | Grok Imagine, especially multi-image edit | Lead with concrete subject, count and spatial relationship. Associate materials with the correct object and bind each ordered input to its role. For a second edit, carry the selected previous image. [xAI prompting](https://docs.x.ai/developers/model-capabilities/images/prompting-guide) · [Multi-image edits](https://docs.x.ai/developers/model-capabilities/images/multi-image-editing) |
 | Hailuo, image to video | Treat the opening still as established. Describe what moves, the order it moves in, and where the camera ends. Render a requested move in the documented director syntax on compatible models. Keep frame anchors, duration and resolution in the request. [MiniMax camera syntax and optimizer](https://platform.minimax.io/docs/api-reference/video-generation-i2v) |
 | FLUX or Wan | Use the selected family's generation or edit recipe. FLUX.2 ships a prompt upsampler. Wan2.2 exposes extension method, model and target language. Preserve ordered assets and motion timing when the video request uses them. [FLUX.2 upsampler](https://github.com/black-forest-labs/flux2/blob/main/docs/flux2_with_prompt_upsampling.md) · [Wan generator](https://github.com/Wan-Video/Wan2.2/blob/main/generate.py) |
-| TTS, SFX or music | For speech, enhance delivery instructions and pass the transcript through verbatim. For SFX, describe source, acoustic space and event timing. For music, expand arrangement, instrumentation and section progression, preserving supplied lyrics and duration. [Speech instructions](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create) · [Composition plans](https://elevenlabs.io/docs/eleven-api/guides/how-to/music/composition-plans) |
+| TTS, SFX or music | For speech endpoints that accept separate instructions, enhance those instructions and pass the script through verbatim. Native Grok and ElevenLabs take delivery cues in the script. For SFX, describe source, acoustic space and event timing. For music, expand arrangement, instrumentation and section progression, preserving supplied lyrics and duration. [Speech instructions](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create) · [Composition plans](https://elevenlabs.io/docs/eleven-api/guides/how-to/music/composition-plans) |
 
 For example, the image edit above might yield “Use image 1 as the base. Replace the autumn foliage with snow-covered branches. Preserve the squirrel's pose, the nuts, the crop and the direction of the light.” For a Hailuo shot with both approved stills, the same brief becomes “Hold the camera steady. Snow builds on the branches while the squirrel shifts its weight, settling into the pose in the final frame.” The profile can be extensive while the submitted prompt stays short.
 

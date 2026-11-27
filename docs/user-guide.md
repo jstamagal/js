@@ -775,7 +775,9 @@ then the agent's model, then the normal js text model. A target containing
 including a colon-qualified name. Agent instructions can include trusted
 prompt files using normal js inline directives. The writer receives reference
 names and their order. For speech, the input script stays verbatim and the
-writer supplies delivery instructions to endpoints that accept them.
+writer supplies delivery instructions to endpoints that accept them. Native
+Grok and ElevenLabs speech take delivery cues in the script and reject
+`--enhance` and the writer overrides.
 
 ### Video jobs and Hugging Face Spaces
 
@@ -791,8 +793,15 @@ js generate --i2v -m cpa/grok-imagine-video-1.5 --first-frame dawn.png -p 'Slow 
 Normally js prints the accepted ID to stderr, waits, downloads the result and
 prints its path. `--submit-only` prints the ID alone on stdout. Resume with the
 same endpoint and, for a Space, the same function. For a Space image, include
-`--t2i` when resuming. A resume only retrieves an existing job. Gradio can
-expire or consume events, so save the finished artifact while it is available.
+`--t2i` when resuming and repeat `--count N` for a multi-image job. A resume
+only retrieves an existing job. Gradio can expire or consume events, so save
+the finished artifact while it is available.
+
+Downloads of image and video artifacts are checked before publication.
+A response of the wrong media kind leaves an existing output in place even
+with `--force`. Artifact downloads from public endpoints connect directly to
+checked public addresses on every hop. An endpoint reached on the local
+network can also return artifacts on the local network.
 
 Spaces use the Gradio named-argument HTTP API. js reads `HF_TOKEN` or the
 active Hugging Face token file so calls can use the account's ZeroGPU quota.

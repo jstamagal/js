@@ -1,6 +1,8 @@
 import base64
 import io
 import json
+import socket
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,9 +19,25 @@ def encoded(fmt="PNG"):
     return out.getvalue()
 
 
+def video_bytes(handler_type=b"vide"):
+    def box(kind, payload):
+        return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+    handler = box(b"hdlr", b"\x00" * 8 + handler_type + b"\x00" * 13)
+    return (box(b"ftyp", b"isom" + b"\x00" * 4) +
+            box(b"moov", box(b"trak", box(b"mdia", handler))) + box(b"mdat", b"sample"))
+
+
 def mock_http(monkeypatch, handler):
     client = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda **kw: client(transport=httpx.MockTransport(handler), **kw))
+
+
+def mock_dns(monkeypatch, hosts):
+    def resolve(host, port, *, type):
+        return [(socket.AF_INET, type, socket.IPPROTO_TCP, "", (hosts[host], port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
 
 
 def run(*args):
@@ -91,37 +109,52 @@ def test_nested_agent_precedence_and_verbatim_tts(monkeypatch, tmp_path):
 def test_video_submit_resume_and_cross_origin_download(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("JS_API_KEY", "private")
+    mock_dns(monkeypatch, {"cdn": "192.0.0.9", "render.local.test": "127.0.0.1"})
     seen = []
     def handler(req):
         seen.append((req.method, req.url.path))
         if req.method == "POST":
             assert json.loads(req.content)["generate_audio"] is False
             return httpx.Response(200, json={"request_id": "job1"})
+        if req.url.host == "render.local.test":
+            stream = SimpleNamespace(get_extra_info=lambda key: ("127.0.0.1", 80))
+            return httpx.Response(200, json={"status": "done", "video": {
+                "url": "http://192.168.0.5/clip.mp4"}}, extensions={"network_stream": stream})
+        if req.url.host == "192.168.0.5":
+            assert "authorization" not in req.headers
+            return httpx.Response(200, content=video_bytes())
         if req.url.host == "render":
             assert req.headers["authorization"] == "Bearer private"
             return httpx.Response(200, json={"status": "done", "video": {"url": "https://cdn/clip.mp4"}})
         assert "authorization" not in req.headers
-        return httpx.Response(200, content=b"video")
+        assert req.headers["host"] == "cdn"
+        assert req.url.host == "192.0.0.9"
+        assert req.extensions["sni_hostname"] == "cdn"
+        return httpx.Response(200, content=video_bytes())
     mock_http(monkeypatch, handler)
     route = ("-u", "http://video@render/v1")
     assert run(*route, "--t2v", "-p", "hello", "--no-audio", "--submit-only") == 0
     assert capsys.readouterr().out.strip() == "job1"
     assert run(*route, "--resume", "job1") == 0
     assert seen == [("POST", "/v1/videos/generations"), ("GET", "/v1/videos/job1"), ("GET", "/clip.mp4")]
-    assert Path("out.mp4").read_bytes() == b"video"
+    assert Path("out.mp4").read_bytes() == video_bytes()
+    assert run("-u", "http://video@render.local.test/v1", "--resume", "job1", "-o", "local.mp4") == 0
+    assert Path("local.mp4").read_bytes() == video_bytes()
+    assert seen[-2:] == [("GET", "/v1/videos/job1"), ("GET", "/clip.mp4")]
 
 
 def test_space_submission_upload_resume_and_token(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HF_TOKEN", "hf_test")
+    mock_dns(monkeypatch, {"cdn": "192.0.0.9"})
     source = tmp_path / "first.png"
     source.write_bytes(encoded())
     methods = []
     def handler(req):
         methods.append(req.method)
-        if req.url.host == "cdn":
+        if req.headers["host"] == "cdn":
             assert "authorization" not in req.headers
-            return httpx.Response(200, content=b"clip")
+            return httpx.Response(200, content=video_bytes())
         assert req.headers["authorization"] == "Bearer hf_test"
         if req.url.host == "huggingface.co":
             return httpx.Response(200, json={"host": "https://owner-demo.hf.space"})
@@ -140,7 +173,7 @@ def test_space_submission_upload_resume_and_token(monkeypatch, tmp_path):
     methods.clear()
     assert run("--resume", "abc", "-m", "hf.space/owner/demo") == 0
     assert methods == ["GET"] * 3
-    assert Path("out.mp4").read_bytes() == b"clip"
+    assert Path("out.mp4").read_bytes() == video_bytes()
 
 
 def test_music_lyrics_and_segment_transcript(monkeypatch, tmp_path):
@@ -211,3 +244,78 @@ def test_official_h3_turbo_workflow_inputs(tmp_path, monkeypatch, capsys):
     assert plan["api_path"].endswith("/call/v2/output_video")
     fields = plan["fields"]
     assert (fields["in_0"], fields["in_1"], fields["in_4"], fields["in_5"]) == ("snow", None, 3, 4)
+
+
+@pytest.mark.parametrize(("redirect", "address"), [
+    (False, "127.0.0.1"), (True, "192.168.0.5"), (True, "fe80::1"), (False, "100.64.0.1"),
+])
+def test_artifact_download_blocks_nonpublic_address(monkeypatch, tmp_path, capsys, redirect, address):
+    monkeypatch.chdir(tmp_path)
+    artifact = "https://artifact.test/clip.mp4"
+    forbidden = "http://internal.test/clip.mp4"
+    mock_dns(monkeypatch, {"render.test": "192.0.0.9", "artifact.test": "192.0.0.10",
+                           "internal.test": address})
+
+    def handler(req):
+        if req.headers["host"] == "render.test":
+            return httpx.Response(200, json={"status": "done", "video": {
+                "url": artifact if redirect else forbidden}})
+        if req.headers["host"] == "artifact.test":
+            return httpx.Response(302, headers={"location": forbidden})
+        pytest.fail("nonpublic destination reached the mock transport")
+
+    mock_http(monkeypatch, handler)
+    assert run("--resume", "job", "-u", "https://m@render.test/v1") == 1
+    assert forbidden in capsys.readouterr().err
+    assert not Path("out.mp4").exists()
+
+
+@pytest.mark.parametrize("payload", [b"<html>Log in</html>", video_bytes(b"soun")],
+                         ids=["html", "audio-only"])
+def test_video_download_rejects_nonvideo_and_preserves_output(monkeypatch, tmp_path, payload):
+    monkeypatch.chdir(tmp_path)
+    mock_dns(monkeypatch, {"render.test": "192.0.0.9"})
+    original = Path("out.mp4")
+    original.write_bytes(b"original")
+
+    def handler(req):
+        if req.url.path.endswith("/job"):
+            return httpx.Response(200, json={"status": "done", "video": {"url": "/clip.mp4"}})
+        return httpx.Response(200, headers={"content-type": "video/mp4"}, content=payload)
+
+    mock_http(monkeypatch, handler)
+    assert run("--resume", "job", "--force", "-u", "https://m@render.test/v1") == 1
+    assert original.read_bytes() == b"original"
+
+
+def test_space_resume_saves_explicit_image_count(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    mock_dns(monkeypatch, {"owner-demo.hf.space": "192.0.0.9"})
+    images = [encoded(), encoded("JPEG")]
+    downloaded = []
+
+    def handler(req):
+        assert req.method == "GET"
+        if req.url.host == "huggingface.co":
+            return httpx.Response(200, json={"host": "https://owner-demo.hf.space"})
+        if req.url.path.endswith("/job"):
+            data = json.dumps([[{"image": {"url": f"/image/{i}"}} for i in range(len(images))]])
+            return httpx.Response(200, text=f"event: complete\ndata: {data}\n\n")
+        index = int(req.url.path.rsplit("/", 1)[1])
+        downloaded.append(index)
+        return httpx.Response(200, content=images[index])
+
+    mock_http(monkeypatch, handler)
+    assert run("--t2i", "--space", "owner/demo", "--resume", "job", "--count", "2") == 0
+    assert downloaded == [0, 1]
+    for path in ["out-001.png", "out-002.png"]:
+        with Image.open(path) as pic:
+            assert (pic.format, pic.size) == ("PNG", (2, 3))
+
+
+@pytest.mark.parametrize("endpoint", ["https://m@api.x.ai/v1", "https://m@api.elevenlabs.io/v1"])
+def test_native_tts_rejects_enhancement_before_writer(monkeypatch, tmp_path, endpoint):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(generate_writer, "enhance", lambda *args: pytest.fail("writer called"))
+    mock_http(monkeypatch, lambda req: pytest.fail("media endpoint called"))
+    assert run("--tts", "-u", endpoint, "--voice", "voice", "--enhance", "-p", "Read me") == 1

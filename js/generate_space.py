@@ -149,5 +149,5 @@ def execute(client, req, a):
                     urls = list(artifacts(json.loads(data)))
                     if not urls:
                         raise ValueError(f"Space event {job} returned no downloadable media")
-                    return [download(client, u, url, headers) for u in urls]
+                    return [download(client, u, response, headers) for u in urls]
     raise ValueError(f"Space stream ended before completion; reconnect with --resume {job}")
