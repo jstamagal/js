@@ -2,9 +2,10 @@
 
 Subagents in `js` are implemented by the `task` tool and generated
 prompt-directory tools. They are parallel worker turns. The main agent's call
-starts them and returns their handles at once; it lists, polls, waits on,
-kills and sends messages to them through the `task` tool, and a finished
-result comes back to it on its own.
+starts them and returns their handles at once; it lists, polls, kills and
+sends messages to them through the `task` tool, and a finished result comes
+back to it on its own. It never waits on them, so the operator can talk to it
+while they run.
 
 Agents are created using prompt directories under `defaults/agents/` (for bundled agents)
 or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
@@ -191,11 +192,14 @@ notification on completion, with native background subagents
 js keeps one `task` tool with actions, as its shell and kernel handles do.
 
 **Launch.** A `task` call (or a named-agent call) of the main agent starts its
-workers as a task job and returns at once. `background` unset means on where
-something hands the context a result it left running
-(`ToolContext.delivers_task_results`): the REPL's main agent, and a `-p` run
-with `SUBAGENT_WAKE` on. Elsewhere (a swarm agent, a program on
-`Conversation`, a subagent) it waits:
+workers as a task job and returns at once. Where something hands the context
+a result it left running (`subagents._results_come_back`: depth 0 with
+`ToolContext.delivers_task_results`, the REPL's main agent and a `-p` run with
+`SUBAGENT_WAKE` on), every call runs in the background, whatever
+`background` says, and `action="wait"` is refused: a main agent parked in a
+wait could not hear the operator, whose lines reach it only at a tool
+boundary. Elsewhere (a swarm agent, a program on `Conversation`, a subagent)
+a call waits unless it passes `background=true`:
 
 ```text
 task t1 started: 2 subagents of agent `explore` (t1.1, t1.2), running while you work.
@@ -215,7 +219,8 @@ answer and nobody would hand it a later result.
 seconds, its tool calls so far and the latest few, the tail of the text it last
 wrote and its session file; once the job is done, the result.
 `handle="t1.2"` polls one worker. `action="wait", handle="t1", timeout=N`
-blocks up to N seconds, or until it ends. In the REPL every worker also has a
+blocks up to N seconds, or until it ends; only where results do not come
+back on their own. In the REPL every worker also has a
 window (`subagent_windows`), and `/jobs` lists the handles with progress.
 
 **Stop.** `action="kill", handle="t1"` cancels the job. `handle="t1.2"`
@@ -247,7 +252,7 @@ Under the REPL a job is one `subagent` job on the REPL's loop
 a supervisor (`-p`) it runs on a private loop in a daemon thread.
 
 **Results.** When a job started by the main agent finishes and the model has
-not read its result through poll, wait or kill, a `<js-reminder>` hands the
+not read its result through poll or kill, a `<js-reminder>` hands the
 model the result. Each result is capped at `TOOL_RESULT_MAX`, and the results
 in one delivery share the model's remaining attachment budget. The file
 holds the full result. Delivery happens at whichever comes first:

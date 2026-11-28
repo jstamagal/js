@@ -138,7 +138,8 @@ def test_poll_reports_running_then_the_result(workers, ctx):
     assert "result of alpha" in done
 
 
-def test_wait_blocks_for_the_result_and_a_timeout_returns_running(workers, ctx):
+def test_wait_blocks_for_the_result_and_a_timeout_returns_running(workers):
+    ctx = _ctx()  # nothing hands this context its results, so it waits on them
     handle = _handle(subagents.task(tasks=["alpha", "beta"], agent_id="worker", background=True, context=ctx))
     assert "RUNNING" in subagents.task(action="wait", handle=handle, timeout=1, context=ctx)
 
@@ -153,7 +154,7 @@ def test_the_result_is_saved_where_the_handle_says(workers, ctx):
     job = _job(_handle(started), ctx)
     assert str(job.result_path) in started
     workers.release.set()
-    subagents.task(action="wait", handle=job.id, timeout=5, context=ctx)
+    job.future.result(timeout=5)
     assert job.result_path.read_text(encoding="utf-8") == "result of alpha"
 
 
@@ -209,7 +210,8 @@ def test_finished_tasks_share_the_repl_models_remaining_room(workers, ctx, monke
 def test_a_result_already_read_gets_no_reminder(workers, ctx):
     handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     workers.release.set()
-    subagents.task(action="wait", handle=handle, timeout=5, context=ctx)
+    _job(handle, ctx).future.result(timeout=5)
+    assert "result of alpha" in subagents.task(action="poll", handle=handle, context=ctx)
     assert _notes(ctx) == []
 
 
@@ -259,13 +261,38 @@ def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):
     assert len(task_jobs._JOBS) <= task_jobs.KEEP_FINISHED_JOBS + 1
 
 
-def test_foreground_task_still_returns_the_result(workers, ctx):
+def test_foreground_task_still_returns_the_result(workers):
     workers.release.set()
-    assert subagents.task(tasks=["alpha"], agent_id="worker", background=False, context=ctx) == "result of alpha"
+    assert subagents.task(tasks=["alpha"], agent_id="worker", background=False, context=_ctx()) == "result of alpha"
 
 
-def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers, ctx, loop_sup):
+def test_the_main_agent_never_waits_on_its_tasks(workers, ctx):
+    # A main agent parked in a wait cannot hear the operator: background=false
+    # still returns a handle, and wait is refused while the task runs on.
+    started = subagents.task(tasks=["alpha"], agent_id="worker", background=False, context=ctx)
+    job = _job(_handle(started), ctx)
+    assert 'action="wait"' not in started
+    assert subagents.task(action="wait", handle=job.id, timeout=10, context=ctx).startswith("ERROR")
+    assert job.running()
+
+
+def test_the_main_agent_never_waits_under_the_supervisor(workers, ctx, loop_sup):
+    loop, _sup = loop_sup
+
+    async def call(**kwargs) -> str:
+        return await subagents.task_async(context=ctx, **kwargs)
+
+    started = asyncio.run_coroutine_threadsafe(
+        call(tasks=["alpha"], agent_id="worker", background=False), loop).result(timeout=5)
+    job = _job(_handle(started), ctx)
+    refused = asyncio.run_coroutine_threadsafe(call(action="wait", handle=job.id), loop).result(timeout=5)
+    assert refused.startswith("ERROR")
+    assert job.running()
+
+
+def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers, loop_sup):
     loop, sup = loop_sup
+    ctx = _ctx()  # waits on its tasks
 
     async def turn() -> str:
         return await subagents.task_async(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
@@ -283,8 +310,9 @@ def test_under_the_supervisor_the_task_outlives_the_turn_that_started_it(workers
     assert "result of alpha" in finished
 
 
-def test_a_sync_call_under_the_supervisor_runs_the_task_on_the_repl_loop(workers, ctx, loop_sup):
+def test_a_sync_call_under_the_supervisor_runs_the_task_on_the_repl_loop(workers, loop_sup):
     _loop, sup = loop_sup
+    ctx = _ctx()  # waits on its tasks
     # A dispatch thread calls the sync tool while the REPL loop is live.
     started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     handle = _handle(started)
@@ -306,8 +334,9 @@ def test_kill_of_a_sync_started_task_under_the_supervisor_cancels_it(workers, ct
     assert _job(handle, ctx).cancelled()
 
 
-def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx, loop_sup, tmp_path, monkeypatch):
+def test_the_runtime_dispatch_passes_background_and_handle_through(workers, loop_sup, tmp_path, monkeypatch):
     loop, _sup = loop_sup
+    ctx = _ctx()  # waits on its tasks
     registry = ToolRegistry(subagents.tools(), {})
 
     def dispatch(call_id: str, args: str) -> str:

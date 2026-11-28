@@ -406,18 +406,21 @@ def start(
     return job
 
 
-def started_text(job: TaskJob, *, pollable: bool = True) -> str:
+def started_text(job: TaskJob, *, pollable: bool = True, comes_back: bool = True) -> str:
     """What a call that starts ``job`` returns. ``pollable`` says the caller
-    has the `task` tool to watch and talk to it with."""
+    has the `task` tool to watch and talk to it with; ``comes_back`` says the
+    result is handed to the caller on its own, so it does not wait on it."""
     plural = 'subagent' if job.count == 1 else 'subagents'
     handles = ", ".join(w.handle for w in job.workers)
     lines = [f'task {job.id} started: {job.count} {plural} of agent `{job.agent_id}` ({handles}), running while you work.']
     if pollable:
-        lines.append(f'With the task tool: action="poll", handle="{job.id}" shows how each is doing; action="send", handle="{job.workers[0].handle}", message="..." talks to one; action="kill" stops the task, or one subagent by its handle; action="wait", handle="{job.id}" blocks for it.')
-    lines += [
-        f'When it finishes its result comes to you in a <js-reminder> unless you have read it by then; it is also written to {job.result_path}.',
-        f'HANDLE {job.id} RUNNING',
-    ]
+        wait = "" if comes_back else f'; action="wait", handle="{job.id}" blocks for it'
+        lines.append(f'With the task tool: action="poll", handle="{job.id}" shows how each is doing; action="send", handle="{job.workers[0].handle}", message="..." talks to one; action="kill" stops the task, or one subagent by its handle{wait}.')
+    if comes_back:
+        lines.append(f'When it finishes its result comes to you in a <js-reminder>: at your next tool call, or as a new turn when you are idle. Do not wait for it; if you have nothing else to do, end your turn. It is also written to {job.result_path}.')
+    else:
+        lines.append(f'When it finishes its result is written to {job.result_path}; poll or wait on it to read it.')
+    lines.append(f'HANDLE {job.id} RUNNING')
     return "\n".join(lines)
 
 
