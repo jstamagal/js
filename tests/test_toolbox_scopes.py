@@ -51,6 +51,17 @@ def test_a_save_without_scope_lands_on_the_projects_shelf_and_only_that_project_
     assert "parse_alpha_log" not in tbmod.discover(beta)
 
 
+def test_a_project_js_directory_without_a_toolbox_still_saves_to_the_shelf(projects):
+    alpha, _ = projects
+    (alpha / ".js").mkdir()
+    (alpha / ".js" / "jsrc").write_text("", encoding="utf-8")
+
+    _save(alpha, "shelved")
+
+    assert (_shelf(alpha) / "shelved.py").is_file()
+    assert not (alpha / ".js" / "toolbox").exists()
+
+
 def test_a_subdirectory_of_the_project_saves_to_the_same_shelf(projects):
     alpha, _ = projects
     nested = alpha / "src" / "deep"
@@ -155,6 +166,15 @@ def test_a_global_save_may_not_lean_on_a_local_tool(projects):
     refused = _save(alpha, "caller_everywhere", body.replace("caller", "caller_everywhere"), scope="global")
     assert refused.startswith("ERROR") and "helper" in refused
     assert not (paths.global_toolbox_dir() / "caller_everywhere.py").exists()
+
+
+def test_a_global_save_may_call_a_global_tool_this_project_shadows(projects):
+    alpha, _ = projects
+    _save(alpha, "helper", scope="global")
+    _save(alpha, "helper")
+    body = "def caller_everywhere():\n    return helper()\n"
+
+    assert not _save(alpha, "caller_everywhere", body, scope="global").startswith("ERROR")
 
 
 def test_an_isolated_directory_does_not_touch_the_home(tmp_path):

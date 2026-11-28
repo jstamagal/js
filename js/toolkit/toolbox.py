@@ -770,11 +770,13 @@ def toolbox(
         # loaded, so a call to another tool resolves there. `tools`, the js
         # tool bridge, is bound in every kernel that namespace lives in.
         # A global tool is loaded in every project, so it may lean only on
-        # other global tools.
-        reachable = discover(cwd)
+        # other global tools, shadowed here or not.
         if scope == "global":
-            reachable = {key: record for key, record in reachable.items() if record.scope == GLOBAL}
-        provided = (set(reachable) - {name}) | {"tools"}
+            global_dir = _paths.global_toolbox_dir()
+            reachable = {path.stem for path in global_dir.glob("*.py")} if global_dir.is_dir() else set()
+        else:
+            reachable = set(discover(cwd))
+        provided = (reachable - {name}) | {"tools"}
         missing = [free for free in unbound_names(body) if free not in provided]
         if missing and context.toolbox_require_bound_names:
             message = (

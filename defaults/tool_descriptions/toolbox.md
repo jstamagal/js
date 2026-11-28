@@ -20,9 +20,9 @@ cell, so one function can run a project's steps in order, shell commands and
 file edits included, and check each one.
 
 Save the first time something works. If you wrote a function and it did its
-job, save it in the same turn, before moving on. Saving is cheap and never
-destructive, and the next session refines a rough `r1` far faster than it
-rediscovers the edge cases from nothing. Load at the start of every session
+job, save it in the same turn, before moving on; js keeps it with this
+project. Saving is cheap and never destructive, and the next session refines a
+rough `r1` far faster than it rediscovers the edge cases from nothing. Load at the start of every session
 and use what is there before writing anything new; when a saved tool is wrong
 or incomplete, fix it and save the next revision.
 
@@ -42,8 +42,7 @@ Parameters:
 - `verbosity`: `quiet`, `normal` or `verbose`, for the operator's terminal view.
 
 Make a tool findable. `list` and `load` print one line per tool: its name,
-revision, where it lives (`global`, or `shelf` and `project` for this
-project's own) and the models that have worked on it. The name is what the
+revision, scope and the models that have worked on it. The name is what the
 next model sees first, so make it say what the tool is for:
 `parse_acme_access_log`, not `parse_log`. Give every tool a docstring whose
 first line says what it does and when to reach for it, then the arguments and
