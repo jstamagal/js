@@ -577,6 +577,15 @@ sessions are still listed, searched and resumed. `js rotate --restore
 [SESSION]` puts files back. Both take `--dry-run`. See
 [Rotation](configuration-and-sessions.md#rotation).
 
+`js schedule rotate [--at HH:MM]` runs `js rotate` every day on the systemd
+user manager, else in the crontab; `js schedule` lists what js has
+scheduled and `js schedule --remove rotate` takes it away. Nothing is
+scheduled unless asked for. `js schedule cleanup` needs
+`--allow-unattended-cleanup`: js cleanup runs with nobody watching, and it
+deletes and archives files in the directories it is pointed at. Most people
+should run js cleanup by hand and read what it reports instead. See
+[Scheduling](configuration-and-sessions.md#scheduling).
+
 Sampling flags set registered settings for this run: `--temperature`, `--top-p`,
 `--top-k`, `--min-p`, `--top-n-sigma`, `--repetition-penalty`, `--presence-penalty`,
 `--xtc-probability`, `--xtc-threshold`, `--dry-multiplier`, `--dry-base`,

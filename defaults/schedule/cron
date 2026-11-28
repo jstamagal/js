@@ -1,0 +1,1 @@
+${MINUTE} ${HOUR} * * * PATH=${PATH} nice -n 10 ${COMMAND} >>${LOG} 2>&1

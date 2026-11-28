@@ -842,6 +842,54 @@ logs named by any of their stems. `--dry-run` lists what it would restore.
 `js rotate --extra KEY=VALUE` sets `ROTATE_*` for one run, as `JS_ROTATE_AGE`
 and the other env names do.
 
+## Scheduling
+
+Nothing is scheduled by default. `js schedule` sets up a daily job for the
+current user when asked for one by name:
+
+```
+js schedule                      list what js has scheduled here and when each next runs
+js schedule rotate [--at HH:MM]  run `js rotate` every day (default 05:00)
+js schedule cleanup --allow-unattended-cleanup [--at HH:MM]
+js schedule --remove JOB         remove it; removing what is not there is not an error
+```
+
+The job goes to the first backend that works on the machine: a systemd user
+manager (`systemctl --user`), then the user's crontab. A job already
+scheduled stays on the backend that has it, and scheduling it again leaves
+one job. With neither backend, `js schedule` prints the cron line to add by
+hand and exits 1.
+
+The job runs js by absolute path: the launcher `just install` writes to
+`~/.local/bin/js`, else the `js` on PATH. Its PATH holds that launcher's
+directory and the directory of `uv`, which the launcher starts. A home other
+than the default one (`--home DIR`, `JS_HOME`) is passed as `--home DIR`
+and has a job of its own beside the default home's.
+
+- systemd: `js-<job>.service` and `js-<job>.timer` in
+  `~/.config/systemd/user/` (`$XDG_CONFIG_HOME/systemd/user/`), and
+  `js-<job>-<hash>` for another home. The timer is `Persistent=true`, so a
+  machine that was off runs the job when it comes back; the service runs at
+  `Nice=10` with idle IO priority. Output goes to the journal:
+  `journalctl --user -u js-rotate`. A `js-rotate` pair already in that
+  directory is taken as the rotate job and replaced.
+- cron: one line in the crontab, tagged at its end with
+  `# js schedule <job> <home>`. `--remove` and the listing find only lines
+  carrying that tag; every other line is kept byte for byte. A crontab that
+  cannot be read is not written. Output goes to `<home>/logs/schedule/<job>.log`.
+
+What is installed comes from `defaults/schedule/service`, `timer` and `cron`,
+found through the setup layers, so `~/.js/schedule/service` (and `timer`,
+`cron`) replaces the stock file. They are `${NAME}` templates with `JOB`,
+`COMMAND`, `PATH`, `AT`, `HOUR`, `MINUTE` and `LOG`. The unit names, the
+service's first line naming the home and the cron tag are added by js, so an
+edited template is still found and removed.
+
+`js schedule cleanup` prints this first and refuses without
+`--allow-unattended-cleanup`: js cleanup runs with nobody watching, and it
+deletes and archives files in the directories it is pointed at. Most people
+should run js cleanup by hand and read what it reports instead.
+
 ## Compaction
 
 Compaction is append-only: the JSONL file is never rewritten. `/compact [focus]`

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run js ${JOB} every day
+
+[Timer]
+OnCalendar=*-*-* ${AT}:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

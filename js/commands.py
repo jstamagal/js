@@ -18,6 +18,7 @@ COMMANDS: dict[str, tuple[str, msgs.Message]] = {
     "init": ("init_cli", msgs.COMMAND_INIT),
     "rotate": ("rotate_cli", msgs.COMMAND_ROTATE),
     "cleanup": ("cleanup_cli", msgs.COMMAND_CLEANUP),
+    "schedule": ("schedule_cli", msgs.COMMAND_SCHEDULE),
 }
 
 
