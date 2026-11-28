@@ -179,6 +179,11 @@ class ToolRegistry:
             arg_bans=dict(config.bans),
         ).with_public_aliases(tool_aliases or {}, strict=True)
 
+    def within(self, names: frozenset[str]) -> ToolRegistry:
+        """This registry holding only the tools named in ``names``."""
+        return replace(self, tools=tuple(tool for tool in self.tools if tool.name in names),
+                       lazy=self.lazy & names)
+
     def with_public_aliases(self, profile: Mapping[str, str], *, strict: bool = False) -> ToolRegistry:
         """Add public names to the selected surface, keeping canonical policy keys."""
         if not profile:

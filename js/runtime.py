@@ -668,6 +668,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     )
     model, provider_id = request.model, request.provider_id
     base_registry = tool_registry or stock_registry()
+    ceiling = getattr(tool_context, "tool_ceiling", None)
+    if ceiling is not None:
+        base_registry = base_registry.within(ceiling)
+        mcp_host = None
     profile = tool_calls.resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     base_registry = base_registry.with_public_aliases(profile)
     alias_map = base_registry.public_aliases
@@ -676,7 +680,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                       tool_aliases=alias_map)
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
-    if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
+    if owns_mcp_host and ceiling is None and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
         mcp_host = mcp_hosts.MCPHost(cfg.mcp, telemetry=telemetry)
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.

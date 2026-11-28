@@ -150,7 +150,8 @@ the troop changes shape without a runner's say-so.
 {"root": "/tmp/troop-42", "slots": 0,
  "agents": [{"name": "kivu", "agent": "troop", "model": "cpa/deepseek-v4.1-flash", "effort": "low",
              "opener": "You are kivu ...", "session": "troop-42-kivu", "cwd": "/tmp/troop-42/kivu",
-             "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"SHELL_ENV_KEEP": "[\"PATH\"]"}}]}
+             "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"SHELL_ENV_KEEP": "[\"PATH\"]"},
+             "tools": ["read:eager", "fs_search:eager"]}]}
 ```
 
 Each agent is a settled run (`run_assembly.settle`, as `-p` starts from): its own config from the layered settings plus `opts`
@@ -161,6 +162,19 @@ named by `session`, its own tool context with the bus tools on the surface,
 the inbox drained at every tool boundary, the turn persisted and the
 compaction trigger run before every sleep. The sleep is an `await` on the
 inbox, so a hundred idle agents cost a few processes and no model calls.
+
+An agent's `"tools"`, a list of entries in agent.yaml `tools:` syntax (for
+example `["read:eager", "fs_search:eager"]`), is that agent's whole tool
+surface, with the bus tools added; `[]` is the bus tools alone. It replaces
+the agent.yaml chain, and neither a `models:` profile nor `TOOL_PROFILES`
+changes it, nor do the core entries a `replace` profile adds. A profile's
+`prompt:`, sampling and reasoning still apply. The agent has no MCP servers,
+and a subagent it starts, through `task` or an agent tool, runs within the
+same tools. An entry other than a tag that matches no tool ends the agent at
+start with an `error` event. A recruit and a `restart` keep the list. Left
+out or `null`, the agent's own chain is its surface. A list does not contain
+a tool that runs arbitrary code: `shell`, `kernel` or `toolbox` on it can do
+what any program can.
 
 The agents are dealt out over runner processes: `SWARM_PROCESSES`, or the
 spec's `"processes"`, says how many; 0 (the default) is one per 16 agents, up
