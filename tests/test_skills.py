@@ -353,14 +353,12 @@ def test_repl_assembly_supplies_the_skill_invocation_command(tmp_path, monkeypat
     assert "user-only body" in message
 
 
-_BUILTIN = {
+_BUILTIN_NINE = {
     "code-review",
     "codebase-design",
     "diagnosing-bugs",
     "grill-me",
     "grilling",
-    "h3-image-prompt-writing",
-    "h3-prompt-writing",
     "handoff",
     "improve-codebase-architecture",
     "wait-what",
@@ -372,7 +370,7 @@ def test_fresh_install_lists_the_builtin_skills(tmp_path):
     catalog = discover_skills(tmp_path / "project")
 
     builtin = {skill.name for skill in catalog.skills if skill.source == "builtin"}
-    assert builtin == _BUILTIN
+    assert builtin == _BUILTIN_NINE
     assert catalog.get("grill-me").model_invocable is False
     assert catalog.get("grilling").model_invocable is True
     # grill-me is an alias that sends the model to grilling.

@@ -28,7 +28,6 @@ variables and of any filename convention:
 | `CURRENT_SESSION_AGENT` | Active agent id. |
 | `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
 | `JS_HOME` | Absolute home selected by `--home`, `JS_HOME` or `~/.js`; always set. |
-| `JS_ROOT` | Where js itself is installed: the directory holding `defaults/` and `tools/`. A stock prompt reaches a shipped file with it, e.g. `!{file %%JS_ROOT%%/defaults/skills/<name>/SKILL.md}`. |
 | `CURRENT_PROJECT` | The project's name: the last component of `CURRENT_PROJECT_ROOT`, e.g. `monorepo`. |
 | `CURRENT_PROJECT_ROOT` | Absolute project root: the project chain's root, else the directory js started in. Sessions are filed under it. |
 | `PROMPT` | In user message files only: the run's `-p` text (`-p -` reads it from stdin). Empty with no `-p`. A user file that names it takes the prompt, which is then not sent again after the exchanges. See [message files](technical-guide.md#message-files). |

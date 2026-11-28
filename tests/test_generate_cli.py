@@ -323,16 +323,35 @@ def test_native_tts_rejects_enhancement_before_writer(monkeypatch, tmp_path, end
     assert run("--tts", "-u", endpoint, "--voice", "voice", "--enhance", "-p", "Read me") == 1
 
 
-def test_h3_writers_carry_the_shipped_skill_text():
-    """The stock H3 writers read MiniMax's guides from the skills js ships."""
-    from js import config, paths, persona, turn_settings
-    from js.cli_options import RunOptions, invocation
-    for name, heading in (("h3-image", "# Text-to-image prompt writing guide"),
-                          ("h3-video", "# Video Prompt Writing Guide")):
-        spec = persona.load_agent_prompt_spec(name, paths.agent_roots(), env=False)
-        with invocation(RunOptions(agent=name, no_env=True, no_agents_md=True, no_tools=True)):
-            cfg = config.Config(model="m", agent_id=name, provider_id="openai", provider_base_url="http://localhost/v1",
-                                settings={}, prompt_roots=paths.agent_roots(), **turn_settings.project({}))
-            system = persona.expand_agent_text(spec.system, cfg)
-        assert heading in system
-        assert "!{file" not in system
+def test_h3_writers_hold_the_notation_the_models_read():
+    """The stock H3 writers carry MiniMax's notation in the prompt file itself: nothing is loaded at run time."""
+    from js import paths, persona
+    for name, tokens in (("h3-image", ("<Picture 1>", "<Subject 1>")),
+                         ("h3-video", ("integrated_multimodal_description:", "overall_soundscape:",
+                                       "non_diegetic_music:", "<d>[English]", "subject_definitions"))):
+        system = persona.load_agent_prompt_spec(name, paths.agent_roots(), env=False).system
+        assert all(token in system for token in tokens)
+        assert "!{" not in system
+
+
+@pytest.mark.parametrize("vision", ["on", "off"])
+def test_writer_is_sent_the_input_pictures_when_its_model_takes_images(monkeypatch, tmp_path, vision):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JS_VISION", vision)
+    Path("a.png").write_bytes(encoded())
+    Path("b.png").write_bytes(encoded())
+
+    def writer(**kw):
+        user = kw["messages"][1]
+        brief = json.loads(user.parts[0].text)
+        assert [(p["label"], p["file"], p["attached"]) for p in brief["pictures"]] == [
+            ("<Picture 1>", "a.png", vision == "on"), ("<Picture 2>", "b.png", vision == "on")]
+        files = [part for part in user.parts if getattr(part, "kind", "") == "file"]
+        assert len(files) == (2 if vision == "on" else 0)
+        return SimpleNamespace(text="A finished prompt.", finish_reason="stop")
+
+    monkeypatch.setattr(generate_writer.model_client, "stream_model", writer)
+    image = base64.b64encode(encoded()).decode()
+    mock_http(monkeypatch, lambda req: httpx.Response(200, json={"data": [{"b64_json": image}]}))
+    assert run("--i2i", "-u", "http://m@paint.test/v1", "--image", "a.png", "--ref", "b.png", "-p", "go",
+               "--enhance-url", "http://per-run@writer.test/v1") == 0
