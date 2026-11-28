@@ -6,6 +6,7 @@ goes flat at the top of the home toolbox. Under isolation the home is neither
 read nor written."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -117,10 +118,10 @@ def test_two_projects_with_one_name_do_not_share_a_shelf(tmp_path):
     assert "fork_tool" not in tbmod.discover(second)
 
 
-def test_a_local_save_shadows_a_global_tool_in_that_project_only(projects):
+def test_an_explicit_local_save_shadows_a_global_tool_in_that_project_only(projects):
     alpha, beta = projects
     _save(alpha, "who", "def who():\n    return 'global'\n", scope="global")
-    _save(alpha, "who", "def who():\n    return 'local'\n")
+    _save(alpha, "who", "def who():\n    return 'local'\n", scope="local")
 
     record = tbmod.discover(alpha)["who"]
     assert record.scope == tbmod.SHELF
@@ -171,7 +172,7 @@ def test_a_global_save_may_not_lean_on_a_local_tool(projects):
 def test_a_global_save_may_call_a_global_tool_this_project_shadows(projects):
     alpha, _ = projects
     _save(alpha, "helper", scope="global")
-    _save(alpha, "helper")
+    _save(alpha, "helper", scope="local")
     body = "def caller_everywhere():\n    return helper()\n"
 
     assert not _save(alpha, "caller_everywhere", body, scope="global").startswith("ERROR")
@@ -197,3 +198,124 @@ def test_an_isolated_directory_does_not_touch_the_home(tmp_path):
     assert not local.startswith("ERROR")
     assert refused.startswith("ERROR")
     assert sorted(home_box.rglob("*")) == before
+
+
+def test_a_save_under_a_global_tools_name_revises_the_global_tool(projects):
+    alpha, beta = projects
+    _save(alpha, "shared", "def shared():\n    return 'broken'\n", scope="global")
+
+    _save(alpha, "shared", "def shared():\n    return 'fixed'\n")
+
+    global_file = paths.global_toolbox_dir() / "shared.py"
+    assert not _shelf(alpha).exists()
+    assert (paths.global_toolbox_dir() / ".history" / "shared.r1.py").is_file()
+    for cwd in (alpha, beta):
+        record = tbmod.discover(cwd)["shared"]
+        assert record.path == global_file and record.revision == 2
+        assert "'fixed'" in record.path.read_text(encoding="utf-8")
+
+
+def test_a_save_under_a_shelf_tools_name_revises_it_on_the_shelf(projects):
+    alpha, _ = projects
+    own = alpha / ".js" / "toolbox"
+    _save(alpha, "shelved", "def shelved():\n    return 1\n")
+    own.mkdir(parents=True)
+
+    _save(alpha, "shelved", "def shelved():\n    return 2\n")
+
+    record = tbmod.discover(alpha)["shelved"]
+    assert record.path == _shelf(alpha) / "shelved.py" and record.revision == 2
+    assert not (own / "shelved.py").exists()
+
+
+def test_a_save_revises_the_nearest_tool_of_the_name(projects):
+    alpha, beta = projects
+    _save(alpha, "who", "def who():\n    return 'global'\n", scope="global")
+    _save(alpha, "who", "def who():\n    return 'local'\n", scope="local")
+
+    _save(alpha, "who", "def who():\n    return 'local fixed'\n")
+
+    assert tbmod.discover(alpha)["who"].revision == 2
+    assert tbmod.discover(alpha)["who"].scope == tbmod.SHELF
+    assert "'global'" in tbmod.discover(beta)["who"].path.read_text(encoding="utf-8")
+
+
+def test_a_fix_to_a_global_tool_may_not_lean_on_a_local_tool(projects):
+    alpha, _ = projects
+    _save(alpha, "shared", scope="global")
+    _save(alpha, "helper")
+
+    refused = _save(alpha, "shared", "def shared():\n    return helper()\n")
+
+    assert refused.startswith("ERROR") and "helper" in refused
+    assert tbmod.discover(alpha)["shared"].revision == 1
+
+
+def test_a_new_name_still_lands_locally_beside_global_tools(projects):
+    alpha, _ = projects
+    _save(alpha, "existing", scope="global")
+    _save(alpha, "brand_new")
+    assert tbmod.discover(alpha)["brand_new"].scope == tbmod.SHELF
+
+
+def _worktree(main: Path, where: Path, name: str) -> Path:
+    """A linked worktree of ``main`` at ``where``, laid out the way git lays one out."""
+    admin = main / ".git" / "worktrees" / name
+    admin.mkdir(parents=True)
+    (admin / "commondir").write_text("../..\n", encoding="utf-8")
+    (admin / "HEAD").write_text("ref: refs/heads/" + name + "\n", encoding="utf-8")
+    where.mkdir(parents=True)
+    (where / ".git").write_text(f"gitdir: {admin}\n", encoding="utf-8")
+    (admin / "gitdir").write_text(str(where / ".git") + "\n", encoding="utf-8")
+    return where
+
+
+@pytest.fixture
+def repository(tmp_path):
+    main = _repo(tmp_path / "src" / "repo")
+    (main / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    first = _worktree(main, tmp_path / "trees" / "repo-one", "repo-one")
+    second = _worktree(main, tmp_path / "trees" / "repo-two", "repo-two")
+    return main, first, second
+
+
+def test_a_worktree_saves_to_its_repositorys_shelf_which_outlives_it(repository):
+    main, first, second = repository
+    assert paths.worktree_repository(first) == main
+
+    _save(first, "from_a_worktree")
+    shutil.rmtree(first)
+
+    assert (_shelf(main) / "from_a_worktree.py").is_file()
+    for cwd in (main, second):
+        assert tbmod.discover(cwd)["from_a_worktree"].scope == tbmod.SHELF
+
+
+def test_a_worktrees_own_toolbox_still_wins(repository):
+    _, first, _ = repository
+    own = first / ".js" / "toolbox"
+    own.mkdir(parents=True)
+    _save(first, "kept_in_tree")
+    assert (own / "kept_in_tree.py").is_file()
+
+
+def test_a_worktree_whose_repository_is_gone_uses_its_own_shelf(repository):
+    main, first, _ = repository
+    shutil.rmtree(main)
+
+    assert paths.worktree_repository(first) is None
+    assert not _save(first, "orphan").startswith("ERROR")
+    assert (_shelf(first) / "orphan.py").is_file()
+
+
+def test_a_main_checkout_and_a_submodule_are_not_worktrees(tmp_path):
+    main = _repo(tmp_path / "plain")
+    module_git = main / ".git" / "modules" / "sub"
+    module_git.mkdir(parents=True)
+    (module_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    sub = main / "sub"
+    sub.mkdir()
+    (sub / ".git").write_text(f"gitdir: {module_git}\n", encoding="utf-8")
+
+    assert paths.worktree_repository(main) is None
+    assert paths.worktree_repository(sub) is None

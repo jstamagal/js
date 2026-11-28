@@ -110,6 +110,33 @@ def _git_root(current: Path) -> Path | None:
     return found
 
 
+def worktree_repository(directory: Path) -> Path | None:
+    """The main checkout of the repository whose linked worktree is
+    ``directory``, read from git's files: the `gitdir:` line of
+    ``directory``'s `.git` file leads to the worktree's git directory, whose
+    `commondir` names the repository's. For a bare repository that is the
+    repository directory itself. None when ``directory`` is not a linked
+    worktree, or the repository is no longer where those files say."""
+    marker = Path(directory) / ".git"
+    try:
+        if not marker.is_file():
+            return None
+        text = marker.read_text(encoding="utf-8", errors="replace")
+        line = next((row for row in text.splitlines() if row.startswith("gitdir:")), "")
+        if not line:
+            return None
+        worktree_git = (marker.parent / line[len("gitdir:"):].strip()).resolve(strict=False)
+        commondir = worktree_git / "commondir"
+        if not commondir.is_file():
+            return None
+        common = (worktree_git / commondir.read_text(encoding="utf-8", errors="replace").strip()).resolve(strict=False)
+        if not (common / "HEAD").is_file():
+            return None
+    except OSError:
+        return None
+    return common.parent if common.name == ".git" else common
+
+
 def project_root(cwd: Path | None = None) -> Path | None:
     """The top of the project ``cwd`` (default: here) is in: the nearest
     directory at or above it holding a `.git`, lifted out of a submodule to

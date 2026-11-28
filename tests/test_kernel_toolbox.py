@@ -1134,7 +1134,7 @@ def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shad
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g1'\n",
                          model="qwen", scope="global")
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'p1'\n",
-                         model="fable")
+                         model="fable", scope="local")
 
     report = tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g2'\n",
                                   model="opus", scope="global")
