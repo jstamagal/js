@@ -85,6 +85,7 @@ def session_variables(cfg) -> dict[str, str]:
     project = paths.project_namespace(Path(getattr(cfg, "project_dir", None) or Path.cwd()))
     return {
         "JS_HOME": str(paths.home()),
+        "JS_ROOT": str(Path(__file__).resolve().parents[1]),
         "CURRENT_PROJECT": project.name or str(project),
         "CURRENT_PROJECT_ROOT": str(project),
         "CURRENT_SESSION": path.stem if path != Path(os.devnull) else "",

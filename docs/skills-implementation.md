@@ -29,6 +29,10 @@ improve-codebase-architecture, handoff, wayfinder. The copies are curated, not
 tracked: each `SKILL.md` frontmatter carries a `SOURCE:` line with the upstream
 URL, commit, and path, and `just skills-diff [upstream]` (default
 `~/matt-skills`) prints what changed upstream in each path since that commit.
+Two more are MiniMax's own prompt-writing skills, vendored whole with their
+`references/`: h3-image-prompt-writing (from MiniMax-AI/MiniMax-H3-Image) and
+h3-prompt-writing (from MiniMax-AI/MiniMax-H3, for H3 video). The stock
+`h3-image` and `h3-video` writer agents of `js generate` embed their text.
 The vendored copies leave out upstream's `agents/openai.yaml`. Local edits:
 code-review and wayfinder name GitHub issues via `gh` as the tracker in place
 of upstream's `/setup-matt-pocock-skills` line.

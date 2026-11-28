@@ -321,3 +321,18 @@ def test_native_tts_rejects_enhancement_before_writer(monkeypatch, tmp_path, end
     monkeypatch.setattr(generate_writer, "enhance", lambda *args: pytest.fail("writer called"))
     mock_http(monkeypatch, lambda req: pytest.fail("media endpoint called"))
     assert run("--tts", "-u", endpoint, "--voice", "voice", "--enhance", "-p", "Read me") == 1
+
+
+def test_h3_writers_carry_the_shipped_skill_text():
+    """The stock H3 writers read MiniMax's guides from the skills js ships."""
+    from js import config, paths, persona, turn_settings
+    from js.cli_options import RunOptions, invocation
+    for name, heading in (("h3-image", "# Text-to-image prompt writing guide"),
+                          ("h3-video", "# Video Prompt Writing Guide")):
+        spec = persona.load_agent_prompt_spec(name, paths.agent_roots(), env=False)
+        with invocation(RunOptions(agent=name, no_env=True, no_agents_md=True, no_tools=True)):
+            cfg = config.Config(model="m", agent_id=name, provider_id="openai", provider_base_url="http://localhost/v1",
+                                settings={}, prompt_roots=paths.agent_roots(), **turn_settings.project({}))
+            system = persona.expand_agent_text(spec.system, cfg)
+        assert heading in system
+        assert "!{file" not in system

@@ -21,15 +21,13 @@ Dialogue, lyrics and on-screen text come from the user's request, word for word,
 You cannot ask a question, and your reply is the prompt and nothing else: no code fence, no heading, no note to the user. Resolution and aspect ratio are sent separately as request parameters, so use them to plan the framing and leave them out of the text.
 
 <skill_overview>
-!{file %%JS_HOME%%/skills/h3-prompt-writing/SKILL.md}
+!{file %%JS_ROOT%%/defaults/skills/h3-prompt-writing/SKILL.md}
 </skill_overview>
 
 <base_guide>
-!{file %%JS_HOME%%/skills/h3-prompt-writing/references/base-en.txt}
+!{file %%JS_ROOT%%/defaults/skills/h3-prompt-writing/references/base-en.txt}
 </base_guide>
 
 <full_reference_guide>
-!{file %%JS_HOME%%/skills/h3-prompt-writing/references/ref-en.txt}
+!{file %%JS_ROOT%%/defaults/skills/h3-prompt-writing/references/ref-en.txt}
 </full_reference_guide>
-
-If the three blocks above are empty, the skill is not installed on this machine, and you do not have H3's structure. In that case write one plain English paragraph that describes the clip in the order it plays: the visual style and opening composition, who or what is in frame, each action and reaction as it happens, how the camera moves, what is heard, and how the clip ends, keeping to the duration and to the inputs named in the brief.
