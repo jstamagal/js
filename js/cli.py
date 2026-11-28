@@ -1,5 +1,5 @@
 """The `js` command line: parse it, settle the run's setup, and run the mode
-it names: a listing, --bench, --compact, --commit, a -p run
+it names: a listing, --init, --bench, --compact, --commit, a -p run
 (`js.prompt_run`), or the REPL (`js.repl`)."""
 
 from __future__ import annotations
@@ -409,6 +409,7 @@ def _run_acp(dispatch_argv: list[str]) -> int:
                 "json", "json_stream", "quiet", "debug", "debug_file", "stats_json", "stats_csv",
                 "verify", "bench", "loop", "lock", "commit", "compact", "migrate_config",
                 "login", "logout", "refresh_model_catalog", "list_sessions", "list_agents",
+                "init", "init_full", "init_agent",
                 "list_models", "list_providers", "list_logins", "target",
             ):
                 value = getattr(args, name)
@@ -476,7 +477,8 @@ def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Names
             error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream", command="--" + name.replace("_", "-"))
             parser.error(error)
     if args.json or args.json_stream:
-        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog"):
+        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog",
+                     "init", "init_full", "init_agent"):
             value = getattr(args, name)
             if value is not None and value is not False:
                 error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream" if args.json_stream else "--json", command="--" + name.replace("_", "-"))
@@ -673,6 +675,12 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return verify.run_verify(args)
     if args.list_sessions:
         return listings.run_list_sessions(args)
+    if args.init or args.init_full or args.init_agent is not None:
+        from . import init_cli
+
+        if args.init_agent is not None:
+            return init_cli.run_init_agent(args.init_agent)
+        return init_cli.run_init(full=args.init_full)
     if (code := _settle_session(args, setup)) is not None:
         return code
     if args.login is not None:

@@ -661,6 +661,8 @@ SHORT_HELP = Message(
     '  js generate --help                   Generate images, video, music and speech.\n'
     '  js --acp                            Serve Agent Client Protocol over stdio.\n'
     '  js --commit                         Run the commit agent.\n'
+    '  js --init                           Make this directory a js project.\n'
+    '  js --init-agent NAME                Make a new agent in the home.\n'
     '  js -p "task" --json                  Print one final JSON object.\n'
     '  js -p "task" --json-stream           Stream JSON Lines during the run.\n'
     '  js -p "task" --loop 10               Repeat fresh turns.\n'
@@ -832,6 +834,19 @@ OPT_REFRESH_MODEL_CATALOG = Message("Force-refresh js's local models.dev catalog
 OPT_COMMIT = Message(
     "Run the built-in commit agent against the target dir, the cwd by default. A missing repo is initialized.")
 OPT_COMPACT = Message("Compact an existing session id or path offline, append-only.")
+OPT_INIT = Message("Make the current directory a js project: git init outside a repository, and a .js/ "
+                   "with an empty jsrc and agents/, skills/, commands/ and toolbox/. Never overwrites.")
+OPT_INIT_FULL = Message("--init, plus a README.md, an MIT LICENSE and a .gitignore, each only if missing.")
+OPT_INIT_AGENT = Message("Make a new agent NAME in the home's agents directory from the scaffold templates.")
+INIT_MADE = Message("Made {made} in {directory}.")
+INIT_MADE_LEFT_ALONE = Message("Made {made} in {directory}; left alone: {kept}.")
+INIT_NOTHING_MADE = Message("Nothing to make in {directory}; already there: {kept}.")
+INIT_IN_HOME = Message("Not here: .js in this directory is the js home, {home}.")
+INIT_GIT_FAILED = Message("git init failed: {error}")
+INIT_TEMPLATE_MISSING = Message("Scaffold template missing: {path}")
+INIT_AGENT_EXISTS = Message("Agent {agent} already exists at {path}; nothing made.")
+INIT_AGENT_SHADOWS_STOCK = Message("Agent {agent} shadows the stock agent of that name.")
+INIT_AGENT_MADE = Message("Made agent {agent} at {path}.")
 OPT_IM_A_PUSSY = Message(
     "Opt out of inline-code execution for this run: !{{sh|python|c|node ...}} directives and ```!lang fences "
     "stay as written instead of running. Inline code runs by default. Set INLINE_CODE off or "

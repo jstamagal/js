@@ -111,6 +111,10 @@ def parser() -> argparse.ArgumentParser:
     groups['MODES'].add_argument("--acp", action="store_true", help=msgs.OPT_ACP.words())
     groups['MODES'].add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.words())
     groups['MODES'].add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.words())
+    init_group = groups['MODES'].add_mutually_exclusive_group()
+    init_group.add_argument("--init", action="store_true", help=msgs.OPT_INIT.words())
+    init_group.add_argument("--init-full", action="store_true", help=msgs.OPT_INIT_FULL.words())
+    init_group.add_argument("--init-agent", metavar="NAME", help=msgs.OPT_INIT_AGENT.words())
     groups['WHAT THE MODEL GETS'].add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
                         help=msgs.OPT_IM_A_PUSSY.words())
     groups['WHAT THE MODEL GETS'].add_argument("-i", "--no-shell-history", dest="no_shell_history", action="store_true",

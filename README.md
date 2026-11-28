@@ -144,13 +144,15 @@ Agents and skills replace a whole directory by name. Nested agents use colons
 between directory names, so `js -a meta:workflow-creator` selects
 `agents/meta/workflow-creator/`. Names in listings are the union of the layers.
 Project `.js/` overrides agents, skills, commands, toolbox and jsrc.
-Themes, tool descriptions, help and snippets use stock and home.
+Themes, tool descriptions, help, snippets and scaffold templates use stock and home.
 `jsrc` files layer settings, and `defaults/fset` loads before jsrc format entries.
 
 ```bash
 js --home ~/profiles/review -p "review this change"
 JS_HOME=~/profiles/chat js --chat -p "hello"
 js --list-agents
+js --init
+js --init-agent NAME
 js --list-models --json
 js --list-sessions --json
 js --list-providers --json

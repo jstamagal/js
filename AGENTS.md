@@ -61,7 +61,7 @@ sync and run on executor threads. `js/model_client.py` is the model I/O boundary
 fan-out), and a turn's model call and streamed reply live in
 `js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` is `main` (the command starts in `js/entry.py`): it reads
 the command line (`js/command_line.py` defines it) and picks the mode, each
-side mode (`--bench`, `--commit`, `--list-*`) living in a module of its own, `js/repl.py` is the interactive REPL (startup,
+side mode (`--bench`, `--commit`, `--init*`, `--list-*`) living in a module of its own, `js/repl.py` is the interactive REPL (startup,
 the input loop, the turn queue, steering), and `js/prompt_run.py` is the `-p`
 run (its steps, the answer, the Continue line); `js/run_assembly.py` turns config,
 agent and model into a settled run, the ready-to-run turn that `-p`, the REPL
@@ -88,7 +88,7 @@ each chain `.js/`, and from each chain directory `JS.md` else `AGENTS.md` (and
 the `.local` pair the same way). Nothing above the root is read. Deep dives belong in `docs/technical-guide.md`.
 
 Stock setup lives in `defaults/`: jsrc, fset, agents, themes, tool descriptions,
-skills, help, snippets and secret-patterns. A home file replaces only the same
+skills, help, snippets, secret-patterns and the `--init*` templates in `scaffold/`. A home file replaces only the same
 relative stock file; an empty file shadows it too. Listings union names across
 layers. Skills shadow whole directories by name. Only agents, skills, commands,
 toolbox, tools.yaml and jsrc use the project chain. Missing named setup is a hard error.

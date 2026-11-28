@@ -1,0 +1,8 @@
+tools:
+  - shell:eager
+  - jev:eager
+  - kernel:eager
+  - toolbox:eager
+  - patch:eager
+  - skill:eager
+  - task:eager

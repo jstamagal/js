@@ -42,6 +42,7 @@ persists each completed turn.
 | `js/cli_options.py` | invocation-local prompt and tool overrides the modes share |
 | `js/bench.py` | `--bench AGENT`: an agent over its benchmark cases, one row per case |
 | `js/commit_cli.py` | `--commit`: snapshot the worktree, then run the commit agent over it |
+| `js/init_cli.py` | `--init`, `--init-full`, `--init-agent NAME`: a project `.js/` skeleton, a README/LICENSE/.gitignore, a home agent, from `defaults/scaffold/`, never overwriting |
 | `js/listings.py` | the `--list-*` printers, as text or JSON |
 | `js/migrate_config.py` | `--migrate-config`: a legacy `config.toml` as a jsrc set-script |
 | `js/run_assembly.py` | config, agent and model settled into a run (`settle`), the turn `-p`, the REPL, `--bench` and swarm agents start from |

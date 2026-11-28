@@ -601,7 +601,7 @@ re-read context.
 ## Profiles And Stock Files
 
 `defaults/` ships jsrc, fset, agents, themes, tool descriptions, skills, help,
-snippets and secret-patterns. The home overrides a file at the same relative
+snippets, secret-patterns and the `scaffold/` templates `--init*` writes from. The home overrides a file at the same relative
 path; files you have not copied keep coming from stock. Empty files shadow too.
 Names in listings union across layers. Agents and skills replace whole directories by name.
 Only jsrc, agents, skills, commands and toolbox use a project `.js/` layer.
@@ -854,6 +854,43 @@ js generate --music -m elevenlabs/music_v1 -p 'Brushed jazz trio' --duration 12 
 js generate --tts -m cpa/grok-tts --voice eve -p 'Winter came early.' -o line.mp3
 js generate --stt -m mistral/voxtral-mini-latest --audio-file line.mp3 --diarize -o line.json
 ```
+
+## Scaffolding
+
+```bash
+js --init                 # this directory becomes a js project
+js --init-full            # the same, plus README.md, LICENSE and .gitignore
+js --init-agent NAME      # a new agent in the home
+```
+
+`--init` works like `git init`. It runs `git init` when the current directory is
+not inside a git repository, then makes `.js/` with an empty `jsrc` and the
+`agents/`, `skills/`, `commands/` and `toolbox/` directories. Each new directory
+holds an empty `.gitkeep` so a commit keeps it. Nothing js reads treats a
+`.gitkeep` as an agent, skill, command or tool. An empty `jsrc` is an empty
+layer: the home's settings still apply.
+
+`--init-full` also makes a `README.md` titled with the directory name, an MIT
+`LICENSE` for the current year and `git config user.name` (the OS user when
+that is unset), and a `.gitignore` for secrets (`.env`, `.env.*` but not
+`.env.example`), `.js/jsrc.local`, editor and OS files, Python and Node caches,
+build output and logs.
+
+`--init-agent NAME` makes `agents/NAME/` in the home (`--home` and `JS_HOME`
+apply) with an `agent.yaml` and a starter `01-prompt.md`. A nested name such as
+`meta:child` makes `agents/meta/child/`. It refuses an invalid name or an agent
+the home already has. It warns, then goes ahead, when NAME shadows a stock
+agent.
+
+None of the three overwrites anything. A path that is already there, including
+a symlink, is left alone, and the output names what was made and what was left
+alone. Running a command twice is harmless. `--init` refuses a directory whose
+`.js` is the js home itself.
+
+The texts come from `defaults/scaffold/`: `agent.yaml`, `01-prompt.md`,
+`README.md`, `LICENSE` and `gitignore`. Like every stock file, a file at the
+same path in the home replaces it, so `~/.js/scaffold/agent.yaml` sets the tools
+every new agent starts with.
 
 ## Commit Mode
 
