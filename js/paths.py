@@ -25,6 +25,9 @@ whole structure is always there:
       plans/         plan tool output
       probes/        browser screenshots, terminal snapshots
 
+`archive/` is not part of it: `js --rotate` makes it, a mirror of the paths
+above holding the files it compressed (`archive_root`).
+
 The locations js used before this layout are listed in `legacy_homes()`;
 `js.home` moves them here.
 """
@@ -594,6 +597,13 @@ def login_store_dir() -> Path:
 
 def sessions_root() -> Path:
     return home() / "sessions"
+
+
+def archive_root() -> Path:
+    """Where rotated files live (`js.archive`): the home's own layout,
+    mirrored, one compressed file per original. Made by the first rotation,
+    not by `ensure_home()`."""
+    return home() / "archive"
 
 
 def state_root() -> Path:

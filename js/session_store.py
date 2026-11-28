@@ -48,7 +48,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import messages as msgs, paths
+from . import archive, messages as msgs, paths
 
 if TYPE_CHECKING:
     from .config import Config
@@ -142,6 +142,17 @@ def text_path(session_file: Path) -> Path:
     return session_file.with_suffix(TEXT_SUFFIX)
 
 
+def restore_rotated(session_file: Path) -> bool:
+    """Bring a rotated session (`js --rotate`) back to its live path, its
+    `.txt` with it, and say so on stderr. True when it was rotated."""
+    session_file = Path(session_file)
+    if session_file == Path(os.devnull) or not archive.restore(session_file):
+        return False
+    archive.restore(text_path(session_file))
+    msgs.warn(msgs.SESSION_RESTORED, path=session_file)
+    return True
+
+
 def reserve(folder: Path, make_name: Callable[[], str] = generated_name) -> Path:
     """Create a new empty session file in `folder` under a fresh name."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -158,16 +169,12 @@ def reserve(folder: Path, make_name: Callable[[], str] = generated_name) -> Path
 
 def _named(folder: Path, relative: Path) -> Path | None:
     candidate = folder / relative
-    return candidate if candidate.is_file() else None
+    return candidate if archive.exists(candidate) else None
 
 
 def _tails(folder: Path, tail: str) -> list[Path]:
-    try:
-        entries = sorted(folder.glob(f"*{SUFFIX}"))
-    except OSError:
-        return []
-    return [entry for entry in entries
-            if entry.stem.endswith(tail) and is_generated(entry.stem) and entry.is_file()]
+    return [entry for entry in archive.files_in(folder, f"*{SUFFIX}")
+            if entry.stem.endswith(tail) and is_generated(entry.stem)]
 
 
 def _one(session: str, found: list[Path]) -> Path | None:
@@ -180,7 +187,7 @@ def started_in(session_file: Path) -> str | None:
     """The start directory the session's first record names, or None when
     its first record is not a start record."""
     try:
-        with open(session_file, "rb") as stream:
+        with archive.open_read(session_file, binary=True) as stream:
             line = stream.readline()
         record = json.loads(line)
     except (OSError, ValueError):
@@ -277,7 +284,7 @@ def read_latest(agent_state_dir: Path) -> Path | None:
     except (OSError, json.JSONDecodeError):
         return None
     session_file = payload.get("session_file") if isinstance(payload, dict) else None
-    if not isinstance(session_file, str) or not Path(session_file).is_file():
+    if not isinstance(session_file, str) or not archive.exists(Path(session_file)):
         return None
     return Path(session_file)
 
@@ -384,17 +391,23 @@ def _linked(record: dict, record_id: str, parent: str | None) -> dict:
 def _open_locked(session_file: Path, mode: str, **open_kw):
     """Open `session_file`, take the exclusive lock, and make sure the
     descriptor still names the file the path names. A `link_file` that
-    replaced the file between our open and our lock leaves us locked on the
-    unlinked old inode; a write there is lost. Reopen and relock until the
-    descriptor is the named file."""
+    replaced the file between our open and our lock, or a rotation that moved
+    it to the archive, leaves us locked on the unlinked old inode; a write
+    there is lost. Reopen and relock until the descriptor is the named file."""
     attempt_mode = mode
     for attempt in range(3):
+        if attempt:
+            # `js --rotate` may have moved it to the archive under our lock wait.
+            restore_rotated(session_file)
         stream = open(session_file, attempt_mode, **open_kw)
         try:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
             opened = os.fstat(stream.fileno())
-            named = os.stat(session_file)
-            if (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino):
+            try:
+                named = os.stat(session_file)
+            except FileNotFoundError:
+                named = None
+            if named is not None and (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino):
                 if "a" in mode and attempt_mode != mode:
                     # The retry lost O_APPEND (r+b); a write would land at the
                     # front of the file. Seek to the end instead.
@@ -424,6 +437,9 @@ def append(session_file: Path, record: dict[str, Any]) -> dict[str, Any]:
     if session_file == Path(os.devnull):
         return dict(record)
     session_file.parent.mkdir(parents=True, exist_ok=True)
+    if not session_file.exists():
+        # Appending to a rotated session's live path would start it empty.
+        restore_rotated(session_file)
     key = file_key(str(session_file))
     with _open_locked(session_file, "a+b") as stream:
         fd = stream.fileno()

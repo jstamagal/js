@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import (
+    archive,
     control_sequences,
     fset,
     messages as msgs,
@@ -410,6 +411,8 @@ def open_transcript_sink(paths: list[Path]) -> TranscriptLogSink | None:
     for path in paths:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # A rotated log is put back first, so the append continues it.
+            archive.restore(path)
             files.append(
                 open(path, "a", encoding="utf-8", errors="backslashreplace")  # noqa: SIM115 - sink owns lifetime
             )

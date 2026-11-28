@@ -570,6 +570,13 @@ goes to stderr. The flags are mutually exclusive. See [Headless JSON](headless-j
 `--verify --json` reports configuration errors as JSON. A command without the
 requested JSON form exits 2 and names the command.
 
+`js --rotate [AGE]` moves sessions and logs not modified in AGE (default
+`ROTATE_AGE`, `30d`; `<7d` for the recent ones) to `~/.js/archive/`,
+compressed one file per original under the same relative path. Rotated
+sessions are still listed, searched and resumed. `js --unrotate [SESSION]`
+puts files back. Both take `--dry-run`. See
+[Rotation](configuration-and-sessions.md#rotation).
+
 Sampling flags set registered settings for this run: `--temperature`, `--top-p`,
 `--top-k`, `--min-p`, `--top-n-sigma`, `--repetition-penalty`, `--presence-penalty`,
 `--xtc-probability`, `--xtc-threshold`, `--dry-multiplier`, `--dry-base`,

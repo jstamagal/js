@@ -888,6 +888,19 @@ SESSION_STATUS_MARK
 SESSION_TEXT_AUTO_REFRESH
     on: a session's text file is rewritten when its journal changes.
 
+ROTATE_AGE
+    What a bare `js --rotate` moves to ~/.js/archive: 30d or >30d is files
+    not modified in 30 days or more, <7d files modified within the last 7
+    days. Units: h, d, w.
+
+ROTATE_AGE_MIN
+    `js --rotate` leaves every file modified more recently than this, in
+    any AGE; 0 for none.
+
+ROTATE_FORMAT
+    How `js --rotate` compresses each file it archives: xz, the best
+    ratio, or gz, faster and larger.
+
 GLOBAL_INSTRUCTION_FILES
     Instruction files read from ~/.js and from each project .js/
     directory, in order.

@@ -50,6 +50,11 @@ class _Snapshot(list):
         return _Snapshot(self, Path(self.path), self.revision)
 
 
+def save_lock_path(path: Path) -> Path:
+    """The lock `_save_lock` takes for the session in `path`."""
+    return Path(f"{_file_key(path)}.save.lock")
+
+
 @contextlib.contextmanager
 def _save_lock(path: Path):
     """Serialize history-changing transactions across processes."""
@@ -57,7 +62,7 @@ def _save_lock(path: Path):
         yield
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(f"{_file_key(path)}.save.lock", "a+b") as guard:
+    with open(save_lock_path(path), "a+b") as guard:
         fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
         yield
 
@@ -145,7 +150,11 @@ def _migrate_record(d: dict) -> dict | None:
 
 
 def _open_locked(path: Path, mode: str):
-    """Open with appropriate fcntl lock for the mode. Caller must close."""
+    """Open with appropriate fcntl lock for the mode. Caller must close. A
+    rotated session is put back at its live path first: what loads or
+    changes the conversation goes on to use it."""
+    if not path.exists():
+        session_store.restore_rotated(path)
     if any(flag in mode for flag in "wax"):
         path.parent.mkdir(parents=True, exist_ok=True)
     # Text reads replace bytes that are not UTF-8 (a torn multibyte char from
