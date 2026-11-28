@@ -114,7 +114,8 @@ own: it exists once you write it or run `/save`, and holds only what you set.
 `JS_MODEL` overrides it. Explicit
 `set PROVIDER`, `BASE_URL` and `API_KEY` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. A model runs through a saved login, `PROVIDER`
-or `BASE_URL`; with none of them it is refused. A provider's own env vars
+or `BASE_URL`. OpenRouter also accepts `-m openrouter/<model>` with
+`OPENROUTER_API_KEY` set. A provider's own env vars
 (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, ...) fill its key and
 base URL when nothing else sets them. Tune any setting live with
 `/set <key> <value>` (and list them with `/show`); convert a legacy

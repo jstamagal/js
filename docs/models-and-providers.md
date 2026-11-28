@@ -35,12 +35,12 @@ set API_KEY sk-local
 When `PROVIDER` is set, the provider is constructed explicitly with the given
 base URL and API key. When unset, js routes the model id as follows: a slash prefix
 (e.g. `cpa/claude-opus-5-5`) naming a saved login goes directly to that
-provider; a known provider with no login is an error naming it (environment
-keys alone never create a route, `routing.resolve_model_route`); an unprefixed
+provider. OpenRouter also routes by prefix when `OPENROUTER_API_KEY` is set.
+Other known providers without a login require an explicit provider. An unprefixed
 id with a `BASE_URL` goes there as an OpenAI-compatible endpoint, and with
 neither it is an error. Direct
 providers use their default endpoint and official SDK env vars (`OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc.).
+`ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, etc.).
 
 Provider env overrides (always win over `jsrc` files):
 
@@ -97,6 +97,7 @@ credential, and offers an optional one-turn secondary model test before saving.
 ```bash
 js --login                 # arrow-key provider registry (saved/env/known)
 js --login deepseek        # use DEEPSEEK_API_KEY if present, otherwise prompt
+js --login openrouter      # offers OPENROUTER_API_KEY if set
 js --login ollama          # local Ollama defaults (http://127.0.0.1:11434/v1, key "ollama")
 js --login llama.cpp       # local llama.cpp defaults (http://127.0.0.1:8080/v1)
 js --login mimo            # Xiaomi MiMo API endpoint
@@ -441,9 +442,16 @@ for providers that need a friendlier first-class login name:
 | `mimo` / `xiaomi` | Xiaomi MiMo API endpoint at `https://api.xiaomimimo.com/v1`. |
 | `mimo-token-plan` / `mimo-tp` / `xiaomi-token-plan` | Xiaomi MiMo Token Plan endpoint at `https://token-plan-sgp.xiaomimimo.com/v1`. |
 | `openai` | Generic OpenAI-compatible endpoint for OpenAI, proxies, and custom compatible servers. |
+| `openrouter` | OpenAI-compatible gateway (`sdk=openai`, base `https://openrouter.ai/api/v1`). Key env `OPENROUTER_API_KEY`, base env `OPENROUTER_BASE_URL`, model env `OPENROUTER_MODEL`. |
 | `anthropic` | Anthropic direct API. |
 | `omp` | Oh My Pi gateway over the **OpenAI-compatible** transport (`sdk=openai`, no built-in base URL). Key env `OMP_API_KEY` / `OMP_GATEWAY_API_KEY`, base env `OMP_BASE_URL` / `OMP_GATEWAY_BASE_URL`, model env `OMP_MODEL` / `OMP_GATEWAY_MODEL`. No API key required, but a base URL must be set (see below). |
 | `cliproxyapi` | CLIProxyAPI local proxy on its own `cliproxyapi` transport over the OpenAI SDK shape (`sdk=openai`, no built-in base URL, custom login shape). Key env `CLIPROXYAPI_API_KEY` / `CLIPROXY_API_KEY`, base env `CLIPROXYAPI_BASE_URL` / `CLIPROXY_BASE_URL`, model env `CLIPROXYAPI_MODEL` / `CLIPROXY_MODEL`. A base URL must be set (see below). |
+
+With `OPENROUTER_API_KEY` set, run `js -m openrouter/google/gemini-4-neon`.
+The provider prefix is stripped once, preserving the model ID's slashes and
+any variant suffix, such as `:free`. An existing `[openrouter]` login supplies
+its saved key, and js uses the built-in OpenRouter transport. Saved endpoint
+and header overrides follow the same rules as for other built-in providers.
 
 The `omp` and `cliproxyapi` provider ids are surfaced through the login store:
 the listed key/base/model environment variables are read in order, first

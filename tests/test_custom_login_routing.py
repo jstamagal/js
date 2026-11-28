@@ -9,6 +9,7 @@ and pinning `PROVIDER` resolved base_url but handed the raw js id to the SDK
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,9 +19,11 @@ from turn_driver import js, one_turn
 
 from js import (
     cli,
+    login_cli,
     login_defaults,
     logins,
     messages as msgs,
+    model_metadata,
     providers,
     repl_model_commands,
     repl_settings_commands,
@@ -130,6 +133,104 @@ def test_route_by_prefix_carries_login_endpoint():
     assert route.base_url == BASE_URL
     assert route.api_key == "x"
     assert route.transport == "custom_openai"
+
+
+@pytest.mark.parametrize("model", [
+    "google/gemini-4-neon",
+    "baidu/ernie-5.5-flash-preview:free",
+    "google/gemini-4-neon:batch",
+])
+def test_openrouter_cli_routes_with_only_its_env_key(monkeypatch, tmp_path, model):
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-env-key")
+    calls = []
+
+    def turn(cfg, system, messages, *_args, **kwargs):
+        calls.append(kwargs)
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    assert js(monkeypatch, "-m", f"openrouter/{model}", "-p", "hi") == 0
+
+    [call] = calls
+    assert call["provider_id_override"] == "openrouter"
+    assert call["model_override"] == model
+    assert call["provider_base_url_override"] == "https://openrouter.ai/api/v1"
+    assert call["provider_api_key_override"] == "openrouter-env-key"
+
+
+def test_openrouter_without_credentials_requires_login():
+    with pytest.raises(ProviderNotLoggedInError):
+        resolve_model_route("openrouter/google/gemini-4-neon", env={})
+
+
+def test_pinned_openrouter_uses_its_endpoint_and_model_env():
+    route = resolve_model_route("default", configured_provider_id="openrouter", env={
+        "OPENROUTER_BASE_URL": BASE_URL,
+        "OPENROUTER_MODEL": "google/gemini-4-neon:batch",
+    })
+    assert route.base_url == BASE_URL
+    assert route.model == "google/gemini-4-neon:batch"
+
+
+def test_openrouter_lists_models_using_its_env_key(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-env-key")
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    model = "google/gemini-4-neon:batch"
+    assert [row[0] for row in login_cli._login_provider_rows()].count("openrouter") == 1
+
+    def list_models(login):
+        assert login.effective_provider_id == "openai"
+        assert login.provider_base_url == "https://openrouter.ai/api/v1"
+        assert login.provider_api_key == "openrouter-env-key"
+        return [model]
+
+    monkeypatch.setattr(logins, "test_login", list_models)
+    assert js(monkeypatch, "--list-models", "openrouter", "--json") == 0
+    assert json.loads(capsys.readouterr().out)["models"] == [f"openrouter/{model}"]
+
+
+def test_openrouter_uses_its_catalog_limits_and_prices():
+    model = "openrouter/google/gemini-2.5-flash"
+    limits = model_metadata.lookup_limits(model)
+    assert limits is not None
+    assert limits.provider_id == "openrouter"
+    assert limits.context_window == 1_048_576
+    assert model_metadata.model_prices(model)
+
+
+def test_openrouter_saved_login_uses_builtin_and_appears_once(monkeypatch, tmp_path, capsys):
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-env-key")
+    base_url = "https://openrouter.ai/api/v1"
+    model = "baidu/ernie-5.5-flash-preview:free"
+    logins.save_login(Login(
+        provider_id="openrouter",
+        sdk_provider_id="openai",
+        shape_provider_id="openai-completions",
+        provider_base_url=base_url,
+        provider_api_key="openrouter-saved-key",
+    ))
+    logins.cache_models("openrouter", [model])
+
+    route = resolve_model_route(f"openrouter/{model}", explicit_model=True)
+    assert (route.provider_id, route.model) == ("openrouter", model)
+    assert (route.base_url, route.api_key) == (base_url, "openrouter-saved-key")
+    assert route.transport == "openai_compatible"
+
+    assert js(monkeypatch, "--list-providers", "--json") == 0
+    rows = json.loads(capsys.readouterr().out)
+    [provider] = [row for row in rows if row["id"] == "openrouter"]
+    assert provider["source"] == "login"
+    assert [row[0] for row in login_cli._login_provider_rows()].count("openrouter") == 1
+
+    assert js(monkeypatch, "--list-models", "openrouter", "--json") == 0
+    assert json.loads(capsys.readouterr().out)["models"] == [f"openrouter/{model}"]
 
 
 def test_login_prefix_overrides_pinned_provider():

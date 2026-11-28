@@ -123,6 +123,7 @@ Provider login:
 ```bash
 js --login                 # curses registry picker (saved/env/known providers)
 js --login deepseek        # use DEEPSEEK_API_KEY if present, otherwise prompt
+js --login openrouter      # offers OPENROUTER_API_KEY if set
 js --login ollama          # local Ollama defaults
 js --login llama.cpp       # local llama.cpp defaults
 js --login mimo            # Xiaomi MiMo API

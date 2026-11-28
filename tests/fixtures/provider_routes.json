@@ -603,6 +603,25 @@
   },
   "wire_name": "anthropic"
  },
+ "openrouter": {
+  "decoder_keeps_reasoning": true,
+  "resolve_model": {
+   "protocol": "OpenAIChatCompletionsProtocol",
+   "sdk": "openai"
+  },
+  "route": {
+   "anthropic_wire": false,
+   "chat_completions_wire": true,
+   "deepseek_wire": false,
+   "explicit_provider": true,
+   "minimax": false,
+   "provider_name": "openrouter",
+   "responses_wire": false,
+   "sdk_provider_name": "openai",
+   "transport": "openai_compatible"
+  },
+  "wire_name": "openai"
+ },
  "registered id, mixed case": {
   "decoder_keeps_reasoning": false,
   "resolve_model": {

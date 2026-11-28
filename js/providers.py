@@ -57,6 +57,7 @@ class ProviderDef:
     # skipping the prompt here is the catch-22 that silently aims a fresh
     # login at 127.0.0.1 on a box where nothing is listening there.
     local: bool = False
+    env_key_routes_prefix: bool = False
 
     @property
     def effective_sdk_provider_id(self) -> str | None:
@@ -85,6 +86,7 @@ def _p(
     append_only: bool = False,
     models_list_validates_auth: bool = True,
     local: bool = False,
+    env_key_routes_prefix: bool = False,
 ) -> ProviderDef:
     return ProviderDef(
         id=id,
@@ -103,6 +105,7 @@ def _p(
         append_only=append_only,
         models_list_validates_auth=models_list_validates_auth,
         local=local,
+        env_key_routes_prefix=env_key_routes_prefix,
     )
 
 
@@ -287,6 +290,17 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("XINFERENCE_MODEL",),
         aliases=("xinference-local",),
         established=False,
+    ),
+    _p(
+        "openrouter",
+        "OpenRouter",
+        "openai_compatible",
+        sdk="openai",
+        base="https://openrouter.ai/api/v1",
+        key_env=("OPENROUTER_API_KEY",),
+        base_env=("OPENROUTER_BASE_URL",),
+        model_env=("OPENROUTER_MODEL",),
+        env_key_routes_prefix=True,
     ),
     _p(
         "opencode-go",

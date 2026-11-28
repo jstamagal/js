@@ -121,7 +121,7 @@ KEYBINDS_FILE
     scroll_down, complete. Read when the REPL starts.
 
 PROVIDER
-    Explicit js provider id, e.g. deepseek, openai, ollama.
+    Explicit js provider id, e.g. deepseek, openai, openrouter, ollama.
 
 BASE_URL
     Explicit provider base URL; unset = provider default.

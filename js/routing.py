@@ -171,23 +171,24 @@ def resolve_model_route(
     """Resolve ``requested_model`` into a full route.
 
     A ``provider/model`` prefix routes ONLY when the operator has authorized that
-    provider — env keys alone never create a route (the login/model cache is the
-    single source of truth for what is runnable):
+    provider:
 
     - ``prefix_login``: a saved ``js --login`` exists for the prefixed provider.
       This is authoritative: it overrides a pinned ``PROVIDER`` and carries the
       login's base/key.
     - the prefix names the explicitly pinned ``configured_provider_id``.
+    - a provider that opts into env-key routing has its dedicated key set and
+      no explicit provider pin takes precedence.
     - ``prefix_overrides_provider`` (invocation-explicit ``-m``/``JS_MODEL`` and
       agent/subagent ``model:`` choices) makes a known prefix authoritative: a
-      saved-login prefix routes past a stale pin, while an unlogged different
-      known provider raises instead of riding the stale pin.
+      prefix with credentials can route past a stale pin. A different known
+      provider that has not authorized prefix routing raises.
 
-    A prefix naming a KNOWN provider (builtin or catalog) with no login and no
-    explicit pin raises :class:`ProviderNotLoggedInError` instead of silently
-    riding the pinned/gateway provider on that vendor's env keys. An UNKNOWN first
-    segment is not a prefix at all — parse leaves the slashy id whole (OpenRouter /
-    Hugging Face style model names).
+    A known prefix that cannot route raises :class:`ProviderNotLoggedInError`
+    when no provider is pinned or the invocation gives the prefix precedence.
+    Otherwise, the entire model id is sent to the pinned provider. An unknown
+    first segment leaves the slashy id whole (OpenRouter / Hugging Face style
+    model names).
 
     - ``use_saved_login``: fill base/key/headers from a saved login when the
       caller has not supplied them.
@@ -200,10 +201,16 @@ def resolve_model_route(
 
     parsed_provider_id, parsed_model = providers.parse_model_prefix(str(requested_model))
     prefix_login = lookup_login(parsed_provider_id) if parsed_provider_id is not None else None
+    prefix_provider = providers.get_provider(parsed_provider_id)
     routes_by_prefix = parsed_provider_id is not None and (
         prefix_login is not None
         or parsed_provider_id == configured_provider_id
-        or (prefix_overrides_provider and prefix_login is not None)
+        or (
+            (configured_provider_id is None or prefix_overrides_provider)
+            and prefix_provider is not None
+            and prefix_provider.env_key_routes_prefix
+            and providers.first_env(prefix_provider.api_key_env, source) is not None
+        )
     )
     if prefix_allowed is not None:
         routes_by_prefix = prefix_allowed(parsed_provider_id, configured_provider_id, prefix_login)
@@ -251,7 +258,7 @@ def resolve_model_route(
         if not headers:
             headers = dict(saved.provider_headers)
 
-    provider_def = providers.get_provider(provider_id)
+    provider_def = prefix_provider if routes_by_prefix else providers.get_provider(provider_id)
     transport = provider_def.transport if provider_def is not None else None
     if provider_def is not None:
         base_url = providers.provider_base_url(provider_def, base_url, source)

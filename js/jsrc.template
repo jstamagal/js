@@ -101,7 +101,7 @@
 ################################################################################
 
 # Force a provider instead of reading it from MODEL. It's the name of a
-# login from `js login` or a provider js knows: deepseek, openai, ollama,
+# login from `js login` or a provider js knows: deepseek, openai, openrouter, ollama,
 # cpa ...
 #   example:  set PROVIDER cpa
 #set -PROVIDER
