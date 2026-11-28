@@ -62,6 +62,26 @@ def hasher(request, tmp_path, monkeypatch):
     return request.param, _path_with(tmp_path, monkeypatch, fake=request.param == "b3sum")
 
 
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def _answer(monkeypatch, text: str | None) -> None:
+    """A terminal on stdin that answers ``text`` (end of input when it is
+    empty), or with None, Ctrl-C."""
+    monkeypatch.setattr(sys, "stdin", _Terminal(text or ""))
+    if text is None:
+        def interrupted(prompt=""):
+            sys.stdout.write(prompt)
+            raise KeyboardInterrupt
+        monkeypatch.setattr("builtins.input", interrupted)
+
+
+def _moved(home: Path, suffix: str = "") -> Path:
+    return home.with_name(f"{home.name}-{datetime.date.today().isoformat()}{suffix}")
+
+
 def _init(home: Path, *flags: str) -> int:
     return entry.main(["--home", str(home), "init", *flags])
 
@@ -154,21 +174,24 @@ def test_two_backups_in_one_day_do_not_collide(where):
 
 def _members(tarball: Path) -> dict[str, bytes]:
     with tarfile.open(tarball, "r:gz") as tar:
-        return {member.name: tar.extractfile(member).read() for member in tar if member.isfile()}
+        return {member.name: tar.extractfile(member).read() for member in tar
+                if member.isfile() or member.islnk()}
 
 
-def test_archive_leaves_only_a_tarball_holding_every_file(where, hasher, capsys):
+def test_archive_leaves_only_a_tarball_holding_every_file(where, hasher, monkeypatch, capsys):
     _work, home = where
     kind, log = hasher
     assert _init(home) == 0
     (home / "sessions" / "s.jsonl").write_text("{}\n")
     (home / "agents" / "link").symlink_to("slim")
+    os.link(home / "jsrc", home / "work" / "jsrc-again")
     before = _files(home)
+    _answer(monkeypatch, "y\n")
 
     assert _init(home, "-a") == 0
 
     moved = home.with_name(f"{home.name}-{datetime.date.today().isoformat()}")
-    tarball = init_home.tarball_name(moved)
+    tarball = init_home.tarball_name(moved, home.parent)
     assert not moved.exists()
     held = _members(tarball)
     assert {name.removeprefix(moved.name + "/"): body for name, body in held.items()} == before
@@ -188,6 +211,7 @@ def test_a_failing_b3sum_falls_back_to_sha256_and_says_so(where, tmp_path, monke
     _work, home = where
     assert _init(home) == 0
     monkeypatch.setenv("FAKE_B3SUM_MODE", mode)
+    _answer(monkeypatch, "yes\n")
     capsys.readouterr()
 
     assert _init(home, "-a") == 0
@@ -196,7 +220,107 @@ def test_a_failing_b3sum_falls_back_to_sha256_and_says_so(where, tmp_path, monke
     assert "b3sum" in captured.err
     assert "sha256" in captured.out
     moved = home.with_name(f"{home.name}-{datetime.date.today().isoformat()}")
-    assert init_home.tarball_name(moved).is_file() and not moved.exists()
+    assert init_home.tarball_name(moved, home.parent).is_file() and not moved.exists()
+
+
+@pytest.mark.parametrize("answer", ["\n", "n\n", "", None])
+def test_anything_but_yes_keeps_the_moved_home(where, monkeypatch, capsys, answer):
+    _work, home = where
+    assert _init(home) == 0
+    before = _files(home)
+    _answer(monkeypatch, answer)
+
+    assert _init(home, "-a") == 0
+
+    moved = _moved(home)
+    assert _files(moved) == before
+    assert init_home.tarball_name(moved, home.parent).is_file()
+    out = capsys.readouterr().out
+    assert str(init_home.tarball_name(moved, home.parent)) in out and f"Delete {moved}?" in out
+
+
+def test_without_a_terminal_nobody_is_asked_and_the_moved_home_stays(where, capsys):
+    _work, home = where
+    assert _init(home) == 0
+    before = _files(home)
+
+    assert _init(home, "-a") == 0
+
+    moved = _moved(home)
+    assert _files(moved) == before
+    assert init_home.tarball_name(moved, home.parent).is_file()
+    assert "Delete" not in capsys.readouterr().out
+
+
+def test_archive_into_a_directory_puts_the_tarball_there_only(where, tmp_path, monkeypatch):
+    _work, home = where
+    drive = tmp_path / "drive"
+    drive.mkdir()
+    assert _init(home) == 0
+    _answer(monkeypatch, "y\n")
+
+    assert _init(home, "-a", str(drive)) == 0
+
+    moved = _moved(home)
+    assert init_home.tarball_name(moved, drive).is_file()
+    assert sorted(path.name for path in home.parent.iterdir()) == [home.name]
+    assert [path.name for path in drive.iterdir()] == [f"{moved.name}.tar.gz"]
+
+
+@pytest.mark.parametrize("bad", ["missing", "file", "inside"])
+def test_a_bad_archive_directory_refuses_before_moving_anything(where, tmp_path, bad):
+    _work, home = where
+    assert _init(home) == 0
+    target = {"missing": tmp_path / "no-such-drive", "file": tmp_path / "a-file",
+              "inside": home / "work"}[bad]
+    if bad == "file":
+        target.write_text("x")
+    before = _files(home)
+
+    assert _init(home, "-a", str(target)) == 2
+
+    assert _files(home) == before
+    assert sorted(path.name for path in home.parent.iterdir()) == [home.name]
+
+
+def test_a_second_archive_in_one_day_takes_the_next_name(where, tmp_path, monkeypatch):
+    _work, home = where
+    drive = tmp_path / "drive"
+    drive.mkdir()
+    assert _init(home) == 0
+    # A tarball of that day already in the drive, its directory long gone.
+    (drive / f"{_moved(home).name}.tar.gz").write_bytes(b"older")
+    _answer(monkeypatch, "y\n")
+
+    assert _init(home, "-a", str(drive)) == 0
+
+    assert (drive / f"{_moved(home).name}.tar.gz").read_bytes() == b"older"
+    assert init_home.tarball_name(_moved(home, "-2"), drive).is_file()
+
+
+@pytest.mark.parametrize("argv", [["-a", "--full"], ["-a", "-f"], ["-a", "-b"]])
+def test_archive_followed_by_another_flag_is_that_flag(where, argv):
+    _work, home = where
+    with pytest.raises(SystemExit) as refused:
+        _init(home, *argv)
+    assert refused.value.code == 2
+    assert sorted(path.name for path in home.parent.iterdir()) == [home.name]
+
+
+def test_a_running_session_stops_a_backup(where, monkeypatch):
+    from js import memory
+    from js.session_catalog import acquire_session
+
+    work, home = where
+    assert _init(home) == 0
+    session = paths.sessions_root() / "-proj" / "2026-11-27T1200-ab12.jsonl"
+    session.parent.mkdir(parents=True)
+    memory.append_message(session, {"role": "user", "content": "here"})
+    with acquire_session(session):
+        before = _files(home)
+        assert _init(home, "-b") == 1
+        assert _files(home) == before
+    assert not _moved(home).exists()
 
 
 def _swap_a_body(staged: Path) -> None:
@@ -240,7 +364,7 @@ def test_a_tarball_that_fails_leaves_the_moved_home_whole(where, hasher, monkeyp
 
     moved = home.with_name(f"{home.name}-{datetime.date.today().isoformat()}")
     assert _files(moved) == before
-    assert not init_home.tarball_name(moved).exists()
+    assert not init_home.tarball_name(moved, home.parent).exists()
     assert [path.name for path in home.parent.iterdir() if path.name.startswith(".")] == []
     assert _files(home) == _stock()
     if break_it == "swap":
@@ -258,7 +382,7 @@ def test_a_file_changed_after_the_tarball_was_written_is_not_removed(where, monk
     monkeypatch.setattr(init_home, "_written", change)
     assert _init(home, "-a") != 0
     assert (moved / "jsrc").read_text() == "written after\n"
-    assert not init_home.tarball_name(moved).exists()
+    assert not init_home.tarball_name(moved, home.parent).exists()
 
 
 def test_the_home_holding_directory_and_the_home_itself_are_the_home_case(where, monkeypatch):

@@ -17,7 +17,8 @@ Three forms:
   second the same day), then makes a new home from the stock setup alone.
   Sessions, logs, logins and the rest stay in the renamed home.
 - `archive`: `backup`, then `<home>-YYYY-MM-DD.tar.gz` of the renamed home
-  beside it, and the renamed home removed, so the old home is the one
+  beside the home or in a directory named, and the renamed home removed
+  when the person at the terminal answers yes, so the old home is the one
   tarball. The tarball is written under a temporary name, fsynced, read
   back whole and compared byte for byte with the renamed home (`verify`),
   and linked into place before anything is removed; then only what it was
@@ -41,6 +42,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import zlib
 from collections.abc import Callable
@@ -75,23 +77,38 @@ def _stock() -> tuple[list[str], list[str]]:
     return dirs, files
 
 
+def _staged(source: Path, target: Path) -> Path:
+    """A whole copy of ``source``, mode and times included, beside
+    ``target`` under a temporary name, so a copy cut short is never at
+    ``target``."""
+    staged = target.with_name(f".{target.name}.js-init")
+    staged.unlink(missing_ok=True)
+    try:
+        shutil.copy2(source, staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
 def _copy_new(source: Path, target: Path) -> bool:
     """Copy ``source`` to ``target`` with its mode and times; False when
     something is already at ``target``."""
+    if target.exists() or target.is_symlink():
+        return False
+    staged = _staged(source, target)
     try:
-        with open(source, "rb") as src, open(target, "xb") as dst:
-            shutil.copyfileobj(src, dst)
+        os.link(staged, target)
     except FileExistsError:
         return False
-    shutil.copystat(source, target)
+    finally:
+        staged.unlink()
     return True
 
 
 def _replace(source: Path, target: Path) -> None:
     """``target`` becomes a copy of ``source``, renamed into place."""
-    staged = target.with_name(f".{target.name}.js-init")
-    shutil.copy2(source, staged)
-    os.replace(staged, target)
+    os.replace(_staged(source, target), target)
 
 
 def _under_kept(rel: str, kept_dirs: set[str]) -> bool:
@@ -152,20 +169,23 @@ def differing(home: Path) -> list[str]:
     return found
 
 
-def backup_name(home: Path, today: datetime.date | None = None) -> Path:
-    """`<home>-YYYY-MM-DD`, or with `-2`, `-3`, ... the first that is free,
-    its `.tar.gz` name included."""
+def backup_name(home: Path, tarballs: Path | None = None, today: datetime.date | None = None) -> Path:
+    """`<home>-YYYY-MM-DD`, or with `-2`, `-3`, ... the first that is free
+    beside the home and, as a `.tar.gz`, in ``tarballs`` (default: beside
+    the home)."""
     stamp = (today or datetime.date.today()).isoformat()
     candidate = home.with_name(f"{home.name}-{stamp}")
     number = 1
-    while any(path.exists() or path.is_symlink() for path in (candidate, tarball_name(candidate))):
+    while any(path.exists() or path.is_symlink()
+              for path in (candidate, tarball_name(candidate, tarballs or home.parent))):
         number += 1
         candidate = home.with_name(f"{home.name}-{stamp}-{number}")
     return candidate
 
 
-def tarball_name(moved: Path) -> Path:
-    return moved.with_name(moved.name + ".tar.gz")
+def tarball_name(moved: Path, directory: Path) -> Path:
+    """The tarball of the moved home ``moved`` in ``directory``."""
+    return directory / f"{moved.name}.tar.gz"
 
 
 class Incomplete(OSError):
@@ -403,13 +423,14 @@ def _written(staged: Path) -> None:
     read back."""
 
 
-def write_tarball(moved: Path) -> tuple[Path, str, dict[str, tuple[int, int, int]]]:
+def write_tarball(moved: Path, directory: Path) -> tuple[Path, str, dict[str, tuple[int, int, int]]]:
     """`<moved>.tar.gz` holding the directory ``moved``, the hash its bytes
     were compared with, and the stamps of the paths it was checked to hold
-    (`verify`). Written under a temporary
-    name, fsynced, read back and checked, then linked into place; on any
-    failure the temporary file is removed and nothing else is touched."""
-    target = tarball_name(moved)
+    (`verify`). Written in ``directory`` under a temporary name, so the
+    rename into place stays on one filesystem, fsynced, read back and
+    checked, then linked into place; on any failure the temporary file is
+    removed and nothing else is touched."""
+    target = tarball_name(moved, directory)
     staged = target.with_name(f".{target.name}.partial")
     try:
         with open(staged, "xb") as stream:
@@ -478,9 +499,37 @@ def _say(home: Path, laid: Laid) -> None:
         msgs.say(msgs.INIT_HOME_NOTHING_MADE, home=home, kept=msgs.plural(len(laid.kept), "path"))
 
 
-def run(home: Path, *, force: bool = False, backup: bool = False, archive: bool = False) -> int:
-    """`js init`, `js init -f`, `js init -b` or `js init -a` in the home ``home``."""
-    backup = backup or archive
+def _archive_dir_problem(directory: Path, home: Path) -> str | None:
+    """Why the tarball cannot go in ``directory``; None when it can."""
+    if not directory.is_dir():
+        return msgs.INIT_HOME_ARCHIVE_DIR_MISSING.text(directory=directory)
+    if not os.access(directory, os.W_OK | os.X_OK):
+        return msgs.INIT_HOME_ARCHIVE_DIR_READ_ONLY.text(directory=directory)
+    if directory.resolve().is_relative_to(home.resolve()):
+        return msgs.INIT_HOME_ARCHIVE_DIR_IN_HOME.text(directory=directory)
+    return None
+
+
+def _delete_agreed(moved: Path) -> bool:
+    """Whether the person at the terminal answers y or yes to deleting
+    ``moved``. No terminal, end of input, Ctrl-C or any other answer is no."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        answer = input(msgs.INIT_HOME_DELETE_ASK.words(path=moved))
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def run(home: Path, *, force: bool = False, backup: bool = False, archive: Path | None = None) -> int:
+    """`js init`, `js init -f`, `js init -b`, or with ``archive`` naming the
+    directory the tarball goes in, `js init -a [DIR]`, in the home ``home``."""
+    if archive is not None and (problem := _archive_dir_problem(archive, home)) is not None:
+        msgs.warn(msgs.FAILED, error=problem)
+        return 2
+    backup = backup or archive is not None
     moved = None
     try:
         if backup:
@@ -488,7 +537,7 @@ def run(home: Path, *, force: bool = False, backup: bool = False, archive: bool 
             if live is not None:
                 msgs.warn(msgs.INIT_HOME_LIVE, session=live)
                 return 1
-            moved = backup_name(home)
+            moved = backup_name(home, archive)
             os.rename(home, moved)
             msgs.say(msgs.INIT_HOME_MOVED, home=home, moved=moved)
             home.mkdir()
@@ -505,20 +554,25 @@ def run(home: Path, *, force: bool = False, backup: bool = False, archive: bool 
             msgs.say(msgs.INIT_HOME_DIFFER, files=msgs.plural(len(differ), "file"))
             for rel in differ:
                 msgs.say(msgs.INIT_HOME_DIFFER_PATH, path=home / rel)
-    if archive and moved is not None:
-        msgs.warn(msgs.INIT_HOME_ARCHIVING, path=tarball_name(moved))
-        try:
-            made, hash_name, held = write_tarball(moved)
-        except OSError as exc:
-            msgs.warn(msgs.INIT_HOME_ARCHIVE_FAILED, path=tarball_name(moved), error=exc, moved=moved)
-            return 1
-        msgs.say(msgs.INIT_HOME_ARCHIVED, path=made, hash=hash_name)
-        try:
-            left = remove_archived(moved, held)
-        except OSError as exc:
-            msgs.warn(msgs.INIT_HOME_REMOVE_FAILED, moved=moved, error=exc)
-            return 1
-        if left:
-            msgs.warn(msgs.INIT_HOME_LEFT, moved=moved, paths=msgs.plural(len(left), "path"))
-            return 1
+    if archive is None or moved is None:
+        return 0
+    tarball = tarball_name(moved, archive)
+    msgs.warn(msgs.INIT_HOME_ARCHIVING, path=tarball)
+    try:
+        made, hash_name, held = write_tarball(moved, archive)
+    except OSError as exc:
+        msgs.warn(msgs.INIT_HOME_ARCHIVE_FAILED, path=tarball, error=exc, moved=moved)
+        return 1
+    msgs.say(msgs.INIT_HOME_ARCHIVED, path=made, hash=hash_name)
+    if not _delete_agreed(moved):
+        msgs.say(msgs.INIT_HOME_KEPT, moved=moved)
+        return 0
+    try:
+        left = remove_archived(moved, held)
+    except OSError as exc:
+        msgs.warn(msgs.INIT_HOME_REMOVE_FAILED, moved=moved, error=exc)
+        return 1
+    if left:
+        msgs.warn(msgs.INIT_HOME_LEFT, moved=moved, paths=msgs.plural(len(left), "path"))
+        return 1
     return 0

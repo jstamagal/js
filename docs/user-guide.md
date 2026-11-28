@@ -880,7 +880,7 @@ runs `git` there.
 js init                  # copy what is missing, replace nothing: rsync -a --ignore-existing
 js init -f               # stock files replace the home's of the same name: cp -a
 js init -b               # move the home to ~/.js-YYYY-MM-DD, then a new home from defaults/
-js init -a               # -b, then ~/.js-YYYY-MM-DD.tar.gz of the moved home, and the moved home removed
+js init -a [DIR]         # -b, then ~/.js-YYYY-MM-DD.tar.gz, beside the home or in DIR
 ```
 
 A home file replaces the shipped file at the same relative path, so the home's
@@ -890,10 +890,13 @@ ones: what `-f` would replace. `-f` names each file it replaces and deletes
 nothing; a file `defaults/` does not have is left alone, and so is a symlink at
 a stock path. `-b` is a rename: sessions, logs, logins and everything else stay
 in the moved home, and a second one the same day gets `-2`, `-3`. `-a` writes
-the tarball under a temporary name, reads it back whole and compares every
-file byte for byte with the moved home before it removes anything; if any of
-that fails the tarball is removed, the moved home is left whole and `js init`
-exits 1. `--full` is for a project and is refused in the home; `-f`, `-b` and
+the tarball, in DIR when one is named (it must be a writable directory outside
+the home, or nothing moves), under a temporary name, reads it back whole and
+compares every file byte for byte with the moved home, through `b3sum` when it
+is on PATH, else sha256. If any of that fails the tarball is removed, the moved
+home is left whole and `js init` exits 1. Once the tarball is good it asks
+`Delete ~/.js-YYYY-MM-DD? [y/N]`; only `y` or `yes` removes the moved home, and
+without a terminal it is kept. `--full` is for a project and is refused in the home; `-f`, `-b` and
 `-a` are for the home and are refused in a project. A project `js init` in your
 own home directory, when its `.js` is not the js home, is refused.
 
@@ -916,10 +919,9 @@ apply) with an `agent.yaml` and a starter `01-prompt.md`. A nested name such as
 the home already has. It warns, then goes ahead, when NAME shadows a stock
 agent.
 
-None of the three overwrites anything. A path that is already there, including
-a symlink, is left alone, and the output names what was made and what was left
-alone. Running one twice is harmless. `js init` refuses a directory whose
-`.js` is the js home itself.
+In a project, none of the three overwrites anything. A path that is already
+there, including a symlink, is left alone, and the output names what was made
+and what was left alone. Running one twice is harmless.
 
 The texts come from `defaults/scaffold/`: `agent.yaml`, `01-prompt.md`,
 `README.md`, `LICENSE` and `gitignore`. Like every stock file, a file at the

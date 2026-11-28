@@ -846,14 +846,15 @@ INIT_DESCRIPTION = Message("Make the current directory a js project: git init ou
                            "with an empty jsrc and agents/, skills/, commands/ and toolbox/. Never overwrites. "
                            "js init agent NAME makes a new agent in the home instead.")
 INIT_EPILOG = Message("In the js home, in the directory holding it as .js, or with --home naming it, js init "
-                      "copies the stock setup, all of js/defaults, into the home instead, and makes every "
+                      "copies the stock setup, all of defaults/, into the home instead, and makes every "
                       "directory of the layout; it never runs git there. The home's copies are read instead of "
                       "the shipped ones until js init -f refreshes them.")
 INIT_OPT_FULL = Message("For a project: also a README.md, an MIT LICENSE and a .gitignore, each only if missing.")
 INIT_OPT_FORCE = Message("For the home: stock files replace the home's files of the same name; "
                          "files the stock setup does not have are left alone.")
-INIT_OPT_ARCHIVE = Message("For the home: what --backup does, then HOME-YYYY-MM-DD.tar.gz of the moved home "
-                           "beside it; once the tarball is checked, the moved home is removed.")
+INIT_OPT_ARCHIVE = Message("For the home: what --backup does, then HOME-YYYY-MM-DD.tar.gz of the moved home, "
+                           "beside the home or in DIR. Once the tarball is checked byte for byte, it asks before "
+                           "deleting the moved home.")
 INIT_OPT_BACKUP = Message("For the home: move it aside to HOME-YYYY-MM-DD, then make a new home from the stock "
                           "setup. Sessions, logs, logins and everything else stay in the old one.")
 INIT_AGENT_DESCRIPTION = Message("Make a new agent NAME in the home's agents directory from the scaffold templates.")
@@ -871,6 +872,11 @@ INIT_HOME_REPLACED = Message("Replaced {path}")
 INIT_HOME_MOVED = Message("Moved {home} to {moved}.")
 INIT_HOME_ARCHIVING = Message("Writing {path}; a big home takes minutes. The new home is ready now.")
 INIT_HOME_ARCHIVED = Message("Created {path}, checked byte for byte with {hash}.")
+INIT_HOME_ARCHIVE_DIR_MISSING = Message("{directory} is not a directory; nothing moved")
+INIT_HOME_ARCHIVE_DIR_READ_ONLY = Message("{directory} is not writable; nothing moved")
+INIT_HOME_ARCHIVE_DIR_IN_HOME = Message("{directory} is inside the home, which moves; nothing moved")
+INIT_HOME_DELETE_ASK = Message("Delete {path}? [y/N] ", banner=False)
+INIT_HOME_KEPT = Message("Kept {moved}; the tarball holds it too.")
 INIT_HOME_HASHER_FAILED = Message("b3sum failed: {error}; comparing with sha256 instead.")
 INIT_HOME_ARCHIVE_FAILED = Message("Could not write {path}, removed it: {error}. {moved} is as it was.")
 INIT_HOME_ARCHIVE_INCOMPLETE = Message("the tarball does not hold {count} of the paths, {first} first")

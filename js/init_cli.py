@@ -36,14 +36,14 @@ _KEEP = ".gitkeep"
 
 
 def parser() -> argparse.ArgumentParser:
-    """`js init [--full | -f | -b | -a]`."""
+    """`js init [--full | -f | -b | -a [DIR]]`."""
     p = msgs.ArgumentParser(prog="js init", allow_abbrev=False, description=msgs.INIT_DESCRIPTION.words(),
                             epilog=msgs.INIT_EPILOG.words())
     p.add_argument("--full", action="store_true", help=msgs.INIT_OPT_FULL.words())
     home = p.add_mutually_exclusive_group()
     home.add_argument("-f", "--force", action="store_true", help=msgs.INIT_OPT_FORCE.words())
     home.add_argument("-b", "--backup", action="store_true", help=msgs.INIT_OPT_BACKUP.words())
-    home.add_argument("-a", "--archive", action="store_true", help=msgs.INIT_OPT_ARCHIVE.words())
+    home.add_argument("-a", "--archive", nargs="?", const="", metavar="DIR", help=msgs.INIT_OPT_ARCHIVE.words())
     return p
 
 
@@ -64,9 +64,11 @@ def main(argv: list[str]) -> int:
     if in_home(Path.cwd()):
         if args.full:
             p.error(msgs.INIT_FULL_IN_HOME.text())
-        return init_home.run(paths.home(), force=args.force, backup=args.backup, archive=args.archive)
+        archive = None if args.archive is None else (
+            Path(args.archive).expanduser() if args.archive else paths.home().parent)
+        return init_home.run(paths.home(), force=args.force, backup=args.backup, archive=archive)
     for flag in ("force", "backup", "archive"):
-        if getattr(args, flag):
+        if getattr(args, flag) not in (None, False):
             p.error(msgs.INIT_HOME_ONLY.text(flag="--" + flag))
     return run_init(full=args.full)
 
