@@ -659,6 +659,7 @@ SHORT_HELP = Message(
     '  js --verify                         Check agents and tool configuration.\n'
     '  js --bench AGENT                    Run an agent benchmark.\n'
     '  js generate --help                   Generate images, video, music and speech.\n'
+    '  js schedule rotate                   Run js rotate every day.\n'
     '  js --acp                            Serve Agent Client Protocol over stdio.\n'
     '  js --commit                         Run the commit agent.\n'
     '  js --init                           Make this directory a js project.\n'
@@ -1229,6 +1230,33 @@ UNROTATE_DRY_SUMMARY = Message("Would restore {files} files, {size} archived.")
 UNROTATE_SUMMARY = Message("Restored {files} files, {size} in all.")
 ROTATE_EXCLUSIVE = Message("--rotate and --unrotate run alone: no prompt, session, agent or other mode beside them.")
 DRY_RUN_NEEDS_ROTATE = Message("--dry-run goes with --rotate or --unrotate.")
+SCHEDULE_DESCRIPTION = Message(
+    "Run js rotate or js cleanup every day for this user, on the systemd user manager, "
+    "else in the crontab. With no JOB, list what js has scheduled here and when each next runs. "
+    "Nothing is scheduled unless asked for here.")
+SCHEDULE_JOB = Message("rotate or cleanup.")
+SCHEDULE_AT = Message("Time of day the job runs, 24-hour (default {at}).")
+SCHEDULE_REMOVE = Message("Remove JOB's schedule. Removing one that is not there is not an error.")
+SCHEDULE_CLEANUP_WARNING = Message(
+    "js cleanup runs with nobody watching, and it deletes and archives files in the directories "
+    "it is pointed at. Most people should run js cleanup by hand and read what it reports instead.")
+SCHEDULE_ALLOW_CLEANUP = Message("Needed to schedule cleanup. {warning}")
+SCHEDULE_CLEANUP_REFUSED = Message("Not scheduled. To schedule it anyway: js schedule cleanup --allow-unattended-cleanup")
+SCHEDULE_BAD_AT = Message("Not a time of day: {at!r}. Use HH:MM, as in 05:00.")
+SCHEDULE_NO_LAUNCHER = Message("No js launcher at {path} and no js on PATH; run just install first.")
+SCHEDULE_TEMPLATE_MISSING = Message("Schedule template missing: {path}")
+SCHEDULE_TEMPLATE_EMPTY = Message("Schedule template is empty: {path}")
+SCHEDULE_TEMPLATE_BAD = Message("Schedule template {path}: {error}")
+SCHEDULE_COMMAND_FAILED = Message("{command} failed: {error}")
+SCHEDULE_NO_BACKEND = Message("No systemd user manager and no crontab here. Add this line to whatever runs your daily jobs:")
+SCHEDULE_DONE_SYSTEMD = Message("js {job} runs every day at {at}: systemd timer {unit} in {directory}; output goes to the journal (journalctl --user -u {unit}).")
+SCHEDULE_DONE_CRON = Message("js {job} runs every day at {at}: a line in your crontab; output goes to {log}.")
+SCHEDULE_REMOVED = Message("js {job} is no longer scheduled.")
+SCHEDULE_NOT_SCHEDULED = Message("js {job} was not scheduled.")
+SCHEDULE_REMOVE_NEEDS_JOB = Message("--remove needs a JOB: rotate or cleanup.")
+SCHEDULE_NOTHING = Message("Nothing is scheduled by js here.")
+SCHEDULE_ROW = Message("{job:<8} {backend:<8} next {next}  home {home}", banner=False)
+SCHEDULE_NEXT_UNKNOWN = Message("unknown")
 SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "

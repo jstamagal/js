@@ -295,8 +295,9 @@ def _main(argv: list[str] | None = None) -> int:
     global _stdin_read
     _stdin_read = None
     generate = dispatch_argv[:1] == ["generate"]
+    schedule = dispatch_argv[:1] == ["schedule"]
     options_end = dispatch_argv.index("--") if "--" in dispatch_argv else len(dispatch_argv)
-    if not generate and "--acp" in dispatch_argv[:options_end]:
+    if not generate and not schedule and "--acp" in dispatch_argv[:options_end]:
         return _run_acp(dispatch_argv)
     if (error := _startup()) is not None:
         return error
@@ -304,6 +305,9 @@ def _main(argv: list[str] | None = None) -> int:
         from . import generate_cli
         dotenv.load()
         return generate_cli.main(dispatch_argv[1:])
+    if schedule:
+        from . import schedule_cli
+        return schedule_cli.main(dispatch_argv[1:])
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.

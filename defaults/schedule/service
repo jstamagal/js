@@ -1,0 +1,9 @@
+[Unit]
+Description=js ${JOB}, run by js schedule
+
+[Service]
+Type=oneshot
+Environment="PATH=${PATH}"
+ExecStart=${COMMAND}
+Nice=10
+IOSchedulingClass=idle
