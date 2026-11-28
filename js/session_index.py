@@ -21,6 +21,7 @@ import json
 import os
 import sqlite3
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -432,32 +433,71 @@ def search(expression: str, root: Path | None = None) -> dict[str, float]:
     return {path: score for path, score in rows}
 
 
-def matching_lines(expression: str, scores: dict[str, float]) -> dict[str, Hit]:
-    """The best-matching row of each session in `scores`, for the FTS5 `expression`."""
+def matching_lines(expression: str, scores: dict[str, float],
+                   connection: sqlite3.Connection | None = None) -> Iterator[tuple[str, Hit]]:
+    """The best-matching row of each session in `scores` for the FTS5
+    `expression`, as (path, hit) pairs, best BM25 score first. One highlighted
+    document is held at a time. `connection` defaults to this process's index
+    connection, held under its lock while the pairs are read."""
     if not scores:
-        return {}
-    hits: dict[str, Hit] = {}
-    keys = list(scores)
-    with _lock:
-        connection = _connection()
-        for start in range(0, len(keys), 500):
-            chunk = keys[start:start + 500]
-            marks = ",".join("?" * len(chunk))
+        return
+    if connection is None:
+        with _lock:
+            yield from matching_lines(expression, scores, _connection())
+        return
+    wanted = json.dumps(list(scores))
+    try:
+        ids = {row_id: path for row_id, path in connection.execute(
+            "SELECT id, path FROM sessions WHERE path IN (SELECT value FROM json_each(?))", (wanted,))}
+        # The CASE keeps highlight() to the wanted documents; ORDER BY rank
+        # returns them best first, each highlighted as it is stepped to.
+        cursor = connection.execute(
+            "SELECT rowid, CASE WHEN rowid IN (SELECT value FROM json_each(?)) "
+            "THEN highlight(docs, 0, ?, ?) END, docs.lines FROM docs WHERE docs MATCH ? ORDER BY rank",
+            (json.dumps(list(ids)), _MARK_OPEN, _MARK_CLOSE, expression))
+        for row_id, highlighted, meta_text in cursor:
+            if highlighted is None or row_id not in ids:
+                continue
             try:
-                rows = connection.execute(
-                    f"SELECT sessions.path, highlight(docs, 0, ?, ?), docs.lines FROM docs "
-                    f"JOIN sessions ON sessions.id = docs.rowid WHERE docs MATCH ? AND sessions.path IN ({marks})",
-                    (_MARK_OPEN, _MARK_CLOSE, expression, *chunk)).fetchall()
-            except sqlite3.OperationalError as exc:
-                if exc.sqlite_errorcode != sqlite3.SQLITE_ERROR:
-                    raise
-                return hits
-            for path, highlighted, meta_text in rows:
-                try:
-                    meta = json.loads(meta_text)
-                except json.JSONDecodeError:
-                    meta = []
-                index, line, spans = _best_line(highlighted or "", meta)
-                number, who, ts = meta[index] if 0 <= index < len(meta) else (None, "", None)
-                hits[path] = Hit(scores[path], number, who, ts, line, spans)
-    return hits
+                meta = json.loads(meta_text)
+            except json.JSONDecodeError:
+                meta = []
+            index, line, spans = _best_line(highlighted, meta)
+            number, who, ts = meta[index] if 0 <= index < len(meta) else (None, "", None)
+            path = ids[row_id]
+            yield path, Hit(scores[path], number, who, ts, line, spans)
+    except sqlite3.OperationalError as exc:
+        if exc.sqlite_errorcode != sqlite3.SQLITE_ERROR:
+            raise
+        return  # an expression FTS5 cannot parse matches nothing
+
+
+class LineReader:
+    """`matching_lines` on a connection of its own, for a thread that reads
+    hits while this process's connection serves searches. `interrupt`, from
+    any thread, ends a read in progress with an `sqlite3.OperationalError`
+    whose code is SQLITE_INTERRUPT."""
+
+    def __init__(self) -> None:
+        self._connection: sqlite3.Connection | None = None
+
+    def __call__(self, expression: str, scores: dict[str, float]) -> Iterator[tuple[str, Hit]]:
+        try:
+            if self._connection is None:
+                self._connection = sqlite3.connect(db_path(), timeout=5, isolation_level=None,
+                                                   check_same_thread=False)
+            yield from matching_lines(expression, scores, self._connection)
+        except sqlite3.Error as exc:
+            if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+                raise
+            return  # an index another process is rebuilding or has locked: no hits this time
+
+    def interrupt(self) -> None:
+        connection = self._connection
+        if connection is not None:
+            connection.interrupt()
+
+    def close(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None

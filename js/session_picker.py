@@ -13,9 +13,12 @@ to resume a session or branch one at a message, or None when closed.
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
+import threading
 import time
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,6 +50,11 @@ RESUME = "resume"
 BRANCH = "branch"
 # Search hits whose matching row is looked up; the rest show without one.
 _HIT_LINES = 300
+# Search expressions whose scores and matching rows a picker keeps, the least
+# recently typed dropped first.
+_EXPRESSIONS_KEPT = 16
+# Seconds between redraws while matching rows arrive.
+_HIT_REDRAW = 0.03
 # Session path -> (size, mtime) of the file when it was previewed, and the preview.
 _PREVIEWS: dict[str, tuple[tuple[int, int], tuple[str, str]]] = {}
 _PAGE = picker.PAGE
@@ -65,6 +73,164 @@ class Choice:
 
 _Closed = picker._Closed
 CLOSED = picker.CLOSED
+
+
+@dataclass(frozen=True)
+class HitLine:
+    """What a search hit shows under its session: the number and speaker of
+    its matching row, and the excerpt of that row with the matched spans in
+    it (`Q.excerpt`). The row itself can run to megabytes; the excerpt is
+    what is kept."""
+
+    number: int | None
+    who: str
+    text: str
+    spans: tuple[tuple[int, int], ...]
+
+    @classmethod
+    def of(cls, hit: Any) -> HitLine:
+        text, spans = Q.excerpt(hit.line, hit.spans) if hit.line else ("", ())
+        return cls(hit.number, hit.who, text, spans)
+
+
+class _Reader:
+    """Runs the picker's searches and reads its hits' matching rows on a
+    thread of its own, so the list redraws while they run. It holds one job:
+    a newer one replaces a job not yet started and ends a read of rows in
+    progress, through the reader's `interrupt` when it has one, else at its
+    next row. A rows job fills the dict it is given with a `HitLine` per path
+    and empties its `pending` set as it goes, then clears it when it ends."""
+
+    def __init__(self, search: Callable[[str], dict[str, float]],
+                 read: Callable[[str, dict[str, float]], Iterable[tuple[str, Any]]] | None) -> None:
+        self._search = search
+        self._read = read
+        self.changed: Callable[[], None] = lambda: None
+        self._ready = threading.Condition()
+        self._job: tuple[Any, ...] | None = None
+        self._generation = 0
+        self._running: str | None = None  # the kind of job running
+        self._closed = False
+        self._thread: threading.Thread | None = None
+        # The expression of the search that ended last, its scores, and
+        # whether it ran to the end.
+        self._searched: tuple[str, dict[str, float], bool] | None = None
+
+    def _interrupt(self) -> None:
+        interrupt = getattr(self._read, "interrupt", None)
+        if self._running == "rows" and interrupt is not None:
+            interrupt()
+
+    def _submit(self, job: tuple[Any, ...] | None) -> None:
+        with self._ready:
+            self._generation += 1
+            self._interrupt()
+            self._job = None if job is None else (self._generation, *job)
+            if self._job is not None and self._thread is None:
+                self._thread = threading.Thread(target=self._work, name="session-picker-search", daemon=True)
+                self._thread.start()
+            self._ready.notify_all()
+
+    def search(self, expression: str) -> None:
+        """Search for `expression`; `scores` hands the result over."""
+        with self._ready:
+            self._searched = None
+            self._submit(("search", expression))
+
+    def read_rows(self, expression: str | None, scores: dict[str, float], into: dict[str, HitLine],
+                  pending: set[str]) -> None:
+        """Read the matching rows of `scores` into `into`. None, or no scores,
+        only ends the job running."""
+        self._submit(("rows", expression, scores, into, pending) if expression and scores and self._read else None)
+
+    def scores(self, expression: str, *, wait: bool) -> tuple[dict[str, float], bool] | None:
+        """The scores of the search for `expression` once it has run, and
+        whether it ran to the end, waiting for it with `wait`; None while it
+        runs."""
+        with self._ready:
+            if wait:
+                self._ready.wait_for(lambda: self._closed or (self._searched or ("",))[0] == expression)
+            if self._searched is not None and self._searched[0] == expression:
+                return self._searched[1], self._searched[2]
+            return ({}, False) if self._closed else None
+
+    def settle(self) -> None:
+        """Wait until the job asked for has run."""
+        with self._ready:
+            self._ready.wait_for(lambda: self._job is None and self._running is None)
+
+    def close(self) -> None:
+        with self._ready:
+            self._closed = True
+            self._generation += 1
+            self._job = None
+            self._interrupt()
+            self._ready.notify_all()
+        if self._thread is not None:
+            self._thread.join()
+        close = getattr(self._read, "close", None)
+        if close is not None:
+            close()
+
+    def _current(self, generation: int) -> bool:
+        with self._ready:
+            return generation == self._generation and not self._closed
+
+    def _work(self) -> None:
+        while True:
+            with self._ready:
+                self._ready.wait_for(lambda: self._job is not None or self._closed)
+                if self._closed:
+                    return
+                generation, kind, *job = self._job
+                self._job = None
+                self._running = kind
+            try:
+                if kind == "search":
+                    self._run_search(*job)
+                else:
+                    self._run_rows(generation, *job)
+            finally:
+                with self._ready:
+                    self._running = None
+                    self._ready.notify_all()
+            self.changed()
+
+    def _run_search(self, expression: str) -> None:
+        try:
+            scores, whole = self._search(expression), True
+        except Exception:  # noqa: BLE001 - a failed search lists nothing; it must not end the picker
+            scores, whole = {}, False
+        with self._ready:
+            self._searched = (expression, scores, whole)
+
+    def _run_rows(self, generation: int, expression: str, scores: dict[str, float],
+                  into: dict[str, HitLine], pending: set[str]) -> None:
+        shown = 0.0
+        try:
+            for attempt in range(2):
+                try:
+                    for path, hit in self._read(expression, scores):
+                        if not self._current(generation):
+                            break
+                        into[path] = HitLine.of(hit)
+                        pending.discard(path)
+                        if time.monotonic() - shown >= _HIT_REDRAW:
+                            shown = time.monotonic()
+                            self.changed()
+                    return
+                except sqlite3.OperationalError as exc:
+                    # An interrupt meant for the read before this one is
+                    # read again once.
+                    if (exc.sqlite_errorcode != sqlite3.SQLITE_INTERRUPT or not self._current(generation)
+                            or attempt):
+                        return
+                    scores = {path: score for path, score in scores.items() if path not in into}
+        except Exception:  # noqa: BLE001 - a failed read shows no matching rows; it must not end the picker
+            pass
+        finally:
+            pending.clear()
+
 
 def _style() -> Style:
     """The picker in /fset's colours."""
@@ -120,7 +286,7 @@ class SessionPicker:
         now: float | None = None,
         query: str = "",
         search: Callable[[str], dict[str, float]] | None = None,
-        lines: Callable[[str, dict[str, float]], dict[str, Any]] | None = None,
+        lines: Callable[[str, dict[str, float]], Iterable[tuple[str, Any]]] | None = None,
         rows: Callable[[str], list[Any]] | None = None,
         tokens: Callable[[str], int | None] | None = None,
         messages: Callable[[str], list[dict]] | None = None,
@@ -142,7 +308,7 @@ class SessionPicker:
         self.query_text = query
         self.query = Q.Query()
         self.items: list[Q.Item] = []
-        self.hits: dict[str, Any] = {}
+        self.hits: dict[str, HitLine] = {}
         self.cursor = 0
         self.message_rows: list[Any] = []
         self.message_lines: list[str] = []
@@ -150,11 +316,22 @@ class SessionPicker:
         self._message_positions: dict[str, int] = {}
         self.token_count: int | None = None
         self._previews: dict[str, tuple[str, str]] = {}
-        # Item index and marker -> its row text, for the list `refresh` built
-        # under the kind rules `_rules`.
-        self._row_texts: dict[tuple[int, str], str] = {}
+        # Session path, nesting depth, last-branch flag and marker -> the row
+        # text, drawn under the kind rules `_rules`.
+        self._row_texts: dict[tuple[str, int, bool, str], str] = {}
         self._rules: Q.KindRules | None = None
+        # Search expression -> its scores and the matching rows read so far.
+        self._found: OrderedDict[str, tuple[dict[str, float], dict[str, HitLine]]] = OrderedDict()
+        # The listed hits that show their matching row: the first _HIT_LINES.
+        self._hit_paths: set[str] = set()
+        # Paths whose matching row is still being read: each keeps a line for it.
+        self._pending: set[str] = set()
+        self._reader = _Reader(search, lines) if search is not None else None
+        # The search expression whose scores the list waits for, and the
+        # session the cursor is to stay on when they come.
+        self._awaiting: tuple[str, str | None] | None = None
         self.refresh()
+        self._take_scores(wait=True)
 
     # -- state -------------------------------------------------------------------
 
@@ -163,13 +340,29 @@ class SessionPicker:
         on the session `keep` names when it is still listed, else goes to the top."""
         self.query = Q.parse_query(self.query_text, now=self.now, home=self.home, cwd=self.cwd)
         expression = Q.fts_expression(self.query)
-        scores = self._search(expression) if expression and self._search is not None else None
+        self._awaiting = None
+        if expression and self._reader is not None and expression not in self._found:
+            # The list on the screen stays until the search's scores come.
+            self._awaiting = (expression, keep)
+            self._reader.search(expression)
+            return
+        self._build(expression, keep)
+
+    def _build(self, expression: str | None, keep: str | None,
+               found: tuple[dict[str, float], dict[str, HitLine]] | None = None) -> None:
+        if found is None and expression in self._found:
+            found = self._found[expression]
+            self._found.move_to_end(expression)
+        scores, hits = found if found is not None else (None, {})
         chosen = Q.select(self.sessions, self.query, show_all=self.show_all, scores=scores)
         self.items = Q.build_items(chosen, self.view, home=self.home, nested=not self.query.ranked)
-        self._row_texts = {}
-        self.hits = {}
-        if expression and scores and self._lines is not None:
-            self.hits = self._lines(expression, {s.path: scores[s.path] for s in chosen[:_HIT_LINES]})
+        self.hits = hits
+        self._pending = set()
+        self._hit_paths = {s.path for s in chosen[:_HIT_LINES]} if scores else set()
+        wanted = {path: scores[path] for path in self._hit_paths if path not in hits}
+        if self._reader is not None:
+            self._pending = set(wanted)
+            self._reader.read_rows(expression, wanted, hits, self._pending)
         selectable = self._selectable()
         self.cursor = selectable[0] if selectable else 0
         if keep is not None:
@@ -178,15 +371,57 @@ class SessionPicker:
                     self.cursor = index
                     break
 
+    def _take_scores(self, *, wait: bool) -> None:
+        """Build the list from the awaited search's scores once they have
+        come, waiting for them with `wait`. The expressions typed last keep
+        their scores and matching rows."""
+        if self._awaiting is None or self._reader is None:
+            return
+        expression, keep = self._awaiting
+        searched = self._reader.scores(expression, wait=wait)
+        if searched is None:
+            return
+        self._awaiting = None
+        scores, whole = searched
+        if not whole:  # a failed search lists nothing now and runs again when typed again
+            self._build(expression, keep, (scores, {}))
+            return
+        self._found[expression] = (scores, {})
+        while len(self._found) > _EXPRESSIONS_KEPT:
+            self._found.popitem(last=False)
+        self._build(expression, keep)
+
+    def settle(self) -> None:
+        """Wait until the search has run and the matching rows of the listed
+        hits have been read."""
+        if self._reader is not None:
+            self._take_scores(wait=True)
+            self._reader.settle()
+
+    def close(self) -> None:
+        """Stop searching and reading matching rows, and let go of what reads them."""
+        if self._reader is not None:
+            self._reader.close()
+
     def _selectable(self) -> list[int]:
         return [index for index, item in enumerate(self.items) if item.session is not None]
 
     def current(self) -> Q.Session | None:
+        """The highlighted session, once a search typed has listed its hits."""
+        self._take_scores(wait=True)
+        return self._current()
+
+    def _current(self) -> Q.Session | None:
         if 0 <= self.cursor < len(self.items):
             return self.items[self.cursor].session
         return None
 
     def shown(self) -> list[Q.Session]:
+        """The listed sessions, once a search typed has listed its hits."""
+        self._take_scores(wait=True)
+        return self._shown()
+
+    def _shown(self) -> list[Q.Session]:
         return [item.session for item in self.items if item.session is not None]
 
     def move(self, delta: int) -> None:
@@ -241,7 +476,8 @@ class SessionPicker:
 
     def preview_height(self) -> int:
         """Lines the highlighted session's preview takes under its row."""
-        session = self.current()
+        self._take_scores(wait=False)
+        session = self._current()
         if self.screen not in ("list", "search") or session is None:
             return 0
         return sum(1 for said in self.preview(session) if said)
@@ -259,9 +495,14 @@ class SessionPicker:
     # -- keys --------------------------------------------------------------------
 
     def press(self, key: str) -> Choice | _Closed | None:
-        """Apply one key. A Choice or CLOSED ends the picker; None keeps it open."""
-        if keys.action_for(self.keymaps[self.screen], key) == "interrupt":
+        """Apply one key. A Choice or CLOSED ends the picker; None keeps it open.
+        A key typed into the search goes in at once; any other key first waits
+        for the list of the search typed."""
+        action = keys.action_for(self.keymaps[self.screen], key)
+        if action == "interrupt":
             return CLOSED
+        if self.screen != "search" or action in _MOVES:
+            self._take_scores(wait=True)
         handler = {"list": self._list_key, "search": self._search_key,
                    "messages": self._messages_key, "info": self._info_key}[self.screen]
         return handler(key)
@@ -329,7 +570,8 @@ class SessionPicker:
     # -- view --------------------------------------------------------------------
 
     def title(self) -> StyleAndTextTuples:
-        session = self.current()
+        self._take_scores(wait=False)
+        session = self._current()
         if self.screen == "messages" and session is not None:
             text = msgs.SESSIONS_MESSAGES_TITLE.text(
                 when=Q.when_text(session.when, self.now), agent=session.agent or "-",
@@ -343,7 +585,7 @@ class SessionPicker:
         else:
             scope = (msgs.SESSIONS_ALL_KINDS if self.show_all else msgs.SESSIONS_ALL_DIRS).text()
             order = (msgs.SESSIONS_RANKED if self.query.ranked else msgs.SESSIONS_NEWEST).text()
-            text = msgs.SESSIONS_TITLE.text(count=len(self.shown()), view=Q.view_name(self.view),
+            text = msgs.SESSIONS_TITLE.text(count=len(self._shown()), view=Q.view_name(self.view),
                                             order=order, scope=scope)
             keys = (msgs.SESSIONS_QUERY_KEYS if self.screen == "search" else msgs.SESSIONS_KEYS).with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         return [("class:title", text), ("", "    "), ("class:keys", keys)]
@@ -367,6 +609,7 @@ class SessionPicker:
 
     def body(self) -> tuple[StyleAndTextTuples, int]:
         """The body's fragments and the line the cursor is on."""
+        self._take_scores(wait=False)
         if self.screen == "messages":
             return self._message_body()
         if self.screen == "info":
@@ -392,10 +635,11 @@ class SessionPicker:
             here = bool(session.cwd) and (session.cwd.rstrip("/") or "/") == self.cwd
             selected = index == self.cursor
             marker = ">" if selected else "•" if here else " "
-            text = self._row_texts.get((index, marker))
+            key = (session.path, item.depth, item.last, marker)
+            text = self._row_texts.get(key)
             if text is None:
                 text = Q.session_line(item, now=self.now, home=self.home, marker=marker, rules=rules)
-                self._row_texts[(index, marker)] = text
+                self._row_texts[key] = text
             if selected:
                 cursor_line = line
             out += [("class:selected" if selected else "", text), ("", "\n")]
@@ -405,16 +649,19 @@ class SessionPicker:
                     if said:
                         out += [("class:preview", f"        {who}: {said}"), ("", "\n")]
                         line += 1
-            hit = self.hits.get(session.path)
-            if hit is not None and hit.line:
+            hit = self.hits.get(session.path) if session.path in self._hit_paths else None
+            if hit is not None and hit.text:
                 out += self._hit_fragments(hit)
+                out.append(("", "\n"))
+                line += 1
+            elif hit is None and session.path in self._pending:
                 out.append(("", "\n"))
                 line += 1
         return out, cursor_line
 
-    def _hit_fragments(self, hit: Any) -> StyleAndTextTuples:
+    def _hit_fragments(self, hit: HitLine) -> StyleAndTextTuples:
         head = Q.hit_line(hit.number, hit.who, "")
-        text, spans = Q.excerpt(hit.line, hit.spans)
+        text, spans = hit.text, hit.spans
         out: StyleAndTextTuples = [("class:hit", f"        {head}")]
         position = 0
         for start, end in spans:
@@ -433,7 +680,7 @@ class SessionPicker:
         return out, self.message_cursor
 
     def info_rows(self) -> list[tuple[str, str]]:
-        session = self.current()
+        session = self._current()
         if session is None:
             return []
         stamp = session.last_stamp or {}
@@ -478,7 +725,10 @@ class SessionPicker:
                     ) -> Application[Choice | None]:
         # The highlighted session's preview sits under its row: keep that
         # many lines below the cursor on the screen.
-        return picker.list_application(self, _style(), rows_below=self.preview_height, input=input, output=output)
+        app = picker.list_application(self, _style(), rows_below=self.preview_height, input=input, output=output)
+        if self._reader is not None:
+            self._reader.changed = app.invalidate
+        return app
 
 
 def _tokens(path: str) -> int | None:
@@ -503,7 +753,7 @@ def load(cwd: str | Path, query: str = "") -> SessionPicker:
         home=paths.user_home(),
         query=query,
         search=session_index.search,
-        lines=session_index.matching_lines,
+        lines=session_index.LineReader(),
         rows=lambda path: session_text.rows(Path(path)),
         tokens=_tokens,
         messages=_messages,
@@ -515,9 +765,12 @@ def pick_session(cwd: str | Path, query: str = "", *, input=None, output=None, l
 
     factory = load if load_picker is None else load_picker
     state = factory(cwd, query)
-    app = state.application(input=create_input(sys.__stdin__) if input is None else input,
-                            output=create_output(sys.__stdout__) if output is None else output)
-    return picker.run_modal(app)
+    try:
+        app = state.application(input=create_input(sys.__stdin__) if input is None else input,
+                                output=create_output(sys.__stdout__) if output is None else output)
+        return picker.run_modal(app)
+    finally:
+        state.close()
 
 
 @dataclass(frozen=True)

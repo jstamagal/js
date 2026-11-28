@@ -193,7 +193,7 @@ def test_each_hit_carries_its_best_matching_row(tmp_path):
     _say(path, "the niri compositor on the motherboard", "right")
     expression = Q.fts_expression(Q.parse_query("niri motherboard", now=0, home="/", cwd="/"))
     scores = session_index.search(expression)
-    hit = session_index.matching_lines(expression, scores)[_key(path)]
+    hit = dict(session_index.matching_lines(expression, scores))[_key(path)]
     assert (hit.number, hit.who) == (3, session_text.USER)
     assert [hit.line[start:end].lower() for start, end in hit.spans] == ["niri", "motherboard"]
 
