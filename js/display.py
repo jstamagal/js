@@ -236,10 +236,11 @@ def _shows_every_cell(console: Console, options: Any, headings: list[Text], rows
 
 
 class _Markdown(Markdown):
-    """rich's Markdown with tables that wrap their cells, drawing every
-    character of inline source: emphasis keeps its `*`, `_` and `~~` markers
-    inside the style, a backslash escape or an entity is drawn as written, and
-    HTML is text. Commands copied off the screen match what the model wrote."""
+    """rich's Markdown with tables that wrap their cells. Strong emphasis is
+    drawn bold without its `**`. Italic and strikethrough keep their `*`, `_`
+    and `~~` markers inside the style, a backslash escape or an entity is
+    drawn as written, and HTML is text, so a shell command written outside a
+    code fence copies off the screen with its glob stars."""
 
     elements = {**Markdown.elements, "table_open": _FoldingTable}
 
@@ -257,12 +258,13 @@ class _Markdown(Markdown):
 _SOURCE_PARSER = (MarkdownIt("commonmark", {"html": False})
                   .enable("strikethrough").enable("table").disable("text_join"))
 
-_MARKER_OPEN = {"em_open", "strong_open", "s_open"}
-_MARKER_CLOSE = {"em_close", "strong_close", "s_close"}
+_MARKER_OPEN = {"em_open", "s_open"}
+_MARKER_CLOSE = {"em_close", "s_close"}
 
 
 def _with_source(children: list[Token]) -> list[Token]:
-    """Inline tokens with the source markdown-it consumed put back as text."""
+    """Inline tokens with escapes, entities and the italic and strikethrough
+    markers markdown-it consumed put back as text."""
     kept: list[Token] = []
     for child in children:
         if child.type == "text_special":
