@@ -105,14 +105,16 @@ def _size(count: float) -> str:
 
 
 def _open_files() -> set[tuple[int, int]]:
-    """(st_dev, st_ino) of every file a process this user can see has open."""
+    """(st_dev, st_ino) of every file another process this user can see has
+    open. This process's own opens are the rotation's."""
     found: set[tuple[int, int]] = set()
     try:
         processes = os.listdir("/proc")
     except OSError:
         return found
+    own = str(os.getpid())
     for pid in processes:
-        if not pid.isdigit():
+        if not pid.isdigit() or pid == own:
             continue
         directory = f"/proc/{pid}/fd"
         try:
@@ -166,11 +168,13 @@ def _session_files() -> list[Path]:
 
 def _log_files() -> list[Path]:
     root = paths.logs_root()
+    # The operator's own bundles of old logs, each beside its manifest.
+    kept = root / "archive"
     found: list[Path] = []
     with contextlib.suppress(OSError):
         found.extend(path for path in root.rglob("*")
                      if not path.name.startswith(".") and path.suffix not in _COMPRESSED
-                     and path.is_file() and not path.is_symlink())
+                     and not path.is_relative_to(kept) and path.is_file() and not path.is_symlink())
     return sorted(found)
 
 
@@ -257,6 +261,8 @@ class Tally:
     before: int = 0
     after: int = 0
     skipped: list[tuple[Path, str]] = field(default_factory=list)
+    # The files that could not be read or written, as opposed to left alone.
+    failed: int = 0
 
     def add(self, done: archive.Archived) -> None:
         self.files += 1
@@ -264,17 +270,27 @@ class Tally:
         self.after += done.after
 
 
+def _unused(path: Path):
+    """Whether no process has `path` open, asked again just before its removal."""
+    identity = _identity(path)
+    return lambda: identity not in _open_files()
+
+
 def _archive_one(path: Path, fmt: str, tally: Tally, *, source=None) -> bool:
     try:
-        tally.add(archive.archive_file(path, fmt, source=source))
+        tally.add(archive.archive_file(path, fmt, source=source, unused=_unused(path)))
     except archive.Changed:
         tally.skipped.append((path, msgs.ROTATE_SKIP_CHANGED.text()))
+        return False
+    except archive.InUse:
+        tally.skipped.append((path, msgs.ROTATE_SKIP_IN_USE.text()))
         return False
     except archive.Conflict as exc:
         tally.skipped.append((path, str(msgs.ROTATE_SKIP_CONFLICT.said(archive=exc))))
         return False
     except OSError as exc:
         tally.skipped.append((path, str(exc)))
+        tally.failed += 1
         return False
     return True
 
@@ -301,6 +317,7 @@ def _rotate_session(session: Path, fmt: str, tally: Tally, open_files: set[tuple
         stream = open(session, "rb")  # noqa: SIM115 - closed below
     except OSError as exc:
         tally.skipped.append((session, str(exc)))
+        tally.failed += 1
         return False
     with stream:
         try:
@@ -417,8 +434,7 @@ def run_rotate(args: argparse.Namespace) -> int:
     _report_skipped(tally.skipped)
     msgs.say(msgs.ROTATE_SUMMARY, files=tally.files, before=_size(tally.before), after=_size(tally.after),
              skipped=len(tally.skipped), archive=paths.archive_root())
-    return 1 if any(why not in (msgs.ROTATE_SKIP_IN_USE.text(), msgs.ROTATE_SKIP_CHANGED.text())
-                    for _, why in tally.skipped) else 0
+    return 1 if tally.failed else 0
 
 
 def run_unrotate(args: argparse.Namespace) -> int:

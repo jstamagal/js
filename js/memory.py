@@ -150,7 +150,11 @@ def _migrate_record(d: dict) -> dict | None:
 
 
 def _open_locked(path: Path, mode: str):
-    """Open with appropriate fcntl lock for the mode. Caller must close."""
+    """Open with appropriate fcntl lock for the mode. Caller must close. A
+    rotated session is put back at its live path first: what loads or
+    changes the conversation goes on to use it."""
+    if not path.exists():
+        session_store.restore_rotated(path)
     if any(flag in mode for flag in "wax"):
         path.parent.mkdir(parents=True, exist_ok=True)
     # Text reads replace bytes that are not UTF-8 (a torn multibyte char from

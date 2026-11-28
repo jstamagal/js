@@ -802,21 +802,24 @@ within the last 7 days. Units are `h`, `d` and `w`. Nothing modified within
 `ROTATE_FORMAT` is `xz` (default) or `gz`.
 
 A rotation takes each session file under the project folders of `sessions/`
-(subagent runs too) whose modification time falls in AGE, with its `.txt`;
-the empty lock files beside it go when nothing holds them. Then it takes
-every file under `logs/` whose own modification time falls in AGE, except a
-file already compressed and the logs named like a session that stays live.
-It leaves alone a session whose liveness record names a running process or
-cannot be read, a session whose write lock is held, and any file a process
-has open. The old per-agent folders `js.home` still has to move are not
+(the ones named `-...`, subagent runs too) whose modification time falls in
+AGE, with its `.txt`; the empty lock files beside it go when nothing holds
+them. Then it takes every file under `logs/` whose own modification time
+falls in AGE, except a file already compressed, anything under
+`logs/archive/`, and the logs named like a session that stays live. It
+leaves alone a session whose liveness record names a running process or
+cannot be read, a session whose write lock is held, and any file another
+process has open, asked again just before the original is removed. Other
+directories under `sessions/` (`acp/`, the old per-agent folders) are not
 rotated.
 
 Each file is compressed beside its archive name, checked to decompress to
 exactly the original bytes, given the original's mode and times, fsynced and
 renamed into place; then, if the original has not changed since, it is
 removed. A stop at any point leaves the original, or the checked archive, or
-both identical. Where both exist the live file wins; an archive that is not
-a prefix of its live file is left alone and reported.
+both identical. Where both exist the live file wins and the archive stays
+until the next rotation of that file replaces it; an archive that is not a
+prefix of its live file is left alone and reported.
 
 `--dry-run` lists every file it would take, the bytes now and an estimate of
 the bytes after (each of the largest files compressed from its first 8 MiB),
@@ -827,8 +830,9 @@ A rotated session stays in the picker, in `--list-sessions --json` (with
 `"archived": true`; `size` is then the archive's) and in search, and its
 transcript reads from the archive. Resuming it (`--session`, `--last`, the
 picker, `/session`) puts the session and its `.txt` back at their live path
-first and says so in one line on stderr; a rotated log is put back when its
-session next writes it.
+first and says so in one line on stderr, as does anything that loads or
+appends to the conversation; a rotated log is put back when it is next
+written.
 
 `js --unrotate` puts every archived file back; `js --unrotate SESSION` puts
 back that session's record, its `.txt`, its subagent runs and the logs named

@@ -21,9 +21,9 @@ live file holds every byte of the archive as its prefix:
 - a restore stopped after the live file was linked and before the archive
   was removed, and the live file may have been appended to since.
 
-So the live file wins whenever it exists. An archive that is not a prefix of
-its live file is a conflict that neither `archive_file` nor `restore`
-resolves: both leave the two files alone.
+So the live file wins whenever it exists, and `restore` never removes an
+archive beside one. An archive that is not a prefix of its live file is a
+conflict `archive_file` refuses: it leaves both files alone.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import hashlib
 import lzma
 import os
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
@@ -254,19 +254,45 @@ class Changed(Exception):
     """The file changed while it was being archived; it is left live."""
 
 
+class InUse(Exception):
+    """A process opened the file while it was being archived; it is left live."""
+
+
 class Conflict(Exception):
     """An archive exists that is not a prefix of the live file; both are left alone."""
 
 
-def archive_file(live: Path, fmt: str, *, source: IO[bytes] | None = None) -> Archived:
+def _make_dirs(directory: Path) -> None:
+    """`directory` and its missing ancestors, each new one fsynced into its parent."""
+    missing: list[Path] = []
+    while not directory.is_dir():
+        missing.append(directory)
+        directory = directory.parent
+    for each in reversed(missing):
+        with contextlib.suppress(FileExistsError):
+            each.mkdir()
+        _fsync_dir(each.parent)
+
+
+def _settle(out: IO[bytes], info: os.stat_result) -> None:
+    """Give the file open as `out` the mode and times of `info`, then fsync it."""
+    out.flush()
+    os.fchmod(out.fileno(), info.st_mode & 0o7777)
+    os.utime(out.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
+    os.fsync(out.fileno())
+
+
+def archive_file(live: Path, fmt: str, *, source: IO[bytes] | None = None,
+                 unused: Callable[[], bool] | None = None) -> Archived:
     """Compress `live` into its archive and remove it.
 
     The archive is written beside its final name, checked to decompress to
     exactly `live`'s bytes, given `live`'s mode and times, fsynced and renamed
     into place; only then, and only if `live`'s size and mtime are what they
-    were when the copy started, is `live` removed. A stop at any point leaves
-    `live`, or a complete checked archive, or both identical. `source` is
-    `live` already open for reading (a caller holding its lock)."""
+    were when the copy started and `unused()` (when given) still says no
+    process has it open, is `live` removed. A stop at any point leaves `live`,
+    or a complete checked archive, or both identical. `source` is `live`
+    already open for reading (a caller holding its lock)."""
     live = Path(live)
     target = archive_path(live, fmt)
     if target is None:
@@ -274,7 +300,7 @@ def archive_file(live: Path, fmt: str, *, source: IO[bytes] | None = None) -> Ar
     for other in archives_of(live):
         if not is_prefix(other, live):
             raise Conflict(str(other))
-    target.parent.mkdir(parents=True, exist_ok=True)
+    _make_dirs(target.parent)
     with contextlib.ExitStack() as stack:
         stream = source if source is not None else stack.enter_context(open(live, "rb"))
         stream.seek(0)
@@ -290,12 +316,9 @@ def archive_file(live: Path, fmt: str, *, source: IO[bytes] | None = None) -> Ar
                     size += len(chunk)
                     out.write(compressor.compress(chunk))
                 out.write(compressor.flush())
-                out.flush()
-                os.fsync(out.fileno())
+                _settle(out, info)
             if _digest_archive(staging, FORMATS[fmt]) != (digest.hexdigest(), size):
                 raise OSError(f"archive does not decompress to the original: {live}")
-            os.chmod(staging, info.st_mode & 0o7777)
-            os.utime(staging, ns=(info.st_atime_ns, info.st_mtime_ns))
             now = os.stat(live)
             if (now.st_size, now.st_mtime_ns, now.st_ino) != (info.st_size, info.st_mtime_ns, info.st_ino):
                 raise Changed(str(live))
@@ -305,11 +328,13 @@ def archive_file(live: Path, fmt: str, *, source: IO[bytes] | None = None) -> Ar
                 staging.unlink()
             raise
         _fsync_dir(target.parent)
+        # From here to the unlink, live and archive are identical; a
+        # restore leaves both alone.
         now = os.stat(live)
         if (now.st_size, now.st_mtime_ns) != (info.st_size, info.st_mtime_ns):
-            # Written to between the check and the rename: the archive is a
-            # prefix of the live file, which stays.
             raise Changed(str(live))
+        if unused is not None and not unused():
+            raise InUse(str(live))
         for other in archives_of(live):
             if other != target:
                 other.unlink()
@@ -321,33 +346,25 @@ def archive_file(live: Path, fmt: str, *, source: IO[bytes] | None = None) -> Ar
 def restore(live: Path) -> bool:
     """Put `live`'s bytes back at `live` from its archive. True when it did.
 
-    A live file that already exists stays as it is; an archive that is a
-    prefix of it is removed. The restored copy is written beside `live`,
-    fsynced, given the archive's mode and times and linked into place; only
+    A live file that already exists stays as it is, and so does its archive:
+    the live file holds every byte the archive does, and the next rotation
+    of it replaces the archive. The restored copy is written beside `live`,
+    given the archive's mode and times, fsynced and linked into place; only
     then is the archive removed. A failure (a full disk) removes the partial
     copy and leaves the archive."""
     live = Path(live)
     found = archives_of(live)
-    if not found:
-        return False
-    if live.exists():
-        for archived in found:
-            if is_prefix(archived, live):
-                archived.unlink()
-                _prune(archived.parent)
+    if not found or live.exists():
         return False
     archived = found[0]
     info = archived.stat()
-    live.parent.mkdir(parents=True, exist_ok=True)
+    _make_dirs(live.parent)
     staging = _staging(live)
     try:
         with _opener(archived.suffix)(archived, "rb") as packed, open(staging, "wb") as out:
             while chunk := packed.read(_CHUNK):
                 out.write(chunk)
-            out.flush()
-            os.fsync(out.fileno())
-        os.chmod(staging, info.st_mode & 0o7777)
-        os.utime(staging, ns=(info.st_atime_ns, info.st_mtime_ns))
+            _settle(out, info)
         try:
             os.link(staging, live)
         except FileExistsError:

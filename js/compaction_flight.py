@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from . import messages as msgs, output, paths, setcmd
+from . import archive, messages as msgs, output, paths, setcmd
 from .console import compaction_events
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
@@ -209,7 +209,10 @@ class CompactionFlight:
             if settings.get("REQUEST_LOG", True):
                 try:
                     directory.mkdir(parents=True, exist_ok=True)
-                    with (directory / f"{_stem(self.cfg)}.log").open("a", encoding="utf-8") as log:
+                    request_log = directory / f"{_stem(self.cfg)}.log"
+                    # A rotated log is put back first, so the append continues it.
+                    archive.restore(request_log)
+                    with request_log.open("a", encoding="utf-8") as log:
                         log.write("FLIGHT " + json.dumps({"ts": time.time(), "kind": "compaction_" + event,
                                   "attempt_id": self.id, "flight_path": str(self.path),
                                   "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")

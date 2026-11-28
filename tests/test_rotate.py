@@ -6,6 +6,8 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -191,12 +193,36 @@ def test_last_resumes_a_rotated_session_with_its_history(project, monkeypatch):
 # --- what is left alone -------------------------------------------------------
 
 
-def test_a_file_a_process_has_open_is_not_rotated(project):
+def test_a_file_another_process_has_open_is_not_rotated(project):
     session = _session(project, "2026-09-01T1200-ab12", "open")
     log = _log("troop/run-1.log")
-    with open(session, "rb"), open(log, "rb"):
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import sys; a = open(sys.argv[1]); b = open(sys.argv[2]); sys.stdin.read()",
+         str(session), str(log)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        while not ({rotate._identity(session), rotate._identity(log)} <= rotate._open_files()):
+            assert holder.poll() is None
+            time.sleep(0.01)
         _rotate()
+    finally:
+        holder.communicate(b"")
     assert session.is_file() and log.is_file()
+
+
+def test_a_log_opened_while_it_was_compressed_stays(project, monkeypatch):
+    log = _log("troop/run-1.log")
+    digest = _digest(log)
+    calls = []
+
+    def opened_during_compression():
+        calls.append(1)
+        return set() if len(calls) == 1 else {rotate._identity(log)}
+
+    monkeypatch.setattr(rotate, "_open_files", opened_during_compression)
+    tally = rotate.rotate(rotate.parse_age("30d"), "xz")
+
+    assert _digest(log) == digest
+    assert [path for path, _ in tally.skipped] == [log]
 
 
 def test_a_session_someone_is_in_is_not_rotated(project):
@@ -322,6 +348,19 @@ def test_a_rotation_stopped_before_the_original_was_removed_reads_and_rotates_ag
     assert _digest(session) == digest
 
 
+def test_a_restore_beside_a_live_file_leaves_both(project):
+    session = _session(project, "2026-09-01T1200-ab12", "stale")
+    original = session.read_bytes()
+    archive.archive_file(session, "xz")
+    session.write_bytes(original)
+    [archived] = archive.archives_of(session)
+
+    assert archive.restore(session) is False
+
+    assert archived.is_file()
+    assert session.read_bytes() == original
+
+
 def test_a_restore_that_runs_out_of_space_keeps_the_archive(project, monkeypatch):
     session = _session(project, "2026-09-01T1200-ab12", "stale")
     _rotate()
@@ -355,3 +394,52 @@ def test_an_archive_that_is_not_a_prefix_of_the_live_file_is_left_alone(project)
     assert archived.read_bytes() == held
     assert session.read_text(encoding="utf-8") == "something else\n"
     assert [path for path, _ in tally.skipped] == [session]
+
+
+# --- formats, settings and writers ----------------------------------------------
+
+
+def test_gz_round_trips(project):
+    session = _session(project, "2026-09-01T1200-ab12", "stale")
+    digest = _digest(session)
+
+    rotate.rotate(rotate.parse_age("30d"), "gz")
+
+    assert archive.archive_path(session, "gz").is_file()
+    assert not session.exists()
+    # Loading the conversation puts it back.
+    assert memory.load_messages(session)[0]["content"] == "stale"
+    assert _digest(session) == digest
+    assert not archive.archives_of(session)
+
+
+def test_the_command_reads_the_format_and_age_settings(project):
+    session = _session(project, "2026-09-01T1200-ab12", "stale", mtime=time.time() - 3 * DAY)
+    assert cli.main(["--extra", "ROTATE_FORMAT=gz", "--rotate"]) == 0
+    assert session.is_file()
+
+    assert cli.main(["--extra", "ROTATE_FORMAT=gz", "--extra", "ROTATE_AGE=2d", "--rotate"]) == 0
+
+    assert archive.archive_path(session, "gz").is_file()
+
+
+def test_a_log_sink_opened_on_a_rotated_log_continues_it(project):
+    from js import debug_trace, transcript
+
+    request_log = _log("defaultagent/2026-09-01T1200-ab12.log")
+    screen_log = _log("transcript/defaultagent/2026-09-01T1200-ab12.log")
+    held = {path: path.read_bytes() for path in (request_log, screen_log)}
+    _rotate()
+    assert not request_log.exists() and not screen_log.exists()
+
+    request_sink = debug_trace.open_debug_trace_sink([request_log])
+    request_sink.write("more\n")
+    request_sink.close()
+    screen_sink = transcript.open_transcript_sink([screen_log])
+    screen_sink.write_plain("more\n")
+    screen_sink.close()
+
+    for path, before in held.items():
+        after = path.read_bytes()
+        assert after.startswith(before) and len(after) > len(before)
+        assert not archive.archives_of(path)
