@@ -342,6 +342,9 @@ class ToolContext(_turn_settings.ContextSettings):
     config: Config | None = field(default=None, repr=False)
     # The registry the turn dispatches through; None until a turn sets it.
     tool_registry: ToolRegistry | None = field(default=None, repr=False)
+    # The names of the only tools a turn on this context, or on a subagent's
+    # context started from it, may have, and no MCP servers; None is no ceiling.
+    tool_ceiling: frozenset[str] | None = None
     agent_id: str = ""
     task_depth: int = 0                   # subagent nesting: 0 on the main turn, parent's + 1 on a child
     # The context size the turn last measured, in tokens, and whether that

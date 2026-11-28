@@ -109,6 +109,7 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
     child = ToolContext(cwd=parent.cwd, model=parent.model, **_turn_settings.inherit(parent))
     child.subagent_assembly = parent.subagent_assembly
     child.tool_registry = registry
+    child.tool_ceiling = parent.tool_ceiling
     child.agent_id = agent
     child.task_depth = parent.task_depth + 1
     return child

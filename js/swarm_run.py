@@ -3,13 +3,20 @@
 SPEC = {"root": ROOT, "slots": 0, "processes": 0,
         "agents": [{"name": "kivu", "agent": "troop", "model": "cpa/deepseek-v4.1-flash",
                     "effort": "low", "opener": "You are kivu ...", "session": "troop-1-kivu",
-                    "cwd": "/path", "seat_file": "/path/kivu.seat.md", "opts": {"limits.x": "1"}}]}
+                    "cwd": "/path", "seat_file": "/path/kivu.seat.md", "opts": {"limits.x": "1"},
+                    "tools": ["read:eager", "fs_search:eager"]}]}
 
 Each agent is the task tool's child turn made long-lived: its own config, prompt,
 session and tool context, the bus tools on its surface, its inbox drained at
 every tool boundary, the turn persisted and the compaction trigger run before
 every sleep, and the sleep an await on the inbox. ``slots`` caps how many agents
 are mid-turn at once; 0 is no cap. ``recruit`` adds an agent to this loop.
+An agent's ``tools``, entries as in agent.yaml ``tools:``, is its whole tool
+surface with the bus tools added (``[]``: the bus tools alone): no ``models:``
+profile, TOOL_PROFILES entry or core entry changes it, it has no MCP servers,
+and its subagents run within it. An entry, other than a tag, that matches no
+tool ends that agent at start. A recruit and a ``restart`` keep it; absent or
+null, the agent's chain is its surface.
 ``processes`` (else SWARM_PROCESSES) spreads the agents over that many runner
 processes (`run_sharded`); 0 is one per AGENTS_PER_PROCESS, up to the CPUs.
 ``control``, which `run_sharded` writes into each runner's share, is the file
@@ -81,6 +88,9 @@ class AgentSpec:
     cwd: str = ""
     seat_file: str = ""
     opts: dict[str, Any] = field(default_factory=dict)
+    # The agent's whole tool surface, as agent.yaml `tools:` entries; None is
+    # its agent's chain.
+    tools: tuple[str, ...] | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentSpec:
@@ -94,6 +104,8 @@ class AgentSpec:
             cwd=str(d.get("cwd") or ""),
             seat_file=str(d.get("seat_file") or ""),
             opts={str(k): v for k, v in (d.get("opts") or {}).items()},
+            tools=None if d.get("tools") is None else (
+                tuple(d["tools"]) if isinstance(d["tools"], list) else d["tools"]),
         )
 
 
@@ -198,7 +210,7 @@ def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
             raise ValueError(error)
         cfg = replace(cfg, layer_flag={**(cfg.layer_flag or {}), "EFFORT": effort})
     try:
-        settled = run_assembly.settle(cfg, model=spec.model, agent_reasoning=spec.effort is None)
+        settled = run_assembly.settle(cfg, model=spec.model, agent_reasoning=spec.effort is None, tools=spec.tools)
     except run_assembly.RunNotSettled as exc:
         raise exc.cause from None
     system = settled.system
@@ -420,6 +432,10 @@ class Runner:
             configure = _configure if self.configure is None else self.configure
             settled = configure(spec)
             cfg, system = settled.config, settled.system
+            if spec.tools is not None:
+                # Every turn on this context, and every subagent it starts,
+                # runs within this surface.
+                context.tool_ceiling = frozenset(settled.registry.by_name)
             held.enter_context(subagents.worker_session(Path(cfg.session_file)))
             if self.gate is None:
                 slots = _slots(cfg, self.spec_slots)

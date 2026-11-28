@@ -27,6 +27,7 @@ from . import (
     config,
     login_defaults,
     memory as M,
+    messages as msgs,
     persona as P,
     providers,
     routing,
@@ -207,9 +208,24 @@ def expand(prompt_spec: P.PromptSpec, cfg: Any) -> P.PromptSpec:
     return P._expand_spec(prompt_spec, cfg)
 
 
+def exact_surface(prompt_spec: P.PromptSpec, cfg: Any, tools: Any) -> tuple[P.PromptSpec, Any]:
+    """``prompt_spec`` with ``tools`` as its chain, and the registry that chain
+    selects. Raises `policy.ToolPolicyError` for a malformed list or an entry,
+    other than a tag, that matches no tool."""
+    entries = policy.parse_entries(list(tools) if isinstance(tools, tuple) else tools, "tools")
+    full = registry_for(cfg)
+    config = policy.load_tools_config()
+    for rule in policy.expand(entries, config, "tools"):
+        if not rule.via and rule.entry.noun != "tag" and not any(rule.matches(tool) for tool in full.tools):
+            raise policy.ToolPolicyError(msgs.TOOLS_LIST_ENTRY_MATCHES_NOTHING.text(entry=rule.entry.text))
+    prompt_spec = replace(prompt_spec, tool_selectors=entries)
+    registry = full.select(entries, config=config, warn=False, tool_aliases=prompt_spec.tool_aliases)
+    return prompt_spec, registry
+
+
 def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
            resumed: Resume | None = None, config_pins: bool = False, agent_reasoning: bool = True,
-           layered: bool = True, expand_recorded: bool = False) -> SettledRun:
+           layered: bool = True, expand_recorded: bool = False, tools: Any = None) -> SettledRun:
     """The settled run of ``cfg``'s agent on the model this run names.
 
     ``model`` and ``reasoning`` are what the run names (--model, --reasoning);
@@ -242,7 +258,11 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
         raise RunNotSettled(exc, loading=False) from exc
     prompt_spec = for_model(prompt_spec, cfg)
     try:
-        registry = registry_for(cfg).select(prompt_spec.tool_selectors, tool_aliases=prompt_spec.tool_aliases)
+        if tools is not None:
+            prompt_spec, registry = exact_surface(prompt_spec, cfg, tools)
+            cfg = replace(cfg, mcp=None)
+        else:
+            registry = registry_for(cfg).select(prompt_spec.tool_selectors, tool_aliases=prompt_spec.tool_aliases)
     except policy.ToolPolicyError as exc:
         raise RunNotSettled(exc, loading=True) from exc
     effort = reasoning
