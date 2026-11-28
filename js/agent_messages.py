@@ -11,6 +11,16 @@ from . import memory, messages as msgs, persona, runtime
 # expanded text makes the file a control step: nothing of it is sent.
 PASS, LOOP, HALT = "PASS", "LOOP", "HALT"
 _CONTROL_LINE = re.compile(rf"%%({PASS}|{LOOP}|{HALT})%%")
+# A user file that names the PROMPT built-in, not escaped or in a code span,
+# takes the run's prompt into itself.
+_PROMPT_VARIABLE = re.compile(r"(?<![\\`])%%PROMPT%%")
+
+
+def takes_prompt(spec) -> bool:
+    """Whether a user file of ``spec`` takes the run's prompt (%%PROMPT%%).
+    The prompt then reaches the model inside that file and is not sent again."""
+    return any(exchange.user is not None and _PROMPT_VARIABLE.search(exchange.user)
+               for exchange in spec.exchanges)
 
 
 def control_word(text: str) -> str | None:
@@ -22,7 +32,8 @@ def control_word(text: str) -> str | None:
 
 async def initialize(cfg, spec, messages: list[dict], telemetry, *,
                      system: str | None = None, save: bool = True,
-                     echo_user: Callable[[str], None] | None = None, **turn_kwargs) -> str | None:
+                     echo_user: Callable[[str], None] | None = None, prompt: str = "",
+                     **turn_kwargs) -> str | None:
     """Append startup exchanges to a fresh conversation, persisting each step.
 
     Paired exchanges and assistant-only entries are synthetic. An unpaired user
@@ -34,6 +45,8 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
     its agent entry is not recorded. PASS goes on to the next exchange. LOOP
     and HALT end the exchanges there and are returned; the caller decides what
     ends with them.
+
+    ``prompt`` is the PROMPT built-in of the user files: the run's `-p` text.
     """
     if messages:
         return None
@@ -49,7 +62,7 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
     for exchange in spec.exchanges:
         user_text = None
         if exchange.user is not None:
-            user_text = persona.expand_agent_text(exchange.user, cfg)
+            user_text = persona.expand_agent_text(exchange.user, cfg, {"PROMPT": prompt})
             word = control_word(user_text)
             if word is not None:
                 msgs.warn(msgs.EXCHANGE_CONTROL_WORD, number=exchange.number, word=word)

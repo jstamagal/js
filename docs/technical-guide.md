@@ -168,6 +168,24 @@ without a user file records an assistant message on its own. Bare `user.md`
 and `agent.md` are exchange 0. Two files defining the same numeric role are an
 error.
 
+#### The prompt in a user file
+
+`%%PROMPT%%` in a user file is the run's `-p` text; `-p -` reads it from
+stdin. When any user file names it, the prompt reaches the model inside that
+file, and the run sends no prompt turn of its own after the exchanges; the last
+exchange's answer is the run's answer. A run that attaches files (`-f`,
+`@path`) still sends its prompt turn, because the attachments ride on it.
+`\%%PROMPT%%` and `` `%%PROMPT%%` `` stay literal and do not take the prompt.
+The value is substituted into inline code bodies too, unquoted: a script that
+must not see raw prompt text reads it from `%%CURRENT_SESSION_FULLPATH%%`.
+
+```
+cat seed | js -a maker -p -
+01-user.md   Write one character from this seed: %%PROMPT%%
+02-user.md   !{python3 extract.py '%%CURRENT_SESSION_FULLPATH%%'}
+             %%PASS%%
+```
+
 #### Control words
 
 A user file is expanded when it is reached, so its inline code reads what the

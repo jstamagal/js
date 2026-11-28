@@ -466,15 +466,24 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     echo_user = display_mod.echo_user if inputs.debug else None
     trace_override = inputs.debug or bool(inputs.debug_file) or cfg.trace
     prompt_spec = prepared.settled.prompt_spec
+    # A user file that names %%PROMPT%% carries the prompt to the model
+    # itself; the prompt's own turn is not sent after the exchanges. A prompt
+    # with attachments still sends its turn: the attachments ride on it.
+    taken = False
     if prompt_spec.exchanges and not prepared.messages:
+        # No user message: no prompt to take, and PROMPT expands empty.
+        prompt = prepared.prompt if prepared.user_message is not None else None
+        taken = (prompt is not None and agent_messages.takes_prompt(prompt_spec)
+                 and not prepared.attachments and not inputs.files and inputs.stdin_attachment is None)
         prepared.control = owning_loop.run_owning_loop(agent_messages.initialize(
             cfg, prompt_spec, prepared.messages, replace(telemetry, transcript_log=transcript),
             system=prepared.settled.system, save=inputs.save, trace_override=trace_override,
-            tool_context=inputs.tool_context, echo_user=echo_user, **turn_kwargs,
+            tool_context=inputs.tool_context, echo_user=echo_user, prompt=prompt or "",
+            **turn_kwargs,
         ))
     if prepared.control is not None:
         return
-    if prepared.user_message is None:
+    if prepared.user_message is None or taken:
         # The exchanges can leave tasks running, as the prompt's turn can.
         _background_turns(prepared, chat, transcript, echo_user, trace_override, turn_kwargs)
         return

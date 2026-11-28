@@ -132,6 +132,52 @@ def test_user_files_run_numerically_and_expand_after_previous_reply_is_saved(tmp
     ]
 
 
+def test_a_user_file_naming_prompt_takes_the_prompt_and_it_is_not_sent_again(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {
+        "01-user.md": "seed: %%PROMPT%%\nshape it",
+        "02-user.md": "!{sh grep -c 'gorilla body' '%%CURRENT_SESSION_FULLPATH%%' >/dev/null && printf extracted}\n%%PASS%%",
+    })
+    requests = _model(monkeypatch, ["gorilla body"])
+    assert js(monkeypatch, "--session", "seeded", "-p", "fig mud tick") == 0
+    assert "gorilla body" in capsys.readouterr().out
+    assert len(requests) == 1
+    assert requests[0][-1] == ("user", "seed: fig mud tick\nshape it")
+    assert [message["content"] for message in memory.load_replay_messages(_saved(tmp_path))] == [
+        "seed: fig mud tick\nshape it", "gorilla body",
+    ]
+
+
+def test_prompt_in_a_user_file_answers_the_run_and_escaped_prompt_stays_literal(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {
+        "01-user.md": "write about \\%%PROMPT%% and `%%PROMPT%%`",
+        "02-user.md": "%%PROMPT%%",
+    })
+    requests = _model(monkeypatch, ["first reply", "second reply"])
+    assert js(monkeypatch, "--no-save", "-p", "the seed") == 0
+    assert [request[-1] for request in requests] == [
+        ("user", "write about %%PROMPT%% and `%%PROMPT%%`"),
+        ("user", "the seed"),
+    ]
+    assert "second reply" in capsys.readouterr().out
+
+
+def test_a_prompt_with_attachments_still_sends_its_turn(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "seed: %%PROMPT%%"})
+    (tmp_path / "note.txt").write_text("NOTE BODY", encoding="utf-8")
+    requests = _model(monkeypatch, ["one", "two"])
+    assert js(monkeypatch, "--no-save", "-f", "note.txt", "-p", "the seed") == 0
+    assert len(requests) == 2
+    assert requests[0][-1] == ("user", "seed: the seed")
+    assert "NOTE BODY" in requests[1][-1][1]
+
+
+def test_without_prompt_the_builtin_is_empty_and_files_without_it_still_send_the_prompt(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "opening", "02-user.md": "[%%PROMPT%%]"})
+    requests = _model(monkeypatch, ["one", "two"])
+    assert js(monkeypatch, "--no-save", "-a", "voice") == 0
+    assert [request[-1] for request in requests] == [("user", "opening"), ("user", "[]")]
+
+
 def test_resume_keeps_seeded_history_without_duplicating_it(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "example", "01-agent.md": "example reply"})
     requests = _model(monkeypatch, ["first reply", "second reply"])

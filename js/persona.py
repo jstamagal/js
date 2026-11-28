@@ -469,8 +469,9 @@ def has_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> bool:
     return any(path.suffix == ".md" and agent_files.is_benchmark_file(path) for path in _prompt_files(prompts_dir))
 
 
-def expand_agent_text(text: str, cfg) -> str:
-    """Expand trusted agent text with this session's built-ins and code policy."""
+def expand_agent_text(text: str, cfg, variables: dict[str, str] | None = None) -> str:
+    """Expand trusted agent text with this session's built-ins and code policy.
+    ``variables`` adds built-ins only this text sees, such as PROMPT."""
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
     timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "INLINE_CODE_TIMEOUT"))
     max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
@@ -492,7 +493,7 @@ def expand_agent_text(text: str, cfg) -> str:
         code_env=environ,
         timeout_s=timeout_s,
         max_output_bytes=max_output_bytes,
-        **({"variables": session_variables(cfg)} if "%%" in text else {}),
+        **({"variables": session_variables(cfg) | (variables or {})} if "%%" in text else {}),
     )
 
 
