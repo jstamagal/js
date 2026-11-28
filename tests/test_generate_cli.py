@@ -236,6 +236,44 @@ def test_default_h3_writer_is_overridable(monkeypatch, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["writer"]["agent"] == "media-writer"
 
 
+@pytest.mark.parametrize("kind, target, agent", [
+    ("image", "gpt-image-1.5", "gpt-image"),
+    ("image", "gpt-image-2.6-sunburst", "gpt-image"),
+    ("image", "grok-imagine-image-2.0", "grok-image"),
+    ("image", "gemini-3.1-flash-image", "gemini-image"),
+    ("image", "vx/imagen-4.0-ultra-generate-001", "imagen-image"),
+    ("image", "hf.space/MiniMaxAI/minimax-h3-image", "h3-image"),
+    ("image", "sd-cpp-local", "media-writer"),
+    ("video", "grok-imagine-video-1.5", "grok-video"),
+    ("video", "hf.space/MiniMaxAI/MiniMax-H3-Turbo-Lora", "h3-video"),
+    ("video", "MiniMax-Hailuo-2.3", "h3-video"),
+    ("video", "gpt-image-1.5", "media-writer"),
+    ("tts", "gpt-4o-mini-tts", "openai-speech"),
+    ("tts", "piper", "media-writer"),
+    ("music", "music_v1", "elevenlabs-music"),
+    ("sfx", "eleven_text_to_sound_v2", "elevenlabs-sfx"),
+])
+def test_stock_writer_follows_kind_and_model_family(kind, target, agent):
+    assert generate_writer.stock_writer(kind, target) == agent
+
+
+def test_writer_brief_carries_switches_and_family_writer(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    briefs = []
+    def writer(**kw):
+        briefs.append((kw["messages"][0].text, json.loads(kw["messages"][1].text)))
+        return SimpleNamespace(text="Steady rain.", finish_reason="stop")
+    monkeypatch.setattr(generate_writer.model_client, "stream_model", writer)
+    mock_http(monkeypatch, lambda req: httpx.Response(200, content=b"sound"))
+    assert run("--sfx", "-m", "elevenlabs/eleven_text_to_sound_v2", "--loop", "--duration", "5",
+               "--enhance-url", "http://w@writer.test/v1", "-p", "rain") == 0
+    system, brief = briefs[0]
+    assert brief["loop"] is True and brief["duration"] == 5
+    assert "instrumental" not in brief
+    assert generate_writer.persona.load_agent_prompt_spec(
+        "elevenlabs-sfx", generate_writer.paths.agent_roots(), env=False).system.strip()[:40] in system
+
+
 def test_official_h3_turbo_workflow_inputs(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert run("--t2v", "--space", "MiniMaxAI/MiniMax-H3-Turbo-Lora", "-p", "snow", "--duration", "3",
