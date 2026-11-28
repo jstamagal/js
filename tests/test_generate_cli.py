@@ -77,8 +77,10 @@ def test_image_count_refs_and_conversion(monkeypatch, tmp_path):
     for path in ["out-001.png", "out-002.png"]:
         with Image.open(path) as pic:
             assert (pic.format, pic.size) == ("PNG", (2, 3))
-    monkeypatch.setattr(generate_cli, "execute", lambda *args: pytest.fail("duplicate submission"))
-    assert run(*args) != 0
+    Path("out-001.png").write_bytes(b"stale")
+    assert run(*args) == 0
+    with Image.open("out-001.png") as pic:
+        assert pic.format == "PNG"
 
 
 def test_nested_agent_precedence_and_verbatim_tts(monkeypatch, tmp_path):
@@ -222,7 +224,7 @@ def test_failed_resume_preserves_output_and_never_posts(monkeypatch, tmp_path):
         assert req.method == "GET"
         return httpx.Response(200, json={"status": "expired"})
     mock_http(monkeypatch, handler)
-    assert run("--resume", "old", "--force", "-u", "http://m@localhost/v1") == 1
+    assert run("--resume", "old", "-u", "http://m@localhost/v1") == 1
     assert Path("out.mp4").read_bytes() == b"original"
 
 
@@ -284,7 +286,7 @@ def test_video_download_rejects_nonvideo_and_preserves_output(monkeypatch, tmp_p
         return httpx.Response(200, headers={"content-type": "video/mp4"}, content=payload)
 
     mock_http(monkeypatch, handler)
-    assert run("--resume", "job", "--force", "-u", "https://m@render.test/v1") == 1
+    assert run("--resume", "job", "-u", "https://m@render.test/v1") == 1
     assert original.read_bytes() == b"original"
 
 

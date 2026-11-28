@@ -757,8 +757,8 @@ js generate --t2i -u http://minimax-h3-image@localhost:8888/v1 \
   -a h3-image --enhance-url http://refiner-27b@localhost:8080/v1 -p 'An owl at dusk'
 ```
 
-The bare image run writes `out.png` in the current directory. Use `--force`
-to replace an existing file, `-o -` for a single artifact on stdout, and
+The bare image run writes `out.png` in the current directory, replacing a file
+already there. Use `-o -` for a single artifact on stdout, and
 `-p -` or `--prompt-file FILE` for input. Multiple images get numbered paths.
 `--dry-run` prints the request, writer route and destinations without submitting
 a job. Repeat `--param-json KEY=JSON` for additional native fields.
@@ -799,8 +799,8 @@ only retrieves an existing job. Gradio can expire or consume events, so save
 the finished artifact while it is available.
 
 Downloads of image and video artifacts are checked before publication.
-A response of the wrong media kind leaves an existing output in place even
-with `--force`. Artifact downloads from public endpoints connect directly to
+A response of the wrong media kind leaves an existing output in place.
+Artifact downloads from public endpoints connect directly to
 checked public addresses on every hop. An endpoint reached on the local
 network can also return artifacts on the local network.
 

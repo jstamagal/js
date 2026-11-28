@@ -44,7 +44,6 @@ def parser():
     prompt.add_argument("-p", "--prompt", help=msgs.GENERATE_PROMPT.words())
     prompt.add_argument("--prompt-file", type=Path)
     p.add_argument("-o", "--output", help=msgs.GENERATE_OUTPUT.words())
-    p.add_argument("--force", action="store_true", help=msgs.GENERATE_FORCE.words())
     p.add_argument("--format", help=msgs.GENERATE_FORMAT.words())
     p.add_argument("--dry-run", action="store_true", help=msgs.GENERATE_DRY_RUN.words())
     writer = p.add_argument_group("optional prompt writer")
@@ -164,7 +163,7 @@ def run(a):
         raise ValueError("--space selects the media model and endpoint")
     if a.submit_only and not (a.space or a.kind == "video"):
         raise ValueError("--submit-only requires a Space or video endpoint")
-    if a.submit_only and (a.output or a.force or a.format):
+    if a.submit_only and (a.output or a.format):
         raise ValueError("select output options when retrieving the job with --resume")
     fmt, outputs = generate_files.destinations(a)
     if a.space:

@@ -83,8 +83,8 @@ def destinations(a):
             continue
         if not dest.parent.is_dir():
             raise ValueError(f"output directory does not exist: {dest.parent}")
-        if dest.is_dir() or (os.path.lexists(dest) and not a.force):
-            raise ValueError(f"output exists: {dest} (use --force to replace a file)")
+        if dest.is_dir():
+            raise ValueError(f"output is a directory: {dest}")
     return fmt, outputs
 
 
@@ -154,7 +154,6 @@ def save(outputs, results, fmt, a):
     if len(results) != len(outputs):
         raise ValueError(f"endpoint returned {len(results)} artifacts for {len(outputs)} outputs")
     staged = []
-    linked = []
     try:
         for path, data in zip(outputs, results, strict=True):
             if not data:
@@ -169,18 +168,8 @@ def save(outputs, results, fmt, a):
             with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as f:
                 staged.append((Path(f.name), path))
                 f.write(data)
-        # A concurrent run cannot replace a file when --force was absent.
         for tmp, path in staged:
-            if a.force:
-                os.replace(tmp, path)
-            else:
-                os.link(tmp, path)
-                linked.append((tmp, path))
-    except OSError:
-        for tmp, path in linked:
-            if path.exists() and path.samefile(tmp):
-                path.unlink()
-        raise
+            os.replace(tmp, path)
     finally:
         for tmp, _ in staged:
             tmp.unlink(missing_ok=True)
