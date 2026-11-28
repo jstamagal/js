@@ -118,10 +118,12 @@ def launcher() -> Path:
 
 
 def job_path(js: Path) -> str:
-    """The PATH the job runs with: js's directory, then uv's, then the system's."""
+    """The PATH the job runs with: js's directory, uv's (the launcher starts
+    it), nice's, then the system's."""
     entries = [str(js.parent)]
-    if (uv := executable("uv")) is not None:
-        entries.append(str(Path(uv).absolute().parent))
+    for name in ("uv", "nice"):
+        if (found := executable(name)) is not None:
+            entries.append(str(Path(found).absolute().parent))
     entries.extend(_BASE_PATH)
     return ":".join(dict.fromkeys(entries))
 
@@ -188,8 +190,9 @@ def _systemd_word(word: str) -> str:
 
 
 def _systemd_value(text: str) -> str:
-    """`text` inside a double-quoted unit value."""
-    return text.replace("%", "%%").replace("$", "$$").replace("\\", "\\\\").replace('"', '\\"')
+    """`text` inside a double-quoted Environment= value, where `%` is the
+    one specifier."""
+    return text.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _cron_escape(text: str) -> str:
@@ -305,7 +308,9 @@ def read_crontab() -> bytes:
     done = _run(["crontab", "-l"])
     if done.returncode == 0:
         return done.stdout
-    if b"no crontab" in done.stderr.lower():
+    error = done.stderr.lower()
+    # cronie and vixie say "no crontab for USER"; busybox cannot open the file
+    if b"no crontab" in error or (not done.stdout and b"no such file" in error):
         return b""
     raise ScheduleError(msgs.SCHEDULE_COMMAND_FAILED.text(
         command="crontab -l", error=done.stderr.decode(errors="replace").strip() or f"exit {done.returncode}"))
@@ -337,7 +342,6 @@ def cron_schedule(job: Job, js: Path, at: str) -> None:
     if kept and not kept.endswith(b"\n"):
         kept += b"\n"
     after = kept + line + b"\n"
-    job.log().parent.mkdir(parents=True, exist_ok=True)
     if after != before:
         _write_crontab(after)
 
@@ -351,18 +355,24 @@ def cron_remove(job: Job) -> bool:
     return True
 
 
-_CRON_ENTRY = re.compile(rb"\s*(\d+)\s+(\d+)\s+\*\s+\*\s+\*\s.*" + re.escape(CRON_TAG.encode()) + rb" (\w+) (.+?)\s*")
+_CRON_TAGGED = re.compile(rb".* " + re.escape(CRON_TAG.encode()) + rb" (\w+) (.+?)\s*")
+_CRON_DAILY = re.compile(rb"\s*(\d+)\s+(\d+)\s+\*\s+\*\s+\*\s")
 
 
 def cron_jobs() -> list[tuple[Job, str]]:
-    """Each js line in the crontab: its job and when it next runs."""
+    """Each js line in the crontab, found by its tag: its job and when it next
+    runs, which is known for a plain `M H * * *` line."""
     found = []
     for line in read_crontab().splitlines():
-        match = _CRON_ENTRY.fullmatch(line)
-        if match is None or match[3].decode() not in JOBS:
+        match = _CRON_TAGGED.fullmatch(line)
+        if match is None or match[1].decode() not in JOBS:
             continue
-        home = Path(match[4].decode(errors="replace").replace("\\%", "%"))
-        found.append((Job(match[3].decode(), home), _next_daily(int(match[2]), int(match[1]))))
+        job = Job(match[1].decode(), Path(match[2].decode(errors="replace").replace("\\%", "%")))
+        if job.cron_tag().encode() != line.rstrip()[-len(job.cron_tag().encode()):]:
+            continue
+        daily = _CRON_DAILY.match(line)
+        when = _next_daily(int(daily[2]), int(daily[1])) if daily else msgs.SCHEDULE_NEXT_UNKNOWN.text()
+        found.append((job, when))
     return found
 
 
@@ -399,6 +409,8 @@ def _backend() -> str | None:
 def schedule(job: Job, at: str) -> int:
     parse_at(at)
     js = launcher()
+    # the cron line's output goes here, a line added by hand included
+    job.log().parent.mkdir(parents=True, exist_ok=True)
     backend = _backend_holding(job) or _backend()
     if backend is None:
         msgs.warn(msgs.SCHEDULE_NO_BACKEND)
@@ -421,21 +433,29 @@ def schedule(job: Job, at: str) -> int:
 def remove(job: Job) -> int:
     removed = systemd_remove(job)
     if cron_available():
-        removed = cron_remove(job) or removed
+        try:
+            removed = cron_remove(job) or removed
+        except ScheduleError as exc:
+            msgs.warn(msgs.FAILED, error=exc)
+            return 1
     msgs.say(msgs.SCHEDULE_REMOVED if removed else msgs.SCHEDULE_NOT_SCHEDULED, job=job.name)
     return 0
 
 
 def listing() -> int:
     rows = [(job, "systemd", systemd_next(unit)) for job, unit in systemd_jobs()]
+    code = 0
     if cron_available():
-        rows += [(job, "cron", when) for job, when in cron_jobs()]
-    if not rows:
+        try:
+            rows += [(job, "cron", when) for job, when in cron_jobs()]
+        except ScheduleError as exc:
+            msgs.warn(msgs.FAILED, error=exc)
+            code = 1
+    if not rows and code == 0:
         msgs.say(msgs.SCHEDULE_NOTHING)
-        return 0
     for job, backend, when in rows:
         msgs.say(msgs.SCHEDULE_ROW, job=job.name, backend=backend, next=when, home=job.home)
-    return 0
+    return code
 
 
 def main(argv: list[str]) -> int:

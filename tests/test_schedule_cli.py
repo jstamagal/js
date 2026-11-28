@@ -56,12 +56,13 @@ esac
 exit 0""")
 
 
-def _cron(machine, *, table: bytes | None = None, broken: bool = False) -> Path:
+def _cron(machine, *, table: bytes | None = None, broken: bool = False,
+          missing: str = "no crontab for someone") -> Path:
     stored = machine["state"] / "crontab"
     if table is not None:
         stored.write_bytes(table)
     list_failure = 'echo "crontab: cannot read" >&2; exit 1' if broken else \
-        'echo "no crontab for someone" >&2; exit 1'
+        f'echo "{missing}" >&2; exit 1'
     _script(machine["bin"] / "crontab", f"""
 case "$1" in
   -l) if [ -f "$FAKE_STATE/crontab" ]; then /bin/cat "$FAKE_STATE/crontab"; else {list_failure}; fi ;;
@@ -237,9 +238,10 @@ def test_cleanup_is_refused_without_the_acknowledgement(machine, capsys):
     assert _calls(machine) == []
 
 
-def test_cleanup_with_the_acknowledgement(machine):
+def test_cleanup_with_the_acknowledgement(machine, capsys):
     _systemd(machine)
     assert _js("cleanup", "--allow-unattended-cleanup") == 0
+    assert capsys.readouterr().err.strip()
     assert f"ExecStart={machine['js']} cleanup\n" in (_units() / "js-cleanup.service").read_text()
     assert _js("--remove", "cleanup") == 0
     assert not list(_units().iterdir())
@@ -271,3 +273,38 @@ def test_the_stock_templates_ship():
     for name in ("service", "timer", "cron"):
         assert (paths.defaults_dir() / "schedule" / name).read_text().strip()
     assert os.access(paths.defaults_dir() / "schedule", os.R_OK)
+
+
+def test_an_unreadable_crontab_leaves_systemd_listing_and_remove_working(machine, capsys):
+    _systemd(machine)
+    _cron(machine, broken=True)
+    assert _js("rotate") == 0
+    capsys.readouterr()
+    _js()
+    assert "systemd" in capsys.readouterr().out
+    _js("--remove", "rotate")
+    assert not list(_units().iterdir())
+
+
+def test_busybox_says_no_crontab_its_own_way(machine):
+    stored = _cron(machine, missing="crontab: can't open 'someone': No such file or directory")
+    assert _js("rotate") == 0
+    assert len(stored.read_bytes().splitlines()) == 1
+
+
+def test_a_cron_template_of_another_shape_is_listed_and_removed(machine, capsys):
+    stored = _cron(machine)
+    (paths.default_home() / "schedule").mkdir(parents=True)
+    (paths.default_home() / "schedule" / "cron").write_text("@daily ${COMMAND}\n")
+    assert _js("rotate") == 0
+    assert stored.read_bytes().startswith(b"@daily ")
+    capsys.readouterr()
+    assert _js() == 0
+    assert "rotate" in capsys.readouterr().out
+    assert _js("--remove", "rotate") == 0
+    assert stored.read_bytes() == b""
+
+
+def test_the_line_to_add_by_hand_has_its_log_directory(machine):
+    assert _js("rotate") == 1
+    assert (paths.default_home() / "logs" / "schedule").is_dir()
