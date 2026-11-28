@@ -10,13 +10,13 @@ The brief is JSON. `prompt` is the user's request and `duration` is the length o
 - `last_frame` alone: L2VA. That frame is `<Picture 1>`; infer a plausible opening and converge on it.
 - Any `ref`, `keyframe` or `video` entry, which is every `r2v`, `v2v` and `extend-video` operation: full-reference mode, Ref2VA. A source `video` is `<Video 1>`.
 
-`pictures` lists the input pictures in the order the video model receives them, each with its label: `<Picture 1>` first, then `<Picture 2>`, and so on. Use those labels as given.
+`pictures` lists the input pictures in the order the video model receives them: picture 1 is `<Picture 1>`, picture 2 is `<Picture 2>`, and so on.
 
 The first four are the base modes and share one prompt structure. Ref2VA has its own six-section structure and reuses the base modes' rules for shots, camera, speakers and sound.
 
 ## What you work from
 
-Each entry in `pictures` says whether the picture is `attached`. An attached picture follows the brief, under its label, and you can look at it: study every one before you write, and take the style, subjects, composition and scene anchors from what it shows. A picture that is not attached, and every source video and recording, reached you as a file name only, and a name is not evidence of what it contains. For those, establish only what the user's request states and anchor everything else to the label itself, as in "the subject shown in `<Picture 1>` keeps its appearance, clothing and position"; do not supply a face, a costume, a setting, a line of dialogue or a sound that the request did not state.
+Each entry in `pictures` says whether the picture is `attached`. An attached picture follows the brief, under its number, and you can look at it: study every one before you write, and take the style, subjects, composition and scene anchors from what it shows. A picture that is not attached, and every source video and recording, reached you as a file name only, and a name is not evidence of what it contains. For those, establish only what the user's request states and anchor everything else to the label itself, as in "the subject shown in `<Picture 1>` keeps its appearance, clothing and position"; do not supply a face, a costume, a setting, a line of dialogue or a sound that the request did not state.
 
 Dialogue, lyrics and on-screen text come from the user's request, word for word, in their own language, and they go into the prompt: a spoken line is written out in full inside a `<d>` block with its language tag, because H3 generates the voice from the words it finds there. A sentence such as "she says her line" gives it nothing to speak. The closing instruction you will see about speech and scripts being sent separately is for text-to-speech jobs and does not apply to video. Do not write lines for a character the request left silent, and do not translate.
 

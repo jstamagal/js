@@ -771,15 +771,32 @@ Set them in jsrc, with `/set`, or with a `JS_` environment variable.
 
 `--enhance` runs a tool-free text call before submission. `-a NAME`,
 `--enhance-model` and `--enhance-url` each enable it. A CLI writer route wins,
-then the agent's model, then the normal js text model. A target containing
-`h3-image` selects the stock H3 image writer. Use `-a` to pick another agent,
-including a colon-qualified name. Agent instructions can include trusted
-prompt files using normal js inline directives. The writer receives the input
-pictures themselves, labelled in order, when its model takes images, and their
-names alone when it does not. For speech, the input script stays verbatim and the
-writer supplies delivery instructions to endpoints that accept them. Native
-Grok and ElevenLabs speech take delivery cues in the script and reject
-`--enhance` and the writer overrides.
+then the agent's model, then the normal js text model. The stock writer
+follows the operation and the target model's family; `WRITERS` in
+`js/generate_writer.py` is the table:
+
+| Operation | Target | Writer |
+| --- | --- | --- |
+| image | name containing `h3-image` | `h3-image` |
+| image | `gpt-image…` | `gpt-image` |
+| image | `grok-…` | `grok-image` |
+| image | `gemini-…image…`, `nano-banana…` | `gemini-image` |
+| image | `imagen-…` | `imagen-image` |
+| video | `grok-…` | `grok-video` |
+| video | name containing `hailuo` or `minimax-h3` | `h3-video` |
+| speech | `gpt-…tts…` | `gpt-speech` |
+| music | any | `elevenlabs-music` |
+| sound effects | any | `elevenlabs-sfx` |
+
+Any other target gets the general `media-writer`. Use `-a` to pick another
+agent, including a colon-qualified name. Agent instructions can include trusted
+prompt files using normal js inline directives. The writer receives the
+input pictures themselves, in order, when its model takes images, and their
+names alone when it does not. For speech, the input script
+stays verbatim and the writer supplies delivery instructions to endpoints that
+accept them. Native Grok and ElevenLabs speech take delivery cues in the
+script and reject `--enhance` and the writer overrides. For music with
+`--lyrics`, the writer's text becomes the song's global style.
 
 ### Video jobs and Hugging Face Spaces
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 from pathlib import Path
 
 import ai
@@ -10,26 +11,52 @@ import ai
 from . import config, generate_route, imagefit, model_client, paths, persona, retry, turn_settings
 from .cli_options import RunOptions, invocation
 
+# The stock writer for each media kind and model family: the first row whose
+# kind matches and whose pattern is found in the target's last path segment.
+# Music and sound effects go out in ElevenLabs's request shape whatever the
+# target, so those kinds have one writer each.
+WRITERS = [
+    ("image", r"h3-image", "h3-image"),
+    ("image", r"gpt-image", "gpt-image"),
+    ("image", r"^grok-", "grok-image"),
+    ("image", r"^gemini-.*image|nano-banana", "gemini-image"),
+    ("image", r"^imagen-", "imagen-image"),
+    ("video", r"^grok-", "grok-video"),
+    ("video", r"hailuo|minimax-h3", "h3-video"),
+    ("tts", r"^gpt-.*tts", "gpt-speech"),
+    ("music", r"", "elevenlabs-music"),
+    ("sfx", r"", "elevenlabs-sfx"),
+]
+
+
+def stock_writer(kind, target):
+    name = target.lower().rsplit("/", 1)[-1]
+    return next((agent for k, pattern, agent in WRITERS if k == kind and re.search(pattern, name)),
+                "media-writer")
+
 
 def pictures(a):
-    """The input pictures in the order the media model numbers them, as (label, source):
-    an edit's base image then its references; a video's first and last frame, its
-    references, then its keyframes by time."""
+    """The input pictures in the order the media model receives them: an edit's base
+    image then its references; a video's first and last frame, its references, then
+    its keyframes by time."""
     sources = []
     if a.kind == "image":
         sources = ([a.image] if a.image else []) + list(a.ref or [])
     elif a.kind == "video":
         keyed = sorted((float(spec.partition("=")[0]), spec.partition("=")[2]) for spec in a.keyframe or [])
         sources = [s for s in (a.first_frame, a.last_frame) if s] + list(a.ref or []) + [path for _, path in keyed]
-    return [(f"<Picture {n}>", source) for n, source in enumerate(sources, 1)]
+    return sources
 
 
 def attachments(a, vision):
     """What the writer is told about each input picture, and the pictures themselves:
-    a local image file is attached when the writer's model takes images."""
+    a local image file is attached when the writer's model takes images. A picture
+    is known by its place in the order, which each writer names in its own model's
+    notation; a mask or markup file by its role."""
     listed, parts = [], []
-    marks = [(name, source) for name in ("mask", "markup") if (source := getattr(a, name, None))]
-    for label, source in pictures(a) + marks:
+    entries = [({"picture": n}, f"Picture {n}", source) for n, source in enumerate(pictures(a), 1)]
+    entries += [({"role": name}, name, source) for name in ("mask", "markup") if (source := getattr(a, name, None))]
+    for key, label, source in entries:
         path = Path(source).expanduser()
         mime = mimetypes.guess_type(path.name)[0] or ""
         attached = vision and mime.startswith("image/") and path.is_file()
@@ -39,13 +66,12 @@ def attachments(a, vision):
             if fitted is not None:
                 data, mime = fitted.data, fitted.mime
             parts += [f"{label}: {path.name}", ai.types.messages.FilePart(data=data, media_type=mime)]
-        listed.append({"label": label, "file": str(source), "attached": bool(attached)})
+        listed.append({**key, "file": str(source), "attached": bool(attached)})
     return listed, parts
 
 
 def setup(a, values, target):
-    h3 = a.kind == "image" and "h3-image" in target.lower()
-    name = a.agent or ("h3-image" if h3 else "media-writer")
+    name = a.agent or stock_writer(a.kind, target)
     spec = persona.load_agent_prompt_spec(name, paths.agent_roots(), env=False)
     route = generate_route.resolve(url=a.enhance_url, explicit_model=a.enhance_model,
                                    default_model=spec.model or values.get("MODEL"), values=values,
@@ -73,6 +99,11 @@ def enhance(a, target, values):
         value = getattr(a, field)
         if value is not None:
             brief[field] = value
+    if a.audio is not None:
+        brief["audio"] = a.audio
+    for field in ["instrumental", "loop"]:
+        if getattr(a, field):
+            brief[field] = True
     listed, parts = attachments(a, config.vision_enabled_for_model(route.model, values))
     if listed:
         brief["pictures"] = listed
