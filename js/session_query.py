@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from fnmatch import fnmatchcase
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -130,11 +131,16 @@ class Session:
         are written after a session ends and do not count (`js.session_text`)."""
         return self.last if self.last is not None else self.when
 
+    @cached_property
+    def stem(self) -> str:
+        """The session file's name without its suffix."""
+        return Path(self.path).stem
+
     @property
     def name(self) -> str | None:
         """The name `--session` takes for a session that was given one; None
         for a generated name."""
-        if not self.path or not session_store.is_named(Path(self.path).stem):
+        if not self.path or not session_store.is_named(self.stem):
             return None
         return session_store.display_name(Path(self.path))
 
@@ -153,21 +159,45 @@ class Session:
         return model if isinstance(model, str) and model else (self.models[-1] if self.models else None)
 
 
-def kind(session: Session) -> str:
+@dataclass(frozen=True)
+class KindRules:
+    """The settings `kind` and `visible` read, as one value a pass over the
+    list reads once."""
+
+    script_modes: Any
+    quick_turns_max: int
+    quick_tool_calls_max: int
+    quick_reply_characters_max: int
+    hidden_kinds: Any
+
+    @classmethod
+    def current(cls) -> KindRules:
+        """The rules from the settings as they are now."""
+        return cls(
+            script_modes=_settings.live_value("SESSION_SCRIPT_MODES"),
+            quick_turns_max=int(_settings.live_value("SESSION_QUICK_TURNS_MAX")),
+            quick_tool_calls_max=int(_settings.live_value("SESSION_QUICK_TOOL_CALLS_MAX")),
+            quick_reply_characters_max=int(_settings.live_value("SESSION_QUICK_REPLY_CHARACTERS_MAX")),
+            hidden_kinds=_settings.live_value("SESSION_HIDDEN_KINDS"),
+        )
+
+
+def kind(session: Session, rules: KindRules | None = None) -> str:
     """Subagent and script-started runs first, then empty (nothing came back),
     then quick (one message, at most two tool calls, a short final reply). A
     subagent run filed before mode and parent were recorded is known by its
-    task name."""
+    task name. ``rules`` default to the current settings."""
     if (session.mode == "subagent" or session.parent is not None
-            or session_store.is_task(Path(session.path).stem)):
+            or session_store.is_task(session.stem)):
         return SUBAGENT
-    if session.mode in _settings.live_value("SESSION_SCRIPT_MODES"):
+    rules = KindRules.current() if rules is None else rules
+    if session.mode in rules.script_modes:
         return SCRIPT
     if not session.replied:
         return EMPTY
-    if (session.turns <= int(_settings.live_value("SESSION_QUICK_TURNS_MAX"))
-            and session.tool_calls <= int(_settings.live_value("SESSION_QUICK_TOOL_CALLS_MAX"))
-            and session.final_len < int(_settings.live_value("SESSION_QUICK_REPLY_CHARACTERS_MAX"))):
+    if (session.turns <= rules.quick_turns_max
+            and session.tool_calls <= rules.quick_tool_calls_max
+            and session.final_len < rules.quick_reply_characters_max):
         return QUICK
     return SHOWN
 
@@ -377,7 +407,7 @@ def _count_ok(value: int, op: str, n: int) -> bool:
     return {">": value > n, "<": value < n, ">=": value >= n, "<=": value <= n, "=": value == n}[op]
 
 
-def matches(session: Session, query: Query) -> bool:
+def matches(session: Session, query: Query, rules: KindRules | None = None) -> bool:
     """Whether the session passes every filter of the query. Words are not a
     filter here; search decides them."""
     if not all(_count_ok(session.turns, op, n) for op, n in query.counts):
@@ -391,18 +421,19 @@ def matches(session: Session, query: Query) -> bool:
     cwd = (session.cwd or "").rstrip("/") or ("/" if session.cwd else "")
     if not all(cwd and pattern.regex.match(cwd) for pattern in query.dirs):
         return False
-    session_kind = kind(session)
+    session_kind = kind(session, rules)
     if not all(mode in (session.mode, session_kind) for mode in query.modes):
         return False
     return all(any(fnmatchcase(model.lower(), pattern.lower()) for model in session.models)
                for pattern in query.models)
 
 
-def visible(session: Session, query: Query, *, show_all: bool) -> bool:
+def visible(session: Session, query: Query, *, show_all: bool, rules: KindRules | None = None) -> bool:
     """Shown sessions always; the hidden kinds with `a`, or when the query
     names their kind or mode."""
-    session_kind = kind(session)
-    if session_kind not in _settings.live_value("SESSION_HIDDEN_KINDS") or show_all:
+    rules = KindRules.current() if rules is None else rules
+    session_kind = kind(session, rules)
+    if session_kind not in rules.hidden_kinds or show_all:
         return True
     return any(mode in (session_kind, session.mode) for mode in query.modes)
 
@@ -412,8 +443,9 @@ def select(sessions: list[Session], query: Query, *, show_all: bool,
     """The sessions the list shows, in order: best BM25 score first when the
     query has words (only sessions with a score), else the one last written
     to first, the newer start first between equals."""
+    rules = KindRules.current()
     chosen = [session for session in sessions
-              if visible(session, query, show_all=show_all) and matches(session, query)]
+              if visible(session, query, show_all=show_all, rules=rules) and matches(session, query, rules)]
     if query.ranked:
         scores = scores or {}
         chosen = [session for session in chosen if session.path in scores]
@@ -522,15 +554,15 @@ def _fit(text: str, width: int) -> str:
     return text.ljust(width)
 
 
-def kind_text(session: Session) -> str:
-    session_kind = kind(session)
+def kind_text(session: Session, rules: KindRules | None = None) -> str:
+    session_kind = kind(session, rules)
     return "-" if session_kind == SHOWN else session_kind
 
 
-def name_kind_text(session: Session) -> str:
+def name_kind_text(session: Session, rules: KindRules | None = None) -> str:
     """The row's last column: the session's name when it has one, then its
     kind when it is a hidden one."""
-    marked = kind_text(session)
+    marked = kind_text(session, rules)
     if session.name is None:
         return marked
     return session.name if marked == "-" else f"{session.name} · {marked}"
@@ -564,14 +596,15 @@ def header_line() -> str:
         value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=_STOCK_LAYOUT.length)
 
 
-def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:
+def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ",
+                 rules: KindRules | None = None) -> str:
     """A session row: marker, when, mode, agent, dir, turns, length, then the
     session's name when it has one and its kind. A nested branch shows its
     branch point in place of mode, agent and dir."""
     layout = _STOCK_LAYOUT
     session = item.session
     assert session is not None
-    tail = (f" {session.turns:>{layout.turns}}  {length_text(session):<{layout.length}} {name_kind_text(session)}")
+    tail = (f" {session.turns:>{layout.turns}}  {length_text(session):<{layout.length}} {name_kind_text(session, rules)}")
     when = when_text(session.started if session.started is not None else session.when, now)
     if item.depth == 0:
         return (f"{marker} {when:<{layout.when}}  {_fit(session.mode or '-', layout.mode)}  "

@@ -130,6 +130,53 @@ def test_empty_quick_subagent_and_script_sessions_are_hidden_until_a():
     assert _listed(picker) == ["normal"]
 
 
+def test_a_hidden_kinds_change_is_seen_by_the_next_refresh():
+    from js import settings
+
+    store = {"SESSION_HIDDEN_KINDS": ["empty", "quick", "subagent", "script"]}
+    settings.bind_live_settings(store)
+    picker = _picker([
+        _session("normal"),
+        _session("quick", turns=1, tool_calls=1, final_len=40, started=_ts(2026, 9, 29, 6, 0)),
+    ])
+    assert _listed(picker) == ["normal"]
+    settings.set_dotted(store, ("SESSION_HIDDEN_KINDS",), ["empty", "subagent", "script"])
+    picker.press("a")
+    picker.press("a")
+    assert _listed(picker) == ["normal", "quick"]
+
+
+def test_a_quick_limit_changed_with_the_picker_open_is_seen_by_the_next_draw():
+    from js import settings
+
+    store = {"SESSION_QUICK_TURNS_MAX": 1}
+    settings.bind_live_settings(store)
+    picker = _picker([_session("s", turns=2, tool_calls=0, final_len=40)])
+    picker.press("a")
+    assert Q.QUICK not in _body_lines(picker)[0]
+    settings.set_dotted(store, ("SESSION_QUICK_TURNS_MAX",), 3)
+    assert Q.QUICK in _body_lines(picker)[0]
+
+
+def test_moving_the_cursor_redraws_each_row_as_a_fresh_picker_draws_it():
+    sessions = [
+        _session("here", started=_ts(2026, 9, 29, 9, 0)),
+        _session("there", started=_ts(2026, 9, 29, 8, 0), cwd="/srv"),
+        _session("here2", started=_ts(2026, 9, 29, 7, 0)),
+    ]
+    picker = _picker(sessions)
+    _body_lines(picker)
+    picker.press("down")
+    picker.press("down")
+    fresh = _picker(sessions)
+    fresh.press("down")
+    fresh.press("down")
+    assert _body_lines(picker) == _body_lines(fresh)
+    picker.press("up")
+    picker.press("up")
+    assert _body_lines(picker) == _body_lines(_picker(sessions))
+
+
 def test_branches_are_nested_under_their_parent():
     picker = _picker([
         _session("parent", started=_ts(2026, 9, 17, 10, 0)),

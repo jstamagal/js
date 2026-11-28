@@ -150,6 +150,10 @@ class SessionPicker:
         self._message_positions: dict[str, int] = {}
         self.token_count: int | None = None
         self._previews: dict[str, tuple[str, str]] = {}
+        # Item index and marker -> its row text, for the list `refresh` built
+        # under the kind rules `_rules`.
+        self._row_texts: dict[tuple[int, str], str] = {}
+        self._rules: Q.KindRules | None = None
         self.refresh()
 
     # -- state -------------------------------------------------------------------
@@ -162,6 +166,7 @@ class SessionPicker:
         scores = self._search(expression) if expression and self._search is not None else None
         chosen = Q.select(self.sessions, self.query, show_all=self.show_all, scores=scores)
         self.items = Q.build_items(chosen, self.view, home=self.home, nested=not self.query.ranked)
+        self._row_texts = {}
         self.hits = {}
         if expression and scores and self._lines is not None:
             self.hits = self._lines(expression, {s.path: scores[s.path] for s in chosen[:_HIT_LINES]})
@@ -374,6 +379,10 @@ class SessionPicker:
         line = 0
         if not self.items:
             return [("class:parse", f"  {msgs.SESSIONS_NONE.text()}")], 0
+        rules = Q.KindRules.current()
+        if rules != self._rules:
+            self._rules = rules
+            self._row_texts = {}
         for index, item in enumerate(self.items):
             if item.session is None:
                 out += [("class:group", item.group), ("", "\n")]
@@ -383,7 +392,10 @@ class SessionPicker:
             here = bool(session.cwd) and (session.cwd.rstrip("/") or "/") == self.cwd
             selected = index == self.cursor
             marker = ">" if selected else "•" if here else " "
-            text = Q.session_line(item, now=self.now, home=self.home, marker=marker)
+            text = self._row_texts.get((index, marker))
+            if text is None:
+                text = Q.session_line(item, now=self.now, home=self.home, marker=marker, rules=rules)
+                self._row_texts[(index, marker)] = text
             if selected:
                 cursor_line = line
             out += [("class:selected" if selected else "", text), ("", "\n")]
