@@ -99,7 +99,7 @@ edits in a row need no second read.
 
 ### `write`
 
-Creates or overwrites a whole file.
+Creates, appends to, or replaces a file.
 
 Parameters:
 
@@ -121,10 +121,11 @@ least `HELD_WRITE_MIN` bytes in `~/.js/tmp/held` (the jail's `~/.js/tmp` under
 `-C`, mode 0600) and its ERROR names a held id, the call that finishes the
 write, and where the model is: agent, model, cwd, jail root and writable paths,
 and whether the target exists and was read. A jail refusal also names a path
-under the cwd. `from_held` writes the held content, through the same checks,
+under the cwd. For an unread existing file, the recovery hint asks for a read
+before the retry. `from_held` writes the held content, through the same checks,
 and deletes it once written. Arguments cut off inside `content` hold the part
 that arrived; `from_held` with `append=true` adds `content` after it. `append`
-alone adds `content` to the end of the file. Held content goes when js exits
+alone adds `content` to the end of the file without a prior read. Held content goes when js exits
 and after `HELD_TTL` seconds.
 
 ### `patch`

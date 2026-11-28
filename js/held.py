@@ -243,17 +243,26 @@ def held_note(context: Any, held: Held, file_path: str | None, *, partial: bool 
     """The orientation block a failed write's ERROR ends with: where the
     content is held, the call that finishes the write, and where the model is."""
     raw = str(file_path or "")
-    suggestion = suggested_path(context, raw) if raw and _resolve(context, raw) is None else None
+    target = _resolve(context, raw) if raw else None
+    suggestion = suggested_path(context, raw) if raw and target is None else None
     finish_path = str(suggestion) if suggestion is not None else raw or "<path>"
+    target = suggestion if suggestion is not None else target
+    args: dict[str, str | bool] = {"file_path": finish_path, "from_held": held.id}
+    read_first = ""
+    if target is not None and target.exists():
+        if context.file_require_read and context.reads.coverage(target).content_hash is None:
+            read_first = "read the target with the read tool, then "
+        if context.write_require_overwrite:
+            args["overwrite"] = True
     shown_path = jail.shown(str(held.path))
     lines = held.text.splitlines() or [""]
     if partial:
-        call = json.dumps({"file_path": finish_path, "from_held": held.id, "append": True,
-                           "content": "<the rest>"}, ensure_ascii=False)
-        head = snippets.render('held-content-partial', SIZE=f'{held.size:,}', LINES=f'{_line_count(held.text):,}', PATH=shown_path, ID=held.id, LAST_LINE=json.dumps(lines[-1][-120:], ensure_ascii=False), CALL=call)
+        args.update(append=True, content="<the rest>")
+    call = json.dumps(args, ensure_ascii=False)
+    if partial:
+        head = snippets.render('held-content-partial', SIZE=f'{held.size:,}', LINES=f'{_line_count(held.text):,}', PATH=shown_path, ID=held.id, LAST_LINE=json.dumps(lines[-1][-120:], ensure_ascii=False), CALL=call, READ_FIRST=read_first)
     else:
-        call = json.dumps({"file_path": finish_path, "from_held": held.id}, ensure_ascii=False)
-        head = snippets.render('held-content', SIZE=f'{held.size:,}', LINES=f'{_line_count(held.text):,}', PATH=shown_path, ID=held.id, CALL=call)
+        head = snippets.render('held-content', SIZE=f'{held.size:,}', LINES=f'{_line_count(held.text):,}', PATH=shown_path, ID=held.id, CALL=call, READ_FIRST=read_first)
     return "\n\n" + "\n".join([head, *_orientation(context, finish_path if raw else None)])
 
 

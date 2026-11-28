@@ -66,12 +66,13 @@ def test_a_jailed_write_is_held_and_from_held_writes_it_to_the_suggested_path(ja
         held.load(jailed, ident)
 
 
-def test_an_unread_existing_file_holds_the_content_until_read_and_from_held(tmp_path):
-    context = ToolContext(cwd=tmp_path, file_require_read=True)
+@pytest.mark.parametrize("require_overwrite", [False, True])
+def test_an_unread_existing_file_holds_the_content_until_read_and_from_held(tmp_path, require_overwrite):
+    context = ToolContext(cwd=tmp_path, file_require_read=True, write_require_overwrite=require_overwrite)
     target = tmp_path / "notes.txt"
     target.write_text("old\n")
 
-    refused = tool("write", context, file_path=str(target), content=CONTENT)
+    refused = tool("write", context, file_path=str(target), content=CONTENT, overwrite=True)
 
     assert refused.startswith("ERROR")
     assert target.read_text() == "old\n"
@@ -79,13 +80,15 @@ def test_an_unread_existing_file_holds_the_content_until_read_and_from_held(tmp_
     kept = held.load(context, ident)
     assert kept.path.exists()
 
-    again = tool("write", context, file_path=str(target), from_held=ident)
+    retry, _ = json.JSONDecoder().raw_decode(refused[refused.index('{"file_path"'):])
+    assert retry["from_held"] == ident
+    again = tool("write", context, **retry)
     assert again.startswith("ERROR")
     assert held_id(again) == ident
     assert kept.path.exists()
 
     tool("read", context, file_path=str(target))
-    done = tool("write", context, file_path=str(target), from_held=ident)
+    done = tool("write", context, **retry)
 
     assert not done.startswith("ERROR"), done
     assert target.read_bytes() == CONTENT.encode("utf-8")
@@ -167,16 +170,34 @@ def test_write_unavailable_on_the_surface_holds_the_content(tmp_path, monkeypatc
     assert not (tmp_path / "x.py").exists()
 
 
-def test_append_adds_to_a_read_file(tmp_path):
-    context = ToolContext(cwd=tmp_path)
+def test_append_adds_to_an_unread_file(tmp_path):
+    context = ToolContext(cwd=tmp_path, file_require_read=True, write_require_overwrite=True)
     target = tmp_path / "log.txt"
     target.write_text("a\n")
-    tool("read", context, file_path=str(target))
 
     done = tool("write", context, file_path=str(target), content="b\n", append=True)
 
     assert not done.startswith("ERROR"), done
     assert target.read_text() == "a\nb\n"
+    assert tool("write", context, file_path=str(target), content="c\n", overwrite=True).startswith("ERROR")
+    assert target.read_text() == "a\nb\n"
+
+
+def test_completing_held_content_still_requires_a_read_to_replace_a_file(tmp_path):
+    context = ToolContext(cwd=tmp_path, file_require_read=True)
+    target = tmp_path / "notes.txt"
+    target.write_text("old\n")
+    prefix = held.hold(context, CONTENT, str(target))
+
+    refused = tool("write", context, file_path=str(target), from_held=prefix.id,
+                   append=True, content="rest\n")
+    assert refused.startswith("ERROR")
+    assert target.read_text() == "old\n"
+
+    tool("read", context, file_path=str(target))
+    done = tool("write", context, file_path=str(target), from_held=held_id(refused))
+    assert not done.startswith("ERROR"), done
+    assert target.read_text() == CONTENT + "rest\n"
 
 
 def test_expired_held_content_is_removed(tmp_path):

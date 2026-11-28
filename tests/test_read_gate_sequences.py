@@ -156,6 +156,20 @@ def test_appended_lines_count_as_seen(tmp_path):
     assert _patch(context, target, "line 4\n", "line four\n") == "unseen lines"
 
 
+def test_append_keeps_changes_made_since_the_read(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_text("before\n")
+    context = ToolContext(cwd=tmp_path)
+    _read(context, target)
+    target.write_text("changed\n")
+
+    appended = fs.write(file_path=str(target), content="added\n", append=True, context=context)
+
+    assert _outcome(appended) == "accepted"
+    assert _overwrite(context, target, "new\n") == "changed since read"
+    assert target.read_text() == "changed\nadded\n"
+
+
 def test_coverage_and_undo_survive_a_restart_on_the_same_session(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text(_lines(10))
