@@ -68,3 +68,38 @@
 --composition-plan FILE      Supply a complete song plan with lyrics, sections and timing.
 --sfx                        Generate a sound effect from text.
 --loop                       Request a seamless sound-effect loop.
+
+# Owner notes
+<later>I really just want this for the endpoints I got free cpa/antigravity/gemini-3.1-flash-image
+cpa/free/minimax-m3.1-flash
+cpa/gemini-3.1-flash-image
+cpa/go/minimax-m3.1-flash
+cpa/gpt-image-1.5
+cpa/gpt-image-2
+cpa/gpt-image-2.5
+cpa/gpt-image-2.5-flare
+cpa/gpt-image-2.5-sunburst
+cpa/gpt-image-2.6
+cpa/gpt-image-2.6-flare
+cpa/gpt-image-2.6-sunburst
+cpa/grok-imagine-image
+cpa/grok-imagine-image-2.0
+cpa/grok-imagine-image-quality
+cpa/grok-imagine-video
+cpa/grok-imagine-video-1.5
+cpa/grok-imagine-video-1.5-lite
+cpa/grok-imagine-video-1.5-preview
+cpa/imagen-3.0-fast-generate-001
+cpa/imagen-3.0-generate-002
+cpa/opencode-go/minimax-m3
+cpa/vx/imagen-4.0-fast-generate-001
+cpa/vx/imagen-4.0-generate-001
+cpa/vx/imagen-4.0-ultra-generate-001 it sounds like most of the comfyui / sdcpp stuff is literally just making js generatae beecome sd-cli
+</later>
+
+<nah>ACE-STEP its already got local controllers.  For sound its gonna be Sono and Elevenlabs (music) + voice like cpa/grok-tts
+cpa/grok-voice-tts-1.0
+cpa/mimo-v2.5-tts
+cpa/xiaomi/mimo-v2.5-tts
+and i got mistraal voxtral somewhere
+</nah>
