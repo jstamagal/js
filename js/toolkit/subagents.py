@@ -661,16 +661,25 @@ def _start_background(indexed_items, coro_factory, agent_id: str, session_id: st
         on_done=context.invalidate_search_cache,
         on_loop=on_loop,
     )
-    return task_jobs.started_text(job, pollable=_pollable(context))
+    return task_jobs.started_text(job, pollable=_pollable(context), comes_back=_results_come_back(context))
+
+
+def _results_come_back(context: ToolContext) -> bool:
+    """True where the result of a task left running is handed back on its
+    own (``ToolContext.delivers_task_results``): the REPL's main agent and a
+    `-p` run, not a subagent, whose turn ends with its answer. There the
+    caller never waits on its tasks, so the operator can talk to it while
+    they run."""
+    return context.task_depth == 0 and context.delivers_task_results
 
 
 def _in_background(background: Any, context: ToolContext) -> bool:
-    """``background`` as given; unset, on where the result of a task left
-    running is handed back (``ToolContext.delivers_task_results``): the
-    REPL's main agent and a `-p` run, not a subagent, whose turn ends with
-    its answer."""
+    """Always on where results come back (`_results_come_back`); elsewhere
+    ``background`` as given, off when unset."""
+    if _results_come_back(context):
+        return True
     if background is None or background == "":
-        return context.task_depth == 0 and context.delivers_task_results
+        return False
     return _flag(background)
 
 
@@ -691,6 +700,11 @@ def _handle_action(action: str, handle: Any, message: Any, context: ToolContext)
         return f"ERROR: unknown action {action!r}; expected one of {', '.join(ACTIONS)}"
     if action == "list":
         return task_jobs.list_text(context.task_owner)
+    if action == "wait" and _results_come_back(context):
+        return ("ERROR: wait is for subagents. Your tasks' results come to you on their own: "
+                "a finished task's result reaches you at your next tool call, or starts a new turn "
+                "when you are idle. If you have nothing else to do, end your turn; the operator can "
+                "talk to you meanwhile.")
     error, job = _find_job(action, handle, context)
     if job is None:
         return error

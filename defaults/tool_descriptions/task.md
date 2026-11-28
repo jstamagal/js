@@ -72,10 +72,11 @@ Running, watching, stopping and talking to workers:
       task t1 started: 2 subagents of agent `explore` (t1.1, t1.2), ...
       HANDLE t1 RUNNING
 
-  `t1` is the task, `t1.1` and `t1.2` its workers. `background=false` waits
-  for the workers instead and returns their result; do that when your very
-  next step needs it. Inside a subagent a call waits unless you pass
-  `background=true`.
+  `t1` is the task, `t1.1` and `t1.2` its workers. The main agent never
+  waits on its workers: their result comes to it on its own, so it keeps
+  working, or ends its turn and stays free for the operator. Inside a
+  subagent a call waits for its workers and returns their result unless you
+  pass `background=true`.
 - `action="list"`: your tasks and each worker's state.
 - `action="poll", handle="t1"`: whether it is still running, and for each
   worker its state, the tools it has called, the text it last wrote and its
@@ -85,8 +86,8 @@ Running, watching, stopping and talking to workers:
   it finishes when it makes none. A finished one answers it in a new turn
   on its own session, with everything it did before, started as a new task
   whose handle the call returns.
-- `action="wait", handle="t1", timeout=N`: block up to N seconds, or until it
-  ends without `timeout`.
+- `action="wait", handle="t1", timeout=N` (inside a subagent): block up to N
+  seconds, or until it ends without `timeout`.
 - `action="kill", handle="t1"`: stop the task. `handle="t1.2"` stops that
   worker alone; the others carry on.
 - `handle` defaults to your most recent running task. You see only the tasks
@@ -94,7 +95,8 @@ Running, watching, stopping and talking to workers:
 - When a task you have not polled finishes, its result comes to you in a
   `<js-reminder>`: at your next tool call, with the next user message, or, if
   you are idle, in a message of its own. It is also written to the file the
-  start line names. Do not poll in a loop to wait for it; carry on, or `wait`.
+  start line names. Do not poll in a loop to wait for it: carry on, or end
+  your turn if there is nothing else to do; the result starts a new one.
 
 Prompting guidance:
 - Include the expected output shape.
@@ -111,14 +113,15 @@ Failure behavior:
 - One worker failure returns that worker's error without discarding sibling
   results.
 - A task recursion limit prevents unbounded worker spawning.
-- A call with `background=false` is not a controllable task; its progress is
-  visible only through streamed child tool activity and the final result.
+- A call inside a subagent without `background=true` is not a controllable
+  task; its progress is visible only through streamed child tool activity and
+  the final result.
 
 <!--parameters-->
 
 ### action
 
-run starts workers; list, poll, wait, kill and send act on your tasks by handle.
+run starts workers; list, poll, kill and send act on your tasks by handle; wait too, inside a subagent.
 
 ### agent_id
 
@@ -127,7 +130,7 @@ Loads that agent's persona and selected tools.
 
 ### background
 
-true (the default for the main agent): return the handles at once while the workers run. false: wait for their result.
+Inside a subagent: true returns the handles at once while the workers run; false (the default) waits for their result. The main agent's calls always return the handles at once.
 
 ### handle
 
