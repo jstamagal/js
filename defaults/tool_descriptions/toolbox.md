@@ -31,18 +31,19 @@ Parameters:
 - `name`: the tool's name, for `save`, `history` and `restore`. A plain Python
   identifier that matches the name of the definition.
 - `note`: for `save`, one line on what this revision does or changes, and why.
-- `scope`: for `save`. `project` writes to the project's `.js/toolbox`, which
-  is where a tool that knows this project belongs, so pass `scope=project`
-  for those. `global` is for tools that are useful in any project, and is
-  what an omitted `scope` means. When both hold a tool of the same name, the
-  project one wins.
+- `scope`: for `save`. Leave it out (it means `local`): a save belongs to the
+  project you are working in, and only this project sees it. Pass
+  `scope=global` only when the user asks for the tool everywhere, in every
+  project. A project tool of the same name as a global one wins in this
+  project.
 - `revision`: for `restore`, the revision number to roll back to.
 - `source`: for `save`, the definition text, when the function is not in the
   kernel namespace.
 - `verbosity`: `quiet`, `normal` or `verbose`, for the operator's terminal view.
 
 Make a tool findable. `list` and `load` print one line per tool: its name,
-revision, scope and the models that have worked on it. The name is what the
+revision, where it lives (`global`, or `shelf` and `project` for this
+project's own) and the models that have worked on it. The name is what the
 next model sees first, so make it say what the tool is for:
 `parse_acme_access_log`, not `parse_log`. Give every tool a docstring whose
 first line says what it does and when to reach for it, then the arguments and

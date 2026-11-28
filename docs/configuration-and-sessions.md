@@ -347,7 +347,8 @@ project.
   agents/<agent_id>/     # global agent prompts
   commands/              # markdown commands, /NAME
   skills/
-  toolbox/
+  toolbox/               # global tools flat at the top (*.py)
+    <project>/           # a project's shelf: its local saves, when it has no .js/toolbox
   logins/
     logins.toml
     models-cache.json

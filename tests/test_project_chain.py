@@ -217,12 +217,14 @@ def test_commands_layer_through_the_chain(mono):
     assert "only" in found
 
 
-def test_toolbox_layers_and_project_saves_go_to_the_nearest(mono):
+def test_toolbox_layers_and_local_saves_go_to_the_nearest_existing_toolbox(mono):
     root, package = mono
     _write(root / ".js" / "toolbox" / "t.py", "def t():\n    return 1\n")
     (package / ".js").mkdir()
     assert toolbox.discover(package)["t"].scope == "project"
-    assert toolbox.project_toolbox_dir(package) == package / ".js" / "toolbox"
+    assert toolbox.save_layer(package).directory == root / ".js" / "toolbox"
+    (package / ".js" / "toolbox").mkdir()
+    assert toolbox.save_layer(package).directory == package / ".js" / "toolbox"
 
 
 def test_nearest_tools_yaml_wins(mono, monkeypatch):

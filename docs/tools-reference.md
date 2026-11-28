@@ -728,11 +728,43 @@ Parameters:
 - `name`: the tool name — a plain Python identifier matching the definition.
 - `note`: for `save`, what changed and why. This is the message the next model
   reads.
-- `scope`: `global` (`~/.js/toolbox/`) or `project`
-  (`.js/toolbox/`). Project shadows global, mirroring agent precedence.
+- `scope`: `local` (the default) or `global`. See below for where each lands.
 - `revision`: for `restore`.
 - `source`: an explicit definition, for saving without a live kernel.
 - `verbosity`: as for `kernel`.
+
+A save is local unless it says `global`, like `git config` against
+`git config --global`:
+
+```text
+save              -> the project the session is in:
+                       its own .js/toolbox, when that directory exists
+                       otherwise <home>/toolbox/<project slug>/   (its shelf)
+save scope=global -> <home>/toolbox/
+```
+
+The directory is the switch: making `<project>/.js/toolbox` moves that
+project's later saves into it; without one they go to the project's shelf in
+the home toolbox. The slug is the directory name the project's sessions are
+filed under (`paths.project_namespace`, `/` and `_` as `-`, e.g.
+`-home-me-js`), so two checkouts with the same basename get different shelves.
+The nearest existing `.js/toolbox` in the project chain is the one written. A
+session whose project is the user's home directory has `<home>/toolbox/` as
+its shelf, so its local and global saves land in the same place.
+
+A session reads the global tools (the `*.py` flat at the top of
+`<home>/toolbox/`), then its own shelf, then each project `.js/toolbox` from
+the root down, nearer winning on a name; another project's shelf is never
+read. `list` labels each tool `[global]`, `[shelf]` or `[project]`. A local
+save under a global tool's name starts a local copy that shadows it in this
+project, with its own revisions and `.history/`; the global file is
+untouched. A global save may call only other global tools, since it loads
+where a local helper does not.
+
+Under isolation (`.isolate`, `--isolate`) nothing in the home is read or
+written: the global tools and shelves are not listed, the shipped example is
+not seeded, a local save goes to the nearest project `.js/toolbox` or else the
+border's `.js/toolbox`, and `scope=global` is refused with an `ERROR`.
 
 Each tool is one file with a machine-readable provenance header:
 
