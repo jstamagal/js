@@ -606,8 +606,12 @@ Search terms combine with AND:
 
 The words are ranked over what the operator wrote, what the model wrote, the
 `/name` title, and each tool row's label and call line; tool output is not
-searched. The line under the query shows how it was read, and each hit shows
-its best-matching row.
+searched. The line under the query shows how it was read, and each of the
+first 300 hits shows the part of its best-matching row around the match. The
+search and those rows run on a thread of the picker's own: the list on the
+screen stays until the search's scores come, the rows appear best score first
+as they are read, and a key other than one typed into the search waits for the
+list of the search typed.
 
 The list and the search read `~/.js/cache/sessions.sqlite`: each session's
 summary and an FTS5 table of its text. Every write to a session updates its

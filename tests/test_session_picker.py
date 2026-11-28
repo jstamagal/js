@@ -5,13 +5,17 @@ conftest installs."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 from repl_driver import record_turns, run_async
 from session_marks import append_compaction_mark
 from test_repl_info_cmds import make_cfg
@@ -24,6 +28,7 @@ from js import (
     repl,
     run_assembly,
     runtime,
+    session_index,
     session_picker,
     session_query as Q,
     session_store,
@@ -331,16 +336,164 @@ def test_words_rank_by_the_search_scores_and_each_hit_shows_its_matching_line():
         return {"b": -5.0, "a": -1.0}
 
     def lines(expression, scores):
-        return {path: Hit(score, 14, "you", None, "the niri thing", ((4, 8),)) for path, score in scores.items()}
+        return [(path, Hit(score, 14, "you", None, "the niri thing", ((4, 8),))) for path, score in scores.items()]
 
     picker = _picker([_session("a"), _session("b", started=_ts(2026, 9, 1, 8, 0)), _session("c")],
                      search=search, lines=lines)
     picker.press("/")
     _type(picker, "niri")
-    assert seen["expression"] == '"niri"*'
     assert _listed(picker) == ["b", "a"]
+    assert seen["expression"] == '"niri"*'
+    picker.settle()
     body = _body_lines(picker)
     assert "#0014" in body[1] and "the niri thing" in body[1]
+
+
+def _screen_text(app) -> str:
+    screen = app.renderer.last_rendered_screen
+    if screen is None:
+        return ""
+    return "\n".join("".join(row[x].char for x in sorted(row)) for _, row in sorted(screen.data_buffer.items()))
+
+
+def test_matching_rows_read_after_a_key_are_drawn_without_another_key():
+    gate = threading.Event()
+
+    def lines(expression, scores):
+        gate.wait(5)
+        return [(path, Hit(score, 14, "you", None, "the niri thing", ((4, 8),))) for path, score in scores.items()]
+
+    picker = _picker([_session("a")], search=lambda expression: {"a": -1.0}, lines=lines)
+    picker.press("/")
+    _type(picker, "niri")
+    assert _listed(picker) == ["a"]
+    screens: list[str] = []
+    drawn: list[str] = []
+
+    async def run() -> None:
+        with create_pipe_input() as pipe:
+            app = picker.application(input=pipe, output=DummyOutput())
+            app.after_render += lambda _app: screens.append(_screen_text(app))
+            task = asyncio.ensure_future(app.run_async())
+            for _ in range(500):
+                if screens:
+                    break
+                await asyncio.sleep(0.01)
+            assert screens and "the niri thing" not in screens[-1]
+            gate.set()
+            for _ in range(500):
+                if "the niri thing" in screens[-1]:
+                    break
+                await asyncio.sleep(0.01)
+            drawn.extend(screens)
+            app.exit()
+            await task
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        picker.close()
+    assert "the niri thing" in drawn[-1]
+
+
+def _gated_search(gate: threading.Event):
+    def search(expression):
+        gate.wait(5)
+        return {"b": -1.0}
+    return search
+
+
+def test_the_list_of_a_typed_search_is_drawn_when_its_scores_come_without_another_key():
+    gate = threading.Event()
+    picker = _picker([_session("a", agent="alpha"), _session("b", agent="beta", started=_ts(2026, 9, 1, 8, 0))],
+                     search=_gated_search(gate))
+    screens: list[str] = []
+    drawn: list[str] = []
+
+    async def run() -> None:
+        with create_pipe_input() as pipe:
+            app = picker.application(input=pipe, output=DummyOutput())
+            app.after_render += lambda _app: screens.append(_screen_text(app))
+            task = asyncio.ensure_future(app.run_async())
+            pipe.send_text("/n")
+            for _ in range(500):
+                if screens and "/ n" in screens[-1]:
+                    break
+                await asyncio.sleep(0.01)
+            drawn.append(screens[-1])
+            gate.set()
+            for _ in range(500):
+                if "alpha" not in screens[-1]:
+                    break
+                await asyncio.sleep(0.01)
+            drawn.append(screens[-1])
+            app.exit()
+            await task
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        picker.close()
+    assert "alpha" in drawn[0] and "beta" in drawn[0]
+    assert "alpha" not in drawn[1] and "beta" in drawn[1]
+
+
+def test_a_key_pressed_while_a_typed_search_runs_acts_on_its_list():
+    gate = threading.Event()
+    picker = _picker([_session("a"), _session("b", started=_ts(2026, 9, 1, 8, 0))], search=_gated_search(gate))
+    picker.press("/")
+    picker.press("n")
+    picker.press("enter")
+    timer = threading.Timer(0.05, gate.set)
+    timer.start()
+    try:
+        choice = picker.press("enter")
+    finally:
+        timer.join()
+        picker.close()
+    assert choice.action == session_picker.RESUME and choice.session.path == "b"
+
+
+def test_a_search_that_failed_runs_again_when_typed_again():
+    calls = []
+
+    def search(expression):
+        calls.append(expression)
+        if len(calls) == 1:
+            raise OSError("index gone")
+        return {"b": -1.0}
+
+    picker = _picker([_session("a"), _session("b")], search=search)
+    picker.press("/")
+    picker.press("n")
+    assert _listed(picker) == []
+    picker.press("backspace")
+    picker.press("n")
+    assert _listed(picker) == ["b"]
+    picker.close()
+
+
+def test_only_the_first_listed_hits_show_their_matching_row_after_a_relists_them(monkeypatch):
+    monkeypatch.setattr(session_picker, "_HIT_LINES", 1)
+
+    def lines(expression, scores):
+        return [(path, Hit(score, 1, "you", None, f"gpu in {path}", ((0, 3),))) for path, score in scores.items()]
+
+    quick = _session("quick", turns=1, tool_calls=0, final_len=10)
+    picker = _picker([quick, _session("normal")], search=lambda expression: {"quick": -2.0, "normal": -1.0},
+                     lines=lines)
+    picker.press("/")
+    _type(picker, "gpu")
+    picker.settle()
+    assert "gpu in normal" in "\n".join(_body_lines(picker))
+    picker.press("enter")
+    picker.press("a")
+    picker.settle()
+    body = "\n".join(_body_lines(picker))
+    assert _listed(picker) == ["quick", "normal"]
+    assert "gpu in quick" in body and "gpu in normal" not in body
 
 
 def test_quick_sessions_are_searched_only_with_a():
@@ -364,6 +517,80 @@ def test_backspace_and_ctrl_u_edit_the_query():
     assert picker.query_text == "niri "
     picker.press("c-u")
     assert picker.query_text == ""
+
+
+def _indexed(tmp_path: Path, chats: dict[str, list[str]]) -> dict[str, str]:
+    """Session files in the index, one per name, each the operator's lines
+    answered with "ok"; name -> path."""
+    paths = {}
+    for name, said in chats.items():
+        path = session_store.reserve(session_store.folder_for(tmp_path / name))
+        (tmp_path / name).mkdir(parents=True, exist_ok=True)
+        record_session_start(path, cwd=tmp_path / name, agent="defaultagent", model="deepseek-v4-flash", mode="repl")
+        for text in said:
+            M.append_message(path, {"role": "user", "content": text})
+            M.append_message(path, {"role": "assistant", "content": "ok " * 300}, M.stamp_for("mimo", "xiaomi", None))
+        paths[name] = str(path.resolve())
+    return paths
+
+
+_CHATS = {
+    "niri": ["the niri compositor tears on the motherboard", "niri again"],
+    "nine": ["nine gpus in one box", "rocm on the nine of them"],
+    "rocm": ["build rocm for the card", "the rocm motherboard bios"],
+    "none": ["nothing to see"],
+}
+
+
+def _settled(picker) -> tuple[list[str], list[str]]:
+    picker.settle()
+    return _listed(picker), _body_lines(picker)
+
+
+def test_typing_extending_and_backspacing_a_query_lists_what_a_fresh_picker_lists(tmp_path):
+    names_of = {path: name for name, path in _indexed(tmp_path, _CHATS).items()}
+    picker = session_picker.load(tmp_path)
+    picker.press("a")
+    picker.press("/")
+    seen = []
+    try:
+        for key in [*"ni", "r", "i", " ", *"mo", "backspace", "backspace", "backspace", *"ro",
+                    "backspace", "backspace", "backspace", "backspace", "backspace", "backspace"]:
+            picker.press(key)
+            listed, body = _settled(picker)
+            fresh = session_picker.load(tmp_path, query=picker.query_text)
+            fresh.show_all = True
+            fresh.refresh()
+            try:
+                assert (listed, body) == _settled(fresh)
+            finally:
+                fresh.close()
+            seen.append((picker.query_text, {names_of[path] for path in listed}))
+    finally:
+        picker.close()
+    names = dict(seen)
+    assert names["n"] >= {"niri", "nine", "none"} and names["ni"] >= {"niri", "nine"}
+    assert {"niri"} <= names["niri"] and "nine" not in names["niri"]
+    assert {"niri"} <= names["niri mo"] and "rocm" not in names["niri mo"]
+    assert seen[-1][0] == "" and names[""] >= set(_CHATS)
+
+
+def test_a_hit_shows_the_part_of_its_matching_row_around_the_match(tmp_path):
+    long_row = "filler " * 400 + "the motherboard died " + "tail " * 400
+    paths = _indexed(tmp_path, {"long": [long_row]})
+    picker = session_picker.load(tmp_path)
+    picker.press("a")
+    picker.press("/")
+    try:
+        _type(picker, "motherboard")
+        _, body = _settled(picker)
+    finally:
+        picker.close()
+    expression = Q.fts_expression(picker.query)
+    hit = dict(session_index.matching_lines(expression, session_index.search(expression)))[paths["long"]]
+    text, spans = Q.excerpt(hit.line, hit.spans)
+    assert [text[a:b] for a, b in spans] == ["motherboard"]
+    assert f"        {Q.hit_line(hit.number, hit.who, '')}{text}" in body
 
 
 # --- how js opens it -------------------------------------------------------------
@@ -634,7 +861,7 @@ def test_session_picker_accepts_its_view_and_streams(monkeypatch):
 
     source, target = object(), object()
     seen = []
-    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app", close=lambda: None)
     monkeypatch.setattr(picker, "run_modal", lambda app: app)
     assert session_picker.pick_session("/work", input=source, output=target,
                                        load_picker=lambda *args: state) == "app"
