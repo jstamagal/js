@@ -86,9 +86,10 @@ lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
 missing, leaves out a registered setting, or holds a line that does not apply,
 js stops at startup with one line naming the file.
 
-js never writes `~/.js/jsrc` on its own; only `/save` does, so the file holds
-only what the operator set and a default changed in `defaults/jsrc` still reaches
-the box. `js/jsrc.template` lists every setting in sections, each described
+js never writes `~/.js/jsrc` on its own; `/save` does, and `js init` in the
+home copies `defaults/jsrc` there when the home has none. A home `jsrc` that
+holds only what the operator set lets a default changed in `defaults/jsrc` reach
+the box; a copy of `defaults/jsrc` pins every setting until `js init -f`. `js/jsrc.template` lists every setting in sections, each described
 with examples, at its stock value. `/save` writes what changed in the session
 since it started (or since the last `/save`): the settings `/set` changed, the
 model `/model` or the picker chose, the `/fset` entries changed, and `on`
@@ -780,7 +781,7 @@ backup file is made.
 
 ## Rotation
 
-`js --rotate [AGE]` moves old files out of `sessions/` and `logs/` into
+`js rotate [AGE]` moves old files out of `sessions/` and `logs/` into
 `~/.js/archive/`, compressed, one archive file per original. The archive
 mirrors the home: a file's archive path is its path under the home, under
 `archive/`, with the compression suffix added.
@@ -796,7 +797,7 @@ mirrors the home: a file's archive path is its path under the home, under
   -> ~/.js/archive/logs/transcript/defaultagent/2026-10-01T1200-ab12.log.xz
 ```
 
-AGE is `ROTATE_AGE` (default `30d`) when the flag has none. `30d` and `>30d`
+AGE is `ROTATE_AGE` (default `30d`) when the command names none. `30d` and `>30d`
 take files not modified in 30 days or more; `<7d` takes files modified
 within the last 7 days. Units are `h`, `d` and `w`. Nothing modified within
 `ROTATE_AGE_MIN` (default `1h`) is taken, whatever AGE says.
@@ -835,9 +836,11 @@ first and says so in one line on stderr, as does anything that loads or
 appends to the conversation; a rotated log is put back when it is next
 written.
 
-`js --unrotate` puts every archived file back; `js --unrotate SESSION` puts
-back that session's record, its `.txt`, its subagent runs and the logs named
-by any of their stems. `--dry-run` lists what it would restore.
+`js rotate --restore` puts every archived file back; `js rotate --restore
+SESSION` puts back that session's record, its `.txt`, its subagent runs and the
+logs named by any of their stems. `--dry-run` lists what it would restore.
+`js rotate --extra KEY=VALUE` sets `ROTATE_*` for one run, as `JS_ROTATE_AGE`
+and the other env names do.
 
 ## Compaction
 

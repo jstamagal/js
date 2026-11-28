@@ -1,10 +1,14 @@
-"""`js --init`, `js --init-full` and `js --init-agent NAME`: scaffolding.
+"""`js init`, `js init --full` and `js init agent NAME`: scaffolding.
 
-`--init` makes the current directory a js project: a git repository when it
+Run in the js home, in the directory holding it as `.js`, or with --home
+naming it, `js init` lays the stock setup into the home (`js.init_home`),
+with `-f` replacing, `-b` starting over and `-a` starting over with a
+tarball of the old home. Anywhere else it makes the
+current directory a js project: a git repository when it
 is not inside one, and a `.js/` holding an empty `jsrc` and the `agents/`,
 `skills/`, `commands/` and `toolbox/` directories, each kept in git by a
-`.gitkeep`. `--init-full` adds a README.md, a LICENSE and a .gitignore.
-`--init-agent NAME` makes `<home>/agents/NAME/` with an agent.yaml and a
+`.gitkeep`. `--full` adds a README.md, a LICENSE and a .gitignore.
+`js init agent NAME` makes `<home>/agents/NAME/` with an agent.yaml and a
 01-prompt.md.
 
 Nothing that exists is written to: a file is created with exclusive mode and
@@ -17,17 +21,64 @@ copied as they are; 01-prompt.md, README.md and LICENSE have `${...}` holes.
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import getpass
 import subprocess
 from pathlib import Path
 from string import Template
 
-from . import messages as msgs, paths
+from . import init_home, messages as msgs, paths
 
 # The directories of a project `.js/`, beside its jsrc.
 PROJECT_DIRS = ("agents", "skills", "commands", "toolbox")
 _KEEP = ".gitkeep"
+
+
+def parser() -> argparse.ArgumentParser:
+    """`js init [--full | -f | -b | -a [DIR]]`."""
+    p = msgs.ArgumentParser(prog="js init", allow_abbrev=False, description=msgs.INIT_DESCRIPTION.words(),
+                            epilog=msgs.INIT_EPILOG.words())
+    p.add_argument("--full", action="store_true", help=msgs.INIT_OPT_FULL.words())
+    home = p.add_mutually_exclusive_group()
+    home.add_argument("-f", "--force", action="store_true", help=msgs.INIT_OPT_FORCE.words())
+    home.add_argument("-b", "--backup", action="store_true", help=msgs.INIT_OPT_BACKUP.words())
+    home.add_argument("-a", "--archive", nargs="?", const="", metavar="DIR", help=msgs.INIT_OPT_ARCHIVE.words())
+    return p
+
+
+def agent_parser() -> argparse.ArgumentParser:
+    """`js init agent NAME`."""
+    p = msgs.ArgumentParser(prog="js init agent", allow_abbrev=False,
+                            description=msgs.INIT_AGENT_DESCRIPTION.words())
+    p.add_argument("name", metavar="NAME", help=msgs.INIT_OPT_AGENT_NAME.words())
+    return p
+
+
+def main(argv: list[str]) -> int:
+    """`js init [--full]`, or `js init agent NAME` when the first word is `agent`."""
+    if argv[:1] == ["agent"]:
+        return run_init_agent(agent_parser().parse_args(argv[1:]).name)
+    p = parser()
+    args = p.parse_args(argv)
+    if in_home(Path.cwd()):
+        if args.full:
+            p.error(msgs.INIT_FULL_IN_HOME.text())
+        archive = None if args.archive is None else (
+            Path(args.archive).expanduser() if args.archive else paths.home().parent)
+        return init_home.run(paths.home(), force=args.force, backup=args.backup, archive=archive)
+    for flag in ("force", "backup", "archive"):
+        if getattr(args, flag) not in (None, False):
+            p.error(msgs.INIT_HOME_ONLY.text(flag="--" + flag))
+    return run_init(full=args.full)
+
+
+def in_home(directory: Path) -> bool:
+    """Whether `js init` in ``directory`` is for the home: --home named it,
+    or ``directory`` is the home or holds it as `.js`."""
+    home = paths.home().resolve(strict=False)
+    here = directory.resolve(strict=False)
+    return paths.home_named() or here == home or (here / ".js").resolve(strict=False) == home
 
 
 def _text(name: str) -> str:
@@ -131,10 +182,10 @@ def _skeleton(report: _Report) -> None:
 
 
 def run_init(*, full: bool) -> int:
-    """`js --init`, and with ``full`` `js --init-full`, in the current directory."""
+    """`js init`, and with ``full`` `js init --full`, in the current directory."""
     directory = Path.cwd()
-    if (directory / ".js").resolve(strict=False) == paths.home().resolve(strict=False):
-        msgs.warn(msgs.INIT_IN_HOME, home=paths.home())
+    if directory.resolve(strict=False) == paths.user_home().resolve(strict=False):
+        msgs.warn(msgs.INIT_IN_USER_HOME, directory=directory)
         return 2
     report = _Report(directory)
     try:
@@ -157,7 +208,7 @@ def run_init(*, full: bool) -> int:
 
 
 def run_init_agent(name: str) -> int:
-    """`js --init-agent NAME`: a new agent in the home's agents directory."""
+    """`js init agent NAME`: a new agent in the home's agents directory."""
     try:
         rel = paths.agent_path(name)
     except ValueError as exc:

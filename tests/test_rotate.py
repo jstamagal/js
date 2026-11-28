@@ -1,4 +1,4 @@
-"""`js --rotate` and `--unrotate`: old sessions and logs move to the archive
+"""`js rotate` and `js rotate --restore`: old sessions and logs move to the archive
 tree, compressed, and stay listed, searchable and resumable."""
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from repl_driver import stub_screen, turn_stub
 from js import (
     archive,
     cli,
+    entry,
     memory,
     paths,
     rotate,
@@ -270,28 +271,42 @@ def test_a_dry_run_changes_nothing(project, capsys):
     _log("defaultagent/2026-09-01T1200-ab12.log")
     before = _tree(paths.home())
 
-    assert cli.main(["--rotate", "--dry-run"]) == 0
+    assert entry.main(["rotate", "--dry-run"]) == 0
 
     assert _tree(paths.home()) == before
     assert not paths.archive_root().exists()
     assert "2026-09-01T1200-ab12" in capsys.readouterr().out
 
 
-def test_unrotate_puts_one_session_back_with_its_logs(project):
+def test_a_dry_run_restore_changes_nothing(project, capsys):
+    session = _session(project, "2026-09-01T1200-ab12", "stale")
+    _log(f"defaultagent/{session.stem}.log")
+    _rotate()
+    before = _tree(paths.home())
+
+    assert entry.main(["rotate", "--restore", "--dry-run"]) == 0
+    assert entry.main(["rotate", "--restore", session.stem, "--dry-run"]) == 0
+
+    assert _tree(paths.home()) == before
+    assert not session.exists()
+    assert session.stem in capsys.readouterr().out
+
+
+def test_restore_puts_one_session_back_with_its_logs(project):
     session = _session(project, "2026-09-01T1200-ab12", "stale")
     other = _session(project, "2026-09-02T1200-ef56", "also stale")
     log = _log(f"defaultagent/{session.stem}.log")
     digest = _digest(log)
     _rotate()
 
-    assert cli.main(["--unrotate", session.stem]) == 0
+    assert entry.main(["rotate", "--restore", session.stem]) == 0
 
     assert session.is_file() and session_store.text_path(session).is_file()
     assert _digest(log) == digest
     assert archive.is_archived(other)
 
 
-def test_unrotate_puts_everything_back_and_the_tree_matches(project):
+def test_restore_puts_everything_back_and_the_tree_matches(project):
     _session(project, "2026-09-01T1200-ab12", "stale")
     _log("defaultagent/2026-09-01T1200-ab12.log")
     _log("troop/run-1.log")
@@ -305,7 +320,7 @@ def test_unrotate_puts_everything_back_and_the_tree_matches(project):
     before = kept(_tree(paths.home()))
     _rotate()
 
-    assert cli.main(["--unrotate"]) == 0
+    assert entry.main(["rotate", "--restore"]) == 0
 
     assert kept(_tree(paths.home())) == before
 
@@ -415,10 +430,10 @@ def test_gz_round_trips(project):
 
 def test_the_command_reads_the_format_and_age_settings(project):
     session = _session(project, "2026-09-01T1200-ab12", "stale", mtime=time.time() - 3 * DAY)
-    assert cli.main(["--extra", "ROTATE_FORMAT=gz", "--rotate"]) == 0
+    assert entry.main(["rotate", "--extra", "ROTATE_FORMAT=gz"]) == 0
     assert session.is_file()
 
-    assert cli.main(["--extra", "ROTATE_FORMAT=gz", "--extra", "ROTATE_AGE=2d", "--rotate"]) == 0
+    assert entry.main(["rotate", "--extra", "ROTATE_FORMAT=gz", "--extra", "ROTATE_AGE=2d"]) == 0
 
     assert archive.archive_path(session, "gz").is_file()
 

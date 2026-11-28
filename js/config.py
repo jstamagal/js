@@ -286,7 +286,7 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     project's folder first, then in ``start``'s own folder, then in every
     folder (`js.session_store.find`); a name that more than one other folder
     holds is refused. A new session is only ever created in `sessions_dir`.
-    A rotated session (`js --rotate`) is found like a live one and restored
+    A rotated session (`js rotate`) is found like a live one and restored
     to its live path before it is returned."""
     session_file = locate_session_file(sessions_dir, session, create=create, start=start)
     _session_store.restore_rotated(session_file)

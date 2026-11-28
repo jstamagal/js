@@ -36,13 +36,16 @@ persists each completed turn.
 
 | Module | Responsibility |
 | --- | --- |
-| `js/cli.py` | `main`: the run's setup, the mode picker, reading stdin into the prompt, `--compact` and `--commit` dispatch |
+| `js/cli.py` | `main`: a command when the first argument names one, else the run's setup, the mode picker, reading stdin into the prompt, `--compact` and `--commit` dispatch |
+| `js/commands.py` | the commands (`COMMANDS`): `generate`, `init`, `rotate`, each a first argument naming the module whose `main(argv)` takes the rest, with its own parser and `--help`; the list `js --help` shows |
 | `js/prompt_run.py` | the `-p` run (`run`): its steps from the prompt to the printed answer, its `on` handlers, its stats, the Continue line (`say_continue`) |
 | `js/command_line.py` | the argument parser, and argv read the way it reads it |
 | `js/cli_options.py` | invocation-local prompt and tool overrides the modes share |
 | `js/bench.py` | `--bench AGENT`: an agent over its benchmark cases, one row per case |
 | `js/commit_cli.py` | `--commit`: snapshot the worktree, then run the commit agent over it |
-| `js/init_cli.py` | `--init`, `--init-full`, `--init-agent NAME`: a project `.js/` skeleton, a README/LICENSE/.gitignore, a home agent, from `defaults/scaffold/`, never overwriting |
+| `js/init_cli.py` | `js init [--full]`, `js init agent NAME`: a project `.js/` skeleton, a README/LICENSE/.gitignore, a home agent, from `defaults/scaffold/`, never overwriting; in the home, `js.init_home` |
+| `js/init_home.py` | `js init [-f\|-b\|-a]` in the home: `defaults/` whole and the layout directories laid into it; `-a`'s tarball checked byte for byte before the moved home is removed |
+| `js/rotate.py`, `js/rotate_cli.py` | old sessions and logs into `~/.js/archive` and back (`js.archive` compresses one file per original); `js rotate [AGE]`, `js rotate --restore [SESSION]`, each with `--dry-run` |
 | `js/listings.py` | the `--list-*` printers, as text or JSON |
 | `js/migrate_config.py` | `--migrate-config`: a legacy `config.toml` as a jsrc set-script |
 | `js/run_assembly.py` | config, agent and model settled into a run (`settle`), the turn `-p`, the REPL, `--bench` and swarm agents start from |

@@ -661,6 +661,15 @@ GENERATE_OPERATIONS = {
     "stt": Message("Transcribe a recording."),
 }
 
+# The commands of `js.commands`, as `js --help` lists them.
+COMMANDS_HEADING = Message("COMMANDS", banner=False)
+COMMANDS_HELP = Message("Show the options of a command.", banner=False)
+COMMANDS_ROW = Message("  js {name}   {summary}", banner=False)
+COMMAND_GENERATE = Message("Generate images, video, music and speech.", banner=False)
+COMMAND_INIT = Message("Make this directory a js project, or lay the stock setup into the home.", banner=False)
+COMMAND_ROTATE = Message("Move old sessions and logs to ~/.js/archive; --restore puts them back.", banner=False)
+COMMAND_CLEANUP = Message("Archive old work in the agent workspaces on a clock, with its junk gone.", banner=False)
+
 SHORT_HELP = Message(
     'js — one agent, one terminal.\n'
     '\n'
@@ -679,15 +688,14 @@ SHORT_HELP = Message(
     '  js --login                          Sign in to a provider.\n'
     '  js --verify                         Check agents and tool configuration.\n'
     '  js --bench AGENT                    Run an agent benchmark.\n'
-    '  js generate --help                   Generate images, video, music and speech.\n'
     '  js --acp                            Serve Agent Client Protocol over stdio.\n'
     '  js --commit                         Run the commit agent.\n'
-    '  js --init                           Make this directory a js project.\n'
-    '  js --init-agent NAME                Make a new agent in the home.\n'
     '  js -p "task" --json                  Print one final JSON object.\n'
     '  js -p "task" --json-stream           Stream JSON Lines during the run.\n'
     '  js -p "task" --loop 10               Repeat fresh turns.\n'
     '  js                                  Open the interactive REPL.\n'
+    '\n'
+    '{commands}\n'
     '\n'
     'RUN SETTINGS\n'
     '  -r WORD                 Reasoning effort sent to the provider; any word.\n'
@@ -704,7 +712,7 @@ SHORT_HELP = Message(
     '  --debug-file PATH       Write the full request trace.\n'
     '  --help-full             Show every option, grouped by job.\n'
     '\n'
-    'COMMANDS\n'
+    'EXAMPLES\n'
     '  js -p "task"\n'
     '  js --agent defaultagent -p "task"\n'
     '  js -u http://qwen3:27b@box:11434/v1 -p "hello"\n'
@@ -834,9 +842,6 @@ ACP_HELP_UNSUPPORTED = Message("Run help separately from --acp.")
 OPT_JSON = Message("Print the completed run or listing as one JSON object.")
 OPT_JSON_STREAM = Message("Stream JSON Lines while the run executes.")
 OPT_LIST_SESSIONS = Message("List saved sessions; requires --json.")
-OPT_ROTATE = Message("Move sessions and logs not modified in AGE to ~/.js/archive, compressed. AGE: 30d, >30d, <7d, 12h, 2w; ROTATE_AGE by default.")
-OPT_UNROTATE = Message("Put rotated files back: every one, or SESSION's record, text, subagent runs and logs.")
-OPT_DRY_RUN = Message("With --rotate or --unrotate: list what would move and the bytes, and change nothing.")
 OPT_LIST_AGENTS = Message("List available agents.")
 OPT_LIST_PROVIDERS = Message("List providers; requires --json.")
 OPT_LIST_LOGINS = Message("List saved logins; requires --json.")
@@ -858,14 +863,53 @@ OPT_REFRESH_MODEL_CATALOG = Message("Force-refresh js's local models.dev catalog
 OPT_COMMIT = Message(
     "Run the built-in commit agent against the target dir, the cwd by default. A missing repo is initialized.")
 OPT_COMPACT = Message("Compact an existing session id or path offline, append-only.")
-OPT_INIT = Message("Make the current directory a js project: git init outside a repository, and a .js/ "
-                   "with an empty jsrc and agents/, skills/, commands/ and toolbox/. Never overwrites.")
-OPT_INIT_FULL = Message("--init, plus a README.md, an MIT LICENSE and a .gitignore, each only if missing.")
-OPT_INIT_AGENT = Message("Make a new agent NAME in the home's agents directory from the scaffold templates.")
+# `js init` and `js init agent NAME`.
+INIT_DESCRIPTION = Message("Make the current directory a js project: git init outside a repository, and a .js/ "
+                           "with an empty jsrc and agents/, skills/, commands/ and toolbox/. Never overwrites. "
+                           "js init agent NAME makes a new agent in the home instead.")
+INIT_EPILOG = Message("In the js home, in the directory holding it as .js, or with --home naming it, js init "
+                      "copies the stock setup, all of defaults/, into the home instead, and makes every "
+                      "directory of the layout; it never runs git there. The home's copies are read instead of "
+                      "the shipped ones until js init -f refreshes them.")
+INIT_OPT_FULL = Message("For a project: also a README.md, an MIT LICENSE and a .gitignore, each only if missing.")
+INIT_OPT_FORCE = Message("For the home: stock files replace the home's files of the same name; "
+                         "files the stock setup does not have are left alone.")
+INIT_OPT_ARCHIVE = Message("For the home: what --backup does, then HOME-YYYY-MM-DD.tar.gz of the moved home, "
+                           "beside the home or in DIR. Once the tarball is checked byte for byte, it asks before "
+                           "deleting the moved home.")
+INIT_OPT_BACKUP = Message("For the home: move it aside to HOME-YYYY-MM-DD, then make a new home from the stock "
+                          "setup. Sessions, logs, logins and everything else stay in the old one.")
+INIT_AGENT_DESCRIPTION = Message("Make a new agent NAME in the home's agents directory from the scaffold templates.")
+INIT_OPT_AGENT_NAME = Message("The agent's name; a:b makes agent b inside agent a.")
 INIT_MADE = Message("Made {made} in {directory}.")
 INIT_MADE_LEFT_ALONE = Message("Made {made} in {directory}; left alone: {kept}.")
 INIT_NOTHING_MADE = Message("Nothing to make in {directory}; already there: {kept}.")
-INIT_IN_HOME = Message("Not here: .js in this directory is the js home, {home}.")
+INIT_IN_USER_HOME = Message("Not here: {directory} is your home directory, and its .js is not the js home. "
+                            "Run js init there with --home naming the js home to set that up.")
+INIT_FULL_IN_HOME = Message("--full is for a project; in the js home, js init lays down the stock setup.")
+INIT_HOME_ONLY = Message("{flag} is for the js home; in a project, js init never replaces anything.")
+INIT_HOME_MADE = Message("Made {files} and {dirs} in {home}; left alone {kept} already there.")
+INIT_HOME_NOTHING_MADE = Message("Nothing to make in {home}; left alone {kept} already there.")
+INIT_HOME_REPLACED = Message("Replaced {path}")
+INIT_HOME_MOVED = Message("Moved {home} to {moved}.")
+INIT_HOME_ARCHIVING = Message("Writing {path}; a big home takes minutes. The new home is ready now.")
+INIT_HOME_ARCHIVED = Message("Created {path}, checked byte for byte with {hash}.")
+INIT_HOME_ARCHIVE_DIR_MISSING = Message("{directory} is not a directory; nothing moved")
+INIT_HOME_ARCHIVE_DIR_READ_ONLY = Message("{directory} is not writable; nothing moved")
+INIT_HOME_ARCHIVE_DIR_IN_HOME = Message("{directory} is inside the home, which moves; nothing moved")
+INIT_HOME_DELETE_ASK = Message("Delete {path}? [y/N] ", banner=False)
+INIT_HOME_KEPT = Message("Kept {moved}; the tarball holds it too.")
+INIT_HOME_HASHER_FAILED = Message("b3sum failed: {error}; comparing with sha256 instead.")
+INIT_HOME_ARCHIVE_FAILED = Message("Could not write {path}, removed it: {error}. {moved} is as it was.")
+INIT_HOME_ARCHIVE_INCOMPLETE = Message("the tarball does not hold {count} of the paths, {first} first")
+INIT_HOME_ARCHIVE_EXTRA = Message("the tarball holds {member}, which the moved home does not")
+INIT_HOME_ARCHIVE_DIFFERS = Message("the tarball's {member} differs from the moved home's")
+INIT_HOME_ARCHIVE_UNREADABLE = Message("the tarball does not read back: {error}")
+INIT_HOME_REMOVE_FAILED = Message("The tarball is complete, but removing {moved} stopped: {error}")
+INIT_HOME_LEFT = Message("Left {paths} in {moved} that the tarball does not hold.")
+INIT_HOME_LIVE = Message("Not moving the home: session {session} is running.")
+INIT_HOME_DIFFER = Message("Differ from the stock setup, and js init -f replaces them: {files}")
+INIT_HOME_DIFFER_PATH = Message("  {path}", banner=False)
 INIT_GIT_FAILED = Message("git init failed: {error}")
 INIT_TEMPLATE_MISSING = Message("Scaffold template missing: {path}")
 INIT_AGENT_EXISTS = Message("Agent {agent} already exists at {path}; nothing made.")
@@ -1245,11 +1289,17 @@ ROTATE_SKIPPED = Message("Skipped {path}: {why}")
 ROTATE_SKIP_IN_USE = Message("in use", banner=False)
 ROTATE_SKIP_CHANGED = Message("written to while it was archived", banner=False)
 ROTATE_SKIP_CONFLICT = Message("its archive {archive} holds other bytes", banner=False)
-UNROTATE_WOULD = Message("{size:>10}  {path}", banner=False)
-UNROTATE_DRY_SUMMARY = Message("Would restore {files} files, {size} archived.")
-UNROTATE_SUMMARY = Message("Restored {files} files, {size} in all.")
-ROTATE_EXCLUSIVE = Message("--rotate and --unrotate run alone: no prompt, session, agent or other mode beside them.")
-DRY_RUN_NEEDS_ROTATE = Message("--dry-run goes with --rotate or --unrotate.")
+RESTORE_WOULD = Message("{size:>10}  {path}", banner=False)
+RESTORE_DRY_SUMMARY = Message("Would restore {files} files, {size} archived.")
+RESTORE_SUMMARY = Message("Restored {files} files, {size} in all.")
+# `js rotate`.
+ROTATE_DESCRIPTION = Message("Move sessions and logs not modified in AGE to ~/.js/archive, compressed one file "
+                             "per original; with --restore, put archived files back. Rotated sessions are still "
+                             "listed, searched and resumed.")
+ROTATE_OPT_AGE = Message("30d, >30d, <7d, 12h, 2w; the ROTATE_AGE setting by default.")
+ROTATE_OPT_RESTORE = Message("Put rotated files back: every one, or SESSION's record, text, subagent runs and logs.")
+ROTATE_OPT_DRY_RUN = Message("List what would move and the bytes, and change nothing.")
+ROTATE_RESTORE_WITH_AGE = Message("--restore takes a session, not an age: {age}")
 SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
@@ -1716,6 +1766,8 @@ TOOL_SIZE_MEGABYTES = Message("{value:.1f} MB", banner=False)
 COUNT_ONE = Message("{number} {noun}", banner=False)
 
 COUNT_MANY = Message("{number} {noun}s", banner=False)
+COUNT_DIRECTORY = Message("{number} directory", banner=False)
+COUNT_DIRECTORIES = Message("{number} directories", banner=False)
 
 TOOL_EXIT_CODE = Message("exit {exit_code}", banner=False)
 

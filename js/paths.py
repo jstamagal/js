@@ -25,7 +25,7 @@ whole structure is always there:
       plans/         plan tool output
       probes/        browser screenshots, terminal snapshots
 
-`archive/` is not part of it: `js --rotate` makes it, a mirror of the paths
+`archive/` is not part of it: `js rotate` makes it, a mirror of the paths
 above holding the files it compressed (`archive_root`).
 
 The locations js used before this layout are listed in `legacy_homes()`;
@@ -44,6 +44,8 @@ from . import agent_files
 
 _ROOT = Path(os.path.realpath(__file__)).parent.parent
 _HOME: Path | None = None
+# Whether the command line named the home with --home.
+_HOME_NAMED = False
 _PROJECT_SCOPES = frozenset({"agents", "skills", "commands", "toolbox", "jsrc", "jsrc.local", "tools.yaml"})
 
 
@@ -66,7 +68,7 @@ def home() -> Path:
 
 def configure_home(directory: str | Path | None = None) -> Path:
     """Resolve and create the selected profile once at invocation startup."""
-    global _HOME
+    global _HOME, _HOME_NAMED
     value = directory if directory is not None else os.environ.get("JS_HOME") or default_home()
     selected = Path(value).expanduser().resolve(strict=False)
     if selected.exists() and not selected.is_dir():
@@ -76,8 +78,14 @@ def configure_home(directory: str | Path | None = None) -> Path:
     except OSError as exc:
         raise ValueError(f"cannot create home {selected}: {exc}") from exc
     _HOME = selected
+    _HOME_NAMED = directory is not None
     os.environ["JS_HOME"] = str(selected)
     return selected
+
+
+def home_named() -> bool:
+    """Whether this invocation's command line named the home (--home)."""
+    return _HOME_NAMED
 
 
 def custom_home() -> bool:
