@@ -793,7 +793,13 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
         permanent, refusal = policy.removal_decision(context, permanent=permanent, size=size)
         if refusal is not None:
             return refusal
-        _snapshot_remove_target(context, target)
+        if size > maximum:
+            # Past the trash limit the delete is permanent and confirmed; a
+            # snapshot would hold the whole tree in memory for the session.
+            context.undo.record(target, {"kind": "unavailable",
+                                         "reason": f"{target} was over TRASH_BYTES_MAX when removed"})
+        else:
+            _snapshot_remove_target(context, target)
         if not permanent:
             error = _trash_target(target, context)
             if error:

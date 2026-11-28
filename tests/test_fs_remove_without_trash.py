@@ -78,3 +78,15 @@ def test_trash_remove_without_trash_refuses_and_leaves_the_file(trashless_box):
     assert result.startswith("ERROR")
     assert target.read_bytes() == b"keep me\n"
     assert not context.undo.count(target)
+
+
+def test_remove_over_the_trash_limit_keeps_no_snapshot_in_memory(tmp_path):
+    tree = tmp_path / "build"
+    tree.mkdir()
+    (tree / "lib.so").write_bytes(b"\0" * 4096)
+    context = ToolContext(cwd=tmp_path)
+    context.trash_bytes_max = 1024
+
+    assert fs.remove(str(tree), permanent=True, context=context).startswith("removed")
+
+    assert "unusable snapshot" in fs.undo(str(tree), context=context)

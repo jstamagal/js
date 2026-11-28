@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- `remove` no longer snapshots a path over `TRASH_BYTES_MAX` before deleting it permanently. The snapshot held the whole tree in memory for the session (662 MiB peak for a 600 MiB directory); such a removal now cannot be undone, as its description says.
+
 - **Subagents run alongside the main agent, which watches, stops and talks to them.** Modelled on Claude Code's background agents and Codex CLI's multi-agent tools; `docs/subagents.md` has the comparison.
   - The main agent's `task` and named-agent calls return handles at once (`t1` for the task, `t1.1`, `t1.2` for its subagents) and the subagents run while it works or answers you. `background=false` waits as before; a subagent's own calls still wait by default.
   - `task` actions: `list`; `poll` shows each subagent's state, tool calls, latest text and session file; `kill` stops the task or one subagent; `send` talks to a subagent, read at its next tool call while it runs (in a further turn before it finishes when it makes none), or answered in a new turn on its own session once it has finished; `wait` as before.
