@@ -729,27 +729,22 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
         )
     replacing = target.exists()
     if replacing:
-        # One read of any page is the gate: it shows the model what the file
-        # is. The hash proves nothing moved since; the snapshot makes the
-        # discard undoable.
         try:
             current = file_bytes.read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
         current_hash = file_bytes.hash_bytes(current)
-        action = "append to it" if append else "overwrite it"
         if expected_hash:
-            # The hash the model expects is its proof of what it replaces: a
-            # match needs no read, a mismatch names both and writes nothing.
-            guard = None if expected_hash.strip() == current_hash else (
-                f'ERROR: {target} has hash {current_hash}, not the expected {expected_hash.strip()}; nothing was written. Read it, then retry.'
-            )
-        else:
+            if expected_hash.strip() != current_hash:
+                return f'ERROR: {target} has hash {current_hash}, not the expected {expected_hash.strip()}; nothing was written. Read it, then retry.'
+        elif not append:
+            # One page identifies the file, and the hash checks that it has
+            # stayed the same since the read.
             guard = changed_since_read(
-                context, target, action, current, current_hash, edits_lines=False
-            ) or require_read(context, target, action, content_hash=current_hash)
-        if guard:
-            return guard
+                context, target, "overwrite it", current, current_hash, edits_lines=False
+            ) or require_read(context, target, "overwrite it", content_hash=current_hash)
+            if guard:
+                return guard
     try:
         data = _encode_preserving_existing_newlines(target, content)
     except (OSError, UnicodeEncodeError) as exc:
@@ -759,30 +754,30 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(written)
+        if append:
+            with target.open("ab") as stream:
+                stream.write(data)
+        else:
+            target.write_bytes(written)
     except OSError as exc:
         return f"ERROR: {exc}"
     _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
          after=written.decode("utf-8", errors="replace"), bytes=len(written))
     content_hash = file_bytes.hash_bytes(written)
-    total = len(written.decode("utf-8", errors="replace").splitlines())
     if appending:
-        # The model has seen what it read of the old content and every line
-        # it added; a line the old content left unfinished continues there.
+        # Carry coverage forward when it describes the bytes we appended to.
         coverage = context.reads.coverage(target)
-        same = coverage.content_hash == current_hash
-        whole = same and coverage.whole
-        ranges = coverage.ranges if same else []
-        old_total = len(current.decode("utf-8", errors="replace").splitlines())
-        first = old_total if current and not current.endswith(b"\n") else old_total + 1
-        if data and first <= total:
-            ranges.append((max(1, first), total))
-        context.reads.replace(target, content_hash, [] if whole else ranges, total, whole_file=whole)
-        context.reads.remember_content(target, content_hash, written)
+        if coverage.content_hash == current_hash:
+            total = len(written.decode("utf-8", errors="replace").splitlines())
+            old_total = len(current.decode("utf-8", errors="replace").splitlines())
+            if data and old_total < total:
+                coverage.ranges.append((old_total + 1, total))
+            context.reads.replace(target, content_hash, coverage.ranges, total, whole_file=coverage.whole)
+            context.reads.remember_content(target, content_hash, written)
         return f"appended {len(data)} bytes to {target} (hash {content_hash})"
     # The model wrote every byte of the new content, so the file counts as
     # fully read: a patch can follow without a read in between.
-    context.reads.replace(target, content_hash, [], total, whole_file=True)
+    context.reads.replace(target, content_hash, [], len(data.decode("utf-8").splitlines()), whole_file=True)
     context.reads.remember_content(target, content_hash, written)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
