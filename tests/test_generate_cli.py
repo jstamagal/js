@@ -10,7 +10,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from js import cli, generate_cli, generate_writer, logins
+from js import cli, generate_writer, logins
 
 
 def encoded(fmt="PNG"):
