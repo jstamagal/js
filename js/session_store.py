@@ -143,7 +143,7 @@ def text_path(session_file: Path) -> Path:
 
 
 def restore_rotated(session_file: Path) -> bool:
-    """Bring a rotated session (`js --rotate`) back to its live path, its
+    """Bring a rotated session (`js rotate`) back to its live path, its
     `.txt` with it, and say so on stderr. True when it was rotated."""
     session_file = Path(session_file)
     if session_file == Path(os.devnull) or not archive.restore(session_file):
@@ -397,7 +397,7 @@ def _open_locked(session_file: Path, mode: str, **open_kw):
     attempt_mode = mode
     for attempt in range(3):
         if attempt:
-            # `js --rotate` may have moved it to the archive under our lock wait.
+            # `js rotate` may have moved it to the archive under our lock wait.
             restore_rotated(session_file)
         stream = open(session_file, attempt_mode, **open_kw)
         try:

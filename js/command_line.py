@@ -10,18 +10,23 @@ import sys
 from dataclasses import dataclass, fields
 from typing import Any
 
-from . import messages as msgs, paths, sampling as sampling_mod
+from . import commands, messages as msgs, paths, sampling as sampling_mod
 
 
 class _ShortHelpAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        parser._print_message(msgs.SHORT_HELP.words(), sys.stdout)
+        parser._print_message(msgs.SHORT_HELP.words(commands=commands.listing()), sys.stdout)
         parser.exit()
+
+
+class _HelpFormatter(msgs._HelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """The js help, its closing list of commands laid out as written."""
 
 
 def parser() -> argparse.ArgumentParser:
     """The parser that defines the js command line."""
-    js = msgs.ArgumentParser(add_help=False, allow_abbrev=False)
+    js = msgs.ArgumentParser(add_help=False, allow_abbrev=False, formatter_class=_HelpFormatter,
+                             epilog=commands.listing())
     groups = {name: js.add_argument_group(name) for name in (
         'RUNNING',
         'PROMPT',
@@ -100,10 +105,6 @@ def parser() -> argparse.ArgumentParser:
     isolate_group.add_argument("--no-isolate", action="store_true", help=msgs.OPT_NO_ISOLATE.words())
     groups['CONFIG'].add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.words())
     groups['SESSIONS'].add_argument("--list-sessions", action="store_true", help=msgs.OPT_LIST_SESSIONS.words())
-    rotate_group = groups['SESSIONS'].add_mutually_exclusive_group()
-    rotate_group.add_argument("--rotate", nargs="?", const="", metavar="AGE", help=msgs.OPT_ROTATE.words())
-    rotate_group.add_argument("--unrotate", nargs="?", const="", metavar="SESSION", help=msgs.OPT_UNROTATE.words())
-    groups['SESSIONS'].add_argument("--dry-run", action="store_true", help=msgs.OPT_DRY_RUN.words())
     groups['RUNNING'].add_argument("--list-agents", action="store_true", help=msgs.OPT_LIST_AGENTS.words())
     groups['SESSIONS'].add_argument("--last", action="store_true", help=msgs.OPT_LAST.words())
     groups['OUTPUT & DEBUG'].add_argument("--json", action="store_true", help=msgs.OPT_JSON.words())
@@ -115,10 +116,6 @@ def parser() -> argparse.ArgumentParser:
     groups['MODES'].add_argument("--acp", action="store_true", help=msgs.OPT_ACP.words())
     groups['MODES'].add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.words())
     groups['MODES'].add_argument("--compact", metavar="SESSION", help=msgs.OPT_COMPACT.words())
-    init_group = groups['MODES'].add_mutually_exclusive_group()
-    init_group.add_argument("--init", action="store_true", help=msgs.OPT_INIT.words())
-    init_group.add_argument("--init-full", action="store_true", help=msgs.OPT_INIT_FULL.words())
-    init_group.add_argument("--init-agent", metavar="NAME", help=msgs.OPT_INIT_AGENT.words())
     groups['WHAT THE MODEL GETS'].add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
                         help=msgs.OPT_IM_A_PUSSY.words())
     groups['WHAT THE MODEL GETS'].add_argument("-i", "--no-shell-history", dest="no_shell_history", action="store_true",

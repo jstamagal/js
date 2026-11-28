@@ -151,8 +151,8 @@ Themes, tool descriptions, help, snippets and scaffold templates use stock and h
 js --home ~/profiles/review -p "review this change"
 JS_HOME=~/profiles/chat js --chat -p "hello"
 js --list-agents
-js --init
-js --init-agent NAME
+js init
+js init agent NAME
 js --list-models --json
 js --list-sessions --json
 js --list-providers --json

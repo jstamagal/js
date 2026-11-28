@@ -1,6 +1,6 @@
-"""`js --rotate [AGE]` and `js --unrotate [SESSION]`: move old session records
-and logs into the archive tree, compressed one file per original
-(`js.archive`), and bring them back.
+"""Move old session records and logs into the archive tree, compressed one
+file per original (`js.archive`), and bring them back. `js rotate` is the
+command (`js.rotate_cli`).
 
 What one rotation takes, for every session file under the sessions folders
 (`js.session_store.folders`, subagent runs included) whose modification
@@ -20,7 +20,6 @@ read), and a session whose lock a writer holds.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import fcntl
 import os
@@ -37,7 +36,6 @@ from . import (
     session_catalog,
     session_store,
     session_text,
-    settings,
 )
 
 _UNITS = {"h": 3600, "d": 86400, "w": 7 * 86400}
@@ -77,31 +75,6 @@ def parse_age(text: str) -> Age:
         raise ValueError(msgs.ROTATE_BAD_AGE.said(age=text))
     sign, number, unit = match.groups()
     return Age(older=sign != "<", seconds=float(number) * _UNITS[unit])
-
-
-def _format(value: object) -> str:
-    fmt = str(value or "").strip()
-    if fmt not in archive.FORMATS:
-        raise ValueError(msgs.ROTATE_BAD_FORMAT.said(format=fmt, formats=", ".join(archive.FORMATS)))
-    return fmt
-
-
-def _floor(value: object) -> float:
-    text = str(value or "").strip()
-    if text in ("", "0"):
-        return 0.0
-    age = parse_age(text)
-    return age.seconds
-
-
-def _size(count: float) -> str:
-    if count < 1024:
-        return msgs.ROTATE_SIZE_BYTES.words(count=int(count))
-    for unit in ("KB", "MB", "GB"):
-        count /= 1024
-        if count < 1024 or unit == "GB":
-            return msgs.ROTATE_SIZE.words(value=count, unit=unit)
-    raise AssertionError("unreachable")
 
 
 def _open_files() -> set[tuple[int, int]]:
@@ -215,7 +188,7 @@ def plan(age: Age, *, now: float | None = None, floor: float = 0.0,
     return result
 
 
-def _sizes(files: list[Path]) -> list[tuple[Path, int]]:
+def sizes(files: list[Path]) -> list[tuple[Path, int]]:
     sized = []
     for path in files:
         with contextlib.suppress(OSError):
@@ -228,7 +201,7 @@ def estimate(files: list[Path], fmt: str) -> int:
     the largest compressed from its first 8 MiB, up to 128 MiB in all, the
     rest at their combined ratio. The whole of a long log compresses better
     than its start, so this tends to be high."""
-    sized = sorted(_sizes(files), key=lambda item: -item[1])
+    sized = sorted(sizes(files), key=lambda item: -item[1])
     sampled_in = sampled_out = 0
     estimated = 0.0
     rest = 0
@@ -388,7 +361,7 @@ def session_archived_files(session: Path) -> list[Path]:
     return [path for path in [*own, *logs] if archive.is_archived(path)]
 
 
-def _restore_all(files: list[Path]) -> tuple[int, int, list[tuple[Path, str]]]:
+def restore_all(files: list[Path]) -> tuple[int, int, list[tuple[Path, str]]]:
     restored = size = 0
     failed: list[tuple[Path, str]] = []
     for live in files:
@@ -399,68 +372,3 @@ def _restore_all(files: list[Path]) -> tuple[int, int, list[tuple[Path, str]]]:
         except OSError as exc:
             failed.append((live, str(exc)))
     return restored, size, failed
-
-
-# --- the command line ------------------------------------------------------------
-
-
-def _report_skipped(skipped: list[tuple[Path, str]]) -> None:
-    for path, why in skipped:
-        msgs.warn(msgs.ROTATE_SKIPPED, path=path, why=why)
-
-
-def run_rotate(args: argparse.Namespace) -> int:
-    """`js --rotate [AGE] [--dry-run]`."""
-    try:
-        age = parse_age(args.rotate or str(settings.live_value("ROTATE_AGE") or ""))
-        fmt = _format(settings.live_value("ROTATE_FORMAT"))
-        floor = _floor(settings.live_value("ROTATE_AGE_MIN"))
-    except ValueError as exc:
-        msgs.warn(msgs.FAILED, error=exc)
-        return 2
-    if args.dry_run:
-        selected = plan(age, floor=floor)
-        sized = _sizes(selected.files())
-        for path, size in sized:
-            msgs.say(msgs.ROTATE_WOULD, size=_size(size), path=path)
-        for path in selected.in_use:
-            msgs.say(msgs.ROTATE_WOULD_SKIP, path=path)
-        before = sum(size for _, size in sized)
-        after = estimate([path for path, _ in sized], fmt)
-        msgs.say(msgs.ROTATE_DRY_SUMMARY, files=len(sized), before=_size(before), after=_size(after),
-                 freed=_size(before - after), format=fmt)
-        return 0
-    tally = rotate(age, fmt, floor=floor)
-    _report_skipped(tally.skipped)
-    msgs.say(msgs.ROTATE_SUMMARY, files=tally.files, before=_size(tally.before), after=_size(tally.after),
-             skipped=len(tally.skipped), archive=paths.archive_root())
-    return 1 if tally.failed else 0
-
-
-def run_unrotate(args: argparse.Namespace) -> int:
-    """`js --unrotate [SESSION] [--dry-run]`: every archived file, or one
-    session's, back to its live path."""
-    if args.unrotate:
-        from .config import locate_session_file
-
-        try:
-            session = locate_session_file(session_store.project_folder(Path.cwd()), args.unrotate)
-        except ValueError as exc:
-            msgs.warn(msgs.FAILED, error=exc)
-            return 2
-        files = session_archived_files(session)
-    else:
-        files = archived_files()
-    if args.dry_run:
-        total = 0
-        for live in files:
-            found = archive.located(live)
-            size = found.stat().st_size if found is not None else 0
-            total += size
-            msgs.say(msgs.UNROTATE_WOULD, size=_size(size), path=live)
-        msgs.say(msgs.UNROTATE_DRY_SUMMARY, files=len(files), size=_size(total))
-        return 0
-    restored, size, failed = _restore_all(files)
-    _report_skipped(failed)
-    msgs.say(msgs.UNROTATE_SUMMARY, files=restored, size=_size(size))
-    return 1 if failed else 0

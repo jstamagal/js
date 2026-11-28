@@ -1,4 +1,4 @@
-"""`js --init`, `js --init-full` and `js --init-agent NAME`."""
+"""`js init`, `js init --full` and `js init agent NAME`."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, config, init_cli, paths, persona, settings
+from js import config, entry, init_cli, paths, persona, settings
 from js.toolkit import policy, registry
 
 _SKELETON = {".js/jsrc", *(f".js/{name}/.gitkeep" for name in init_cli.PROJECT_DIRS)}
@@ -40,7 +40,7 @@ def _snapshot(directory: Path) -> dict[str, bytes]:
 
 
 def test_init_makes_a_repository_and_the_skeleton(project):
-    assert cli.main(["--init"]) == 0
+    assert entry.main(["init"]) == 0
     assert (project / ".git").is_dir()
     assert _files(project) == _SKELETON
     assert (project / ".js/jsrc").read_bytes() == b""
@@ -55,7 +55,7 @@ def test_init_inside_a_repository_does_not_run_git_init(project, monkeypatch):
     sub.mkdir()
     (project / ".git/js-marker").write_text("kept")
     monkeypatch.chdir(sub)
-    assert cli.main(["--init"]) == 0
+    assert entry.main(["init"]) == 0
     assert not (sub / ".git").exists()
     assert (project / ".git/js-marker").read_text() == "kept"
     assert (project / ".git/HEAD").read_bytes() == head
@@ -128,7 +128,7 @@ def test_the_skeleton_adds_no_agent_command_skill_or_tool(project):
 def test_init_full_adds_readme_license_gitignore(project):
     _git(project, "init", "-q")
     _git(project, "config", "user.name", "Ada Example")
-    assert cli.main(["--init-full"]) == 0
+    assert entry.main(["init", "--full"]) == 0
     assert _files(project) == _SKELETON | _FULL
     assert "proj" in (project / "README.md").read_text()
     license_text = (project / "LICENSE").read_text()
@@ -160,7 +160,7 @@ def test_the_gitignore_ignores_secrets_and_local_settings_only(project):
 
 
 def test_init_agent_makes_the_agent_in_the_home(project):
-    assert cli.main(["--init-agent", "dan"]) == 0
+    assert entry.main(["init", "agent", "dan"]) == 0
     agent = paths.global_agents_dir() / "dan"
     assert {path.name for path in agent.iterdir()} == {"agent.yaml", "01-prompt.md"}
     assert "dan" in paths.agent_names()
@@ -172,7 +172,7 @@ def test_init_agent_makes_the_agent_in_the_home(project):
 
 def test_init_agent_respects_the_home_flag(project, tmp_path):
     other = tmp_path / "other-home"
-    assert cli.main(["--home", str(other), "--init-agent", "dan"]) == 0
+    assert entry.main(["--home", str(other), "init", "agent", "dan"]) == 0
     assert (other / "agents/dan/agent.yaml").is_file()
 
 
@@ -186,7 +186,7 @@ def test_init_agent_refuses_an_existing_agent(project):
     agent = paths.global_agents_dir() / "dan"
     agent.mkdir(parents=True)
     (agent / "01-prompt.md").write_text("mine\n")
-    assert cli.main(["--init-agent", "dan"]) != 0
+    assert entry.main(["init", "agent", "dan"]) != 0
     assert {path.name for path in agent.iterdir()} == {"01-prompt.md"}
     assert (agent / "01-prompt.md").read_text() == "mine\n"
 
@@ -194,7 +194,7 @@ def test_init_agent_refuses_an_existing_agent(project):
 @pytest.mark.parametrize("name", ["bad name", "../up", "a::b", ""])
 def test_init_agent_refuses_an_invalid_name(project, name):
     before = sorted(paths.global_agents_dir().rglob("*")) if paths.global_agents_dir().exists() else []
-    assert cli.main(["--init-agent", name]) != 0
+    assert entry.main(["init", "agent", name]) != 0
     after = sorted(paths.global_agents_dir().rglob("*")) if paths.global_agents_dir().exists() else []
     assert after == before
 
@@ -221,8 +221,8 @@ def test_every_stock_agent_template_entry_selects_a_tool():
         assert any(rule.matches(tool) for tool in tools), rule.entry.text
 
 
-def test_init_modes_refuse_json(project):
+def test_init_refuses_json(project):
     with pytest.raises(SystemExit) as refused:
-        cli.main(["--init", "--json"])
+        entry.main(["init", "--json"])
     assert refused.value.code == 2
     assert not (project / ".js").exists()

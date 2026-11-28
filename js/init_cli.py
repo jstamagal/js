@@ -1,10 +1,10 @@
-"""`js --init`, `js --init-full` and `js --init-agent NAME`: scaffolding.
+"""`js init`, `js init --full` and `js init agent NAME`: scaffolding.
 
-`--init` makes the current directory a js project: a git repository when it
+`js init` makes the current directory a js project: a git repository when it
 is not inside one, and a `.js/` holding an empty `jsrc` and the `agents/`,
 `skills/`, `commands/` and `toolbox/` directories, each kept in git by a
-`.gitkeep`. `--init-full` adds a README.md, a LICENSE and a .gitignore.
-`--init-agent NAME` makes `<home>/agents/NAME/` with an agent.yaml and a
+`.gitkeep`. `--full` adds a README.md, a LICENSE and a .gitignore.
+`js init agent NAME` makes `<home>/agents/NAME/` with an agent.yaml and a
 01-prompt.md.
 
 Nothing that exists is written to: a file is created with exclusive mode and
@@ -17,6 +17,7 @@ copied as they are; 01-prompt.md, README.md and LICENSE have `${...}` holes.
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import getpass
 import subprocess
@@ -28,6 +29,28 @@ from . import messages as msgs, paths
 # The directories of a project `.js/`, beside its jsrc.
 PROJECT_DIRS = ("agents", "skills", "commands", "toolbox")
 _KEEP = ".gitkeep"
+
+
+def parser() -> argparse.ArgumentParser:
+    """`js init [--full]`."""
+    p = msgs.ArgumentParser(prog="js init", allow_abbrev=False, description=msgs.INIT_DESCRIPTION.words())
+    p.add_argument("--full", action="store_true", help=msgs.INIT_OPT_FULL.words())
+    return p
+
+
+def agent_parser() -> argparse.ArgumentParser:
+    """`js init agent NAME`."""
+    p = msgs.ArgumentParser(prog="js init agent", allow_abbrev=False,
+                            description=msgs.INIT_AGENT_DESCRIPTION.words())
+    p.add_argument("name", metavar="NAME", help=msgs.INIT_OPT_AGENT_NAME.words())
+    return p
+
+
+def main(argv: list[str]) -> int:
+    """`js init [--full]`, or `js init agent NAME` when the first word is `agent`."""
+    if argv[:1] == ["agent"]:
+        return run_init_agent(agent_parser().parse_args(argv[1:]).name)
+    return run_init(full=parser().parse_args(argv).full)
 
 
 def _text(name: str) -> str:
@@ -131,7 +154,7 @@ def _skeleton(report: _Report) -> None:
 
 
 def run_init(*, full: bool) -> int:
-    """`js --init`, and with ``full`` `js --init-full`, in the current directory."""
+    """`js init`, and with ``full`` `js init --full`, in the current directory."""
     directory = Path.cwd()
     if (directory / ".js").resolve(strict=False) == paths.home().resolve(strict=False):
         msgs.warn(msgs.INIT_IN_HOME, home=paths.home())
@@ -157,7 +180,7 @@ def run_init(*, full: bool) -> int:
 
 
 def run_init_agent(name: str) -> int:
-    """`js --init-agent NAME`: a new agent in the home's agents directory."""
+    """`js init agent NAME`: a new agent in the home's agents directory."""
     try:
         rel = paths.agent_path(name)
     except ValueError as exc:

@@ -1,6 +1,7 @@
-"""The `js` command line: parse it, settle the run's setup, and run the mode
-it names: a listing, --init, --bench, --compact, --commit, a -p run
-(`js.prompt_run`), or the REPL (`js.repl`)."""
+"""The `js` command line: a command (`js.commands`) when the first argument
+names one; else parse it, settle the run's setup, and run the mode it names:
+a listing, --bench, --compact, --commit, a -p run (`js.prompt_run`), or the
+REPL (`js.repl`)."""
 
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from pathlib import Path
 from . import (
     agent_lock,
     command_line,
+    commands,
     compaction,
     display as display_mod,
     dotenv,
@@ -294,16 +296,15 @@ def _main(argv: list[str] | None = None) -> int:
     loop_controller.claim_child()
     global _stdin_read
     _stdin_read = None
-    generate = dispatch_argv[:1] == ["generate"]
+    command = commands.named(dispatch_argv)
     options_end = dispatch_argv.index("--") if "--" in dispatch_argv else len(dispatch_argv)
-    if not generate and "--acp" in dispatch_argv[:options_end]:
+    if command is None and "--acp" in dispatch_argv[:options_end]:
         return _run_acp(dispatch_argv)
     if (error := _startup()) is not None:
         return error
-    if generate:
-        from . import generate_cli
+    if command is not None:
         dotenv.load()
-        return generate_cli.main(dispatch_argv[1:])
+        return commands.entry(command)(dispatch_argv[1:])
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
@@ -409,7 +410,6 @@ def _run_acp(dispatch_argv: list[str]) -> int:
                 "json", "json_stream", "quiet", "debug", "debug_file", "stats_json", "stats_csv",
                 "verify", "bench", "loop", "lock", "commit", "compact", "migrate_config",
                 "login", "logout", "refresh_model_catalog", "list_sessions", "list_agents",
-                "init", "init_full", "init_agent",
                 "list_models", "list_providers", "list_logins", "target",
             ):
                 value = getattr(args, name)
@@ -477,8 +477,7 @@ def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Names
             error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream", command="--" + name.replace("_", "-"))
             parser.error(error)
     if args.json or args.json_stream:
-        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog",
-                     "init", "init_full", "init_agent"):
+        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog"):
             value = getattr(args, name)
             if value is not None and value is not False:
                 error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream" if args.json_stream else "--json", command="--" + name.replace("_", "-"))
@@ -663,21 +662,6 @@ def _prepare_run(args: argparse.Namespace, setup: Setup) -> Setup | int:
     return replace(setup, agent=cli_agent)
 
 
-def _run_rotation(args: argparse.Namespace) -> int:
-    """`--rotate`, `--unrotate`, each with or without `--dry-run`."""
-    if args.rotate is None and args.unrotate is None:
-        msgs.warn(msgs.DRY_RUN_NEEDS_ROTATE)
-        return 2
-    if any((args.prompt is not None, args.session is not None, args.session_key is not None,
-            args.agent is not None, args.commit, args.compact is not None, args.bench is not None,
-            args.target is not None, args.last, args.list_sessions)):
-        msgs.warn(msgs.ROTATE_EXCLUSIVE)
-        return 2
-    from . import rotate
-
-    return rotate.run_rotate(args) if args.rotate is not None else rotate.run_unrotate(args)
-
-
 def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     """The mode picker: setup, then each mode in turn, the first named on the
     command line running, then a -p run or the REPL."""
@@ -690,14 +674,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return verify.run_verify(args)
     if args.list_sessions:
         return listings.run_list_sessions(args)
-    if args.init or args.init_full or args.init_agent is not None:
-        from . import init_cli
-
-        if args.init_agent is not None:
-            return init_cli.run_init_agent(args.init_agent)
-        return init_cli.run_init(full=args.init_full)
-    if args.rotate is not None or args.unrotate is not None or args.dry_run:
-        return _run_rotation(args)
     if (code := _settle_session(args, setup)) is not None:
         return code
     if args.login is not None:

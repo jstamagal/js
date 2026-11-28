@@ -570,11 +570,11 @@ goes to stderr. The flags are mutually exclusive. See [Headless JSON](headless-j
 `--verify --json` reports configuration errors as JSON. A command without the
 requested JSON form exits 2 and names the command.
 
-`js --rotate [AGE]` moves sessions and logs not modified in AGE (default
+`js rotate [AGE]` moves sessions and logs not modified in AGE (default
 `ROTATE_AGE`, `30d`; `<7d` for the recent ones) to `~/.js/archive/`,
 compressed one file per original under the same relative path. Rotated
-sessions are still listed, searched and resumed. `js --unrotate [SESSION]`
-puts files back. Both take `--dry-run`. See
+sessions are still listed, searched and resumed. `js rotate --restore
+[SESSION]` puts files back. Both take `--dry-run`. See
 [Rotation](configuration-and-sessions.md#rotation).
 
 Sampling flags set registered settings for this run: `--temperature`, `--top-p`,
@@ -608,7 +608,7 @@ re-read context.
 ## Profiles And Stock Files
 
 `defaults/` ships jsrc, fset, agents, themes, tool descriptions, skills, help,
-snippets, secret-patterns and the `scaffold/` templates `--init*` writes from. The home overrides a file at the same relative
+snippets, secret-patterns and the `scaffold/` templates `js init` writes from. The home overrides a file at the same relative
 path; files you have not copied keep coming from stock. Empty files shadow too.
 Names in listings union across layers. Agents and skills replace whole directories by name.
 Only jsrc, agents, skills, commands and toolbox use a project `.js/` layer.
@@ -865,25 +865,25 @@ js generate --stt -m mistral/voxtral-mini-latest --audio-file line.mp3 --diarize
 ## Scaffolding
 
 ```bash
-js --init                 # this directory becomes a js project
-js --init-full            # the same, plus README.md, LICENSE and .gitignore
-js --init-agent NAME      # a new agent in the home
+js init                  # this directory becomes a js project
+js init --full           # the same, plus README.md, LICENSE and .gitignore
+js init agent NAME       # a new agent in the home
 ```
 
-`--init` works like `git init`. It runs `git init` when the current directory is
+`js init` works like `git init`. It runs `git init` when the current directory is
 not inside a git repository, then makes `.js/` with an empty `jsrc` and the
 `agents/`, `skills/`, `commands/` and `toolbox/` directories. Each new directory
 holds an empty `.gitkeep` so a commit keeps it. Nothing js reads treats a
 `.gitkeep` as an agent, skill, command or tool. An empty `jsrc` is an empty
 layer: the home's settings still apply.
 
-`--init-full` also makes a `README.md` titled with the directory name, an MIT
+`js init --full` also makes a `README.md` titled with the directory name, an MIT
 `LICENSE` for the current year and `git config user.name` (the OS user when
 that is unset), and a `.gitignore` for secrets (`.env`, `.env.*` but not
 `.env.example`), `.js/jsrc.local`, editor and OS files, Python and Node caches,
 build output and logs.
 
-`--init-agent NAME` makes `agents/NAME/` in the home (`--home` and `JS_HOME`
+`js init agent NAME` makes `agents/NAME/` in the home (`--home` and `JS_HOME`
 apply) with an `agent.yaml` and a starter `01-prompt.md`. A nested name such as
 `meta:child` makes `agents/meta/child/`. It refuses an invalid name or an agent
 the home already has. It warns, then goes ahead, when NAME shadows a stock
@@ -891,7 +891,7 @@ agent.
 
 None of the three overwrites anything. A path that is already there, including
 a symlink, is left alone, and the output names what was made and what was left
-alone. Running a command twice is harmless. `--init` refuses a directory whose
+alone. Running one twice is harmless. `js init` refuses a directory whose
 `.js` is the js home itself.
 
 The texts come from `defaults/scaffold/`: `agent.yaml`, `01-prompt.md`,

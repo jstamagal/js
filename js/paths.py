@@ -25,7 +25,7 @@ whole structure is always there:
       plans/         plan tool output
       probes/        browser screenshots, terminal snapshots
 
-`archive/` is not part of it: `js --rotate` makes it, a mirror of the paths
+`archive/` is not part of it: `js rotate` makes it, a mirror of the paths
 above holding the files it compressed (`archive_root`).
 
 The locations js used before this layout are listed in `legacy_homes()`;
