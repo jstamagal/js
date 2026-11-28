@@ -20,9 +20,9 @@ cell, so one function can run a project's steps in order, shell commands and
 file edits included, and check each one.
 
 Save the first time something works. If you wrote a function and it did its
-job, save it in the same turn, before moving on. Saving is cheap and never
-destructive, and the next session refines a rough `r1` far faster than it
-rediscovers the edge cases from nothing. Load at the start of every session
+job, save it in the same turn, before moving on; js keeps it with this
+project. Saving is cheap and never destructive, and the next session refines a
+rough `r1` far faster than it rediscovers the edge cases from nothing. Load at the start of every session
 and use what is there before writing anything new; when a saved tool is wrong
 or incomplete, fix it and save the next revision.
 
@@ -31,11 +31,11 @@ Parameters:
 - `name`: the tool's name, for `save`, `history` and `restore`. A plain Python
   identifier that matches the name of the definition.
 - `note`: for `save`, one line on what this revision does or changes, and why.
-- `scope`: for `save`. `project` writes to the project's `.js/toolbox`, which
-  is where a tool that knows this project belongs, so pass `scope=project`
-  for those. `global` is for tools that are useful in any project, and is
-  what an omitted `scope` means. When both hold a tool of the same name, the
-  project one wins.
+- `scope`: for `save`. Leave it out. A new tool belongs to the project you are
+  working in, and only this project sees it; fixing a tool updates it where it
+  lives. Pass `scope=global` only when the user asks for the tool everywhere,
+  in every project, and `scope=local` only when the user asks for a
+  project-only copy of a tool that is already global.
 - `revision`: for `restore`, the revision number to roll back to.
 - `source`: for `save`, the definition text, when the function is not in the
   kernel namespace.

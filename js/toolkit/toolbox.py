@@ -20,6 +20,21 @@ ISOLATION. Every tool file is exec'd on its own inside the kernel with its own
 try/except. A toolbox an agent writes to unsupervised will contain a broken file
 eventually; that must cost one tool, not the whole box.
 
+WHERE. A save of a name that exists revises the tool of that name the session
+loads, where it lives. A new name is local unless the save says `global`: it
+goes to the project the session is in, into that project's own `.js/toolbox`
+when the owner made one, otherwise onto the project's shelf in the home toolbox,
+`<home>/toolbox/<project slug>/`, the slug being the one its sessions are filed
+under; a linked git worktree uses its repository's shelf. `scope=local` makes a
+local copy of an existing name on purpose. `global` saves go flat at the top of
+the home toolbox. A session reads
+the global tools, then its own shelf, then each project `.js/toolbox` from the
+root down, nearer winning; another project's shelf is never read. A session
+whose project is the user's home directory has the top of the home toolbox as
+its shelf. Under isolation nothing in the home is read or written: a local save
+goes to the nearest project `.js/toolbox`, else the border's, and a `global`
+save is refused.
+
 This module sits ON TOP of `python_kernel`. It imports it to reach the live
 session; the kernel never imports this. Remove `toolbox` from an agent's surface
 and the kernel is unaffected.
@@ -36,7 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .. import messages as msgs, paths as _paths
+from .. import messages as msgs, paths as _paths, session_store
 from . import python_kernel
 from .core import Tool, ToolContext
 from .descriptions import load_description
@@ -236,35 +251,99 @@ del __js_load
 """
 
 
+# Labels a listing shows: a tool flat in the home toolbox, one on this project's
+# shelf inside it, and one in a project `.js/toolbox`.
+GLOBAL = "global"
+SHELF = "shelf"
+PROJECT = "project"
+
+# The `scope` a save takes: `local` is the project the session is in, `global`
+# the top of the home toolbox. Without one, a save revises the tool of that name
+# this session loads, wherever it lives, and a new name is local.
+SCOPES = ("local", "global")
+
+
+@dataclass(frozen=True)
+class Layer:
+    label: str
+    directory: Path
+
+
+def shelf_dir(cwd: Path) -> Path:
+    """The home toolbox's directory for ``cwd``'s project: named by the slug its
+    sessions are filed under, or the home toolbox itself for the user's home.
+    A linked git worktree shares its repository's shelf, so its tools outlive
+    the worktree."""
+    namespace = _paths.project_namespace(Path(cwd))
+    namespace = _paths.worktree_repository(namespace) or namespace
+    if namespace == _paths.user_home().resolve(strict=False):
+        return _paths.global_toolbox_dir()
+    return _paths.global_toolbox_dir() / session_store.slug(namespace)
+
+
+def layers(cwd: Path) -> tuple[Layer, ...]:
+    """What a session in ``cwd`` reads, lowest first: the home toolbox's own
+    tools, this project's shelf in it, then each project `.js/toolbox` from the
+    root down to ``cwd``. A nearer one wins on a name clash. Under isolation
+    only the project ones."""
+    found: list[Layer] = []
+    if _paths.uses_home(Path(cwd)):
+        found.append(Layer(GLOBAL, _paths.global_toolbox_dir()))
+        shelf = shelf_dir(cwd)
+        if shelf != found[0].directory:
+            found.append(Layer(SHELF, shelf))
+    found.extend(Layer(PROJECT, directory / "toolbox") for directory in _paths.project_dirs(Path(cwd)))
+    return tuple(found)
+
+
 def toolbox_dirs(cwd: Path) -> tuple[Path, ...]:
-    """The global toolbox, then each project `.js/toolbox` from the root down
-    to ``cwd``. A nearer one wins on a name clash, mirroring agent precedence."""
-    homes = (_paths.global_toolbox_dir(),) if _paths.uses_home(Path(cwd)) else ()
-    return (*homes, *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
+    return tuple(layer.directory for layer in layers(cwd))
 
 
-def project_toolbox_dir(cwd: Path) -> Path | None:
-    """Where a project-scope save goes: the nearest project `.js/toolbox`,
-    else the first directory of the active project chain."""
-    found = _paths.project_dirs(Path(cwd))
-    if found:
-        return found[-1] / "toolbox"
-    chain = _paths.project_chain(Path(cwd))
-    return chain[0] / ".js" / "toolbox" if chain else None
+def save_layer(cwd: Path, scope: str = "", name: str = "") -> Layer | str:
+    """Where a save in ``cwd`` writes, or the ERROR saying why it cannot.
+
+    `global` is the top of the home toolbox. `local` is the nearest project
+    `.js/toolbox` that exists, else this project's shelf in the home toolbox;
+    under isolation, where the home is not read, the border's `.js/toolbox`.
+    No scope revises the tool called ``name`` that ``cwd`` loads, in the
+    layer it lives in, and is `local` for a name that does not exist yet."""
+    cwd = Path(cwd)
+    if not scope:
+        record = discover(cwd).get(name) if name else None
+        if record is not None:
+            return Layer(record.scope, record.path.parent)
+        scope = "local"
+    home_read = _paths.uses_home(cwd)
+    if scope == "global":
+        if not home_read:
+            return (f"ERROR: {cwd} is isolated from the home, so it has no global toolbox; "
+                    "save without scope to keep the tool in this project")
+        return Layer(GLOBAL, _paths.global_toolbox_dir())
+    owned = [directory / "toolbox" for directory in _paths.project_dirs(cwd)
+             if (directory / "toolbox").is_dir()]
+    if owned:
+        return Layer(PROJECT, owned[-1])
+    if home_read:
+        shelf = shelf_dir(cwd)
+        return Layer(GLOBAL if shelf == _paths.global_toolbox_dir() else SHELF, shelf)
+    border = _paths.isolation(cwd)
+    return Layer(PROJECT, border.layer / "toolbox")
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
 
 
-def seed_examples() -> list[str]:
+def seed_examples(cwd: Path) -> list[str]:
     """Copy the shipped example tools into the global toolbox, once each.
 
     A fresh box lists nothing, which reads as a broken tool rather than an empty
     one. The copy lands in the same global directory `save` writes to; after that
     the file belongs to the owner. It is never overwritten — editing it, or
-    deleting it, is not undone by the next run or by a reinstall.
+    deleting it, is not undone by the next run or by a reinstall. A run isolated
+    from the home seeds nothing.
     """
-    if not _EXAMPLES.is_dir():
+    if not _EXAMPLES.is_dir() or not _paths.uses_home(Path(cwd)):
         return []
     global_dir = _paths.global_toolbox_dir()
     seeded: list[str] = []
@@ -290,7 +369,7 @@ def _history_model(entry: dict) -> str:
 class ToolRecord:
     name: str
     path: Path
-    scope: str                      # "global" or "project"
+    scope: str                      # GLOBAL, SHELF or PROJECT
     revision: int = 1
     history: list[dict] = field(default_factory=list)
     error: str = ""
@@ -328,8 +407,8 @@ def _render_header(meta: dict) -> str:
 def discover(cwd: Path) -> dict[str, ToolRecord]:
     """Index every tool file. A file that will not parse is recorded, never raised."""
     found: dict[str, ToolRecord] = {}
-    for directory in toolbox_dirs(cwd):
-        scope = "global" if directory == _paths.global_toolbox_dir() else "project"
+    for layer in layers(cwd):
+        directory, scope = layer.directory, layer.label
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.py")):
@@ -354,7 +433,7 @@ def discover(cwd: Path) -> dict[str, ToolRecord]:
                 ast.parse(text, filename=str(path))
             except SyntaxError as exc:
                 record.error = f"syntax error line {exc.lineno}: {exc.msg}"
-            found[name] = record       # project scope overwrites global by ordering
+            found[name] = record       # a nearer layer overwrites by ordering
     return found
 
 
@@ -385,11 +464,12 @@ def write_revision(
     *,
     model: str = "",
     note: str = "",
-    scope: str = "global",
+    scope: str = "",
     stamp: float | None = None,
-    directory: Path | None = None,
+    layer: Layer | None = None,
 ) -> str:
-    """Promote a body to disk as revision N+1, archiving revision N first."""
+    """Promote a body to disk as revision N+1, archiving revision N first.
+    It goes to ``layer``, else to where ``scope`` saves ``name`` from ``cwd``."""
     if not _SAFE_NAME.match(name):
         return f"ERROR: {name!r} is not a valid tool name"
     body = body.strip()
@@ -403,10 +483,12 @@ def write_revision(
     if not any(isinstance(node, definitions) and node.name == name for node in tree.body):
         return f"ERROR: source must define a top-level function or class named {name!r}"
 
-    if directory is None:
-        directory = project_toolbox_dir(cwd) if scope == "project" else _paths.global_toolbox_dir()
-    if directory is None:
-        return f"ERROR: {Path(cwd)} is not inside a repository, so it has no project toolbox"
+    if layer is None:
+        resolved = save_layer(cwd, scope, name)
+        if isinstance(resolved, str):
+            return resolved
+        layer = resolved
+    directory, label = layer.directory, layer.label
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -414,11 +496,12 @@ def write_revision(
     target = directory / f"{name}.py"
 
     # Read the file we are about to write, not discover()'s view of it. discover()
-    # lets project scope shadow global by name, so saving to global while a project
-    # copy exists used to return the project record, fail the path comparison, skip
-    # the archive, and truncate the global file with a fresh r1 header -- the exact
-    # promote-a-local-fix-back-to-global workflow this tool exists for.
-    archived = _archived_revisions(ToolRecord(name, target, scope))
+    # lets a nearer layer shadow a lower one by name, so its record for a name
+    # saved global while a local copy exists is the local one. Each layer keeps
+    # its own revisions and .history; a `scope=local` save of a global tool's name starts
+    # a local copy that shadows it in this project, and a global save over a
+    # shadowed name refines the global file.
+    archived = _archived_revisions(ToolRecord(name, target, label))
     revision = max(archived, default=0) + 1
     history: list[dict] = []
     previous = ""
@@ -455,7 +538,7 @@ def write_revision(
 
     verb = "saved" if revision == 1 else "refined"
     chain = " -> ".join(_history_model(entry) for entry in history)
-    return f"{verb} {name} r{revision} [{scope}] {target}\nauthors: {chain}"
+    return f"{verb} {name} r{revision} [{label}] {target}\nauthors: {chain}"
 
 
 def history_of(cwd: Path, name: str) -> str:
@@ -488,7 +571,7 @@ def restore(cwd: Path, name: str, revision: int, *, model: str = "") -> str:
         return f"ERROR: could not read {archive}: {exc}"
     body = _HEADER.sub("", text).strip()
     return write_revision(cwd, name, body, model=model or "restore",
-                          note=f"rolled back to r{revision}", scope=record.scope, directory=record.path.parent)
+                          note=f"rolled back to r{revision}", layer=Layer(record.scope, record.path.parent))
 
 
 @dataclass
@@ -626,7 +709,7 @@ def toolbox(
     action: str = "list",
     name: str = "",
     note: str = "",
-    scope: str = "global",
+    scope: str = "",
     revision: int = 0,
     source: str = "",
     verbosity: str = "",
@@ -636,18 +719,20 @@ def toolbox(
         return "ERROR: missing ToolContext"
     verb = text_or_default(action, "list").strip().lower()
     name = text_or_default(name).strip()
-    scope = "project" if text_or_default(scope, "global").strip().lower() == "project" else "global"
+    scope = text_or_default(scope).strip().lower()
     level = python_kernel.resolve_verbosity(context, verbosity)
     cwd = Path(context.cwd)
     model = context.model or "unknown"
 
     if verb not in ACTIONS:
         return f"ERROR: action must be one of {', '.join(ACTIONS)}"
+    if scope and scope not in SCOPES:
+        return f"ERROR: scope must be one of {', '.join(SCOPES)}"
 
     # Both actions that show the box seed it first, so a fresh install lists the
     # shipped example instead of nothing.
     if context.toolbox_seed_examples and verb in ("list", "load"):
-        seed_examples()
+        seed_examples(cwd)
 
     if verb == "list":
         listing = describe(cwd)
@@ -698,7 +783,18 @@ def toolbox(
         # namespace and retries a file whose module level needs one not yet
         # loaded, so a call to another tool resolves there. `tools`, the js
         # tool bridge, is bound in every kernel that namespace lives in.
-        provided = (set(discover(cwd)) - {name}) | {"tools"}
+        destination = save_layer(cwd, scope, name)
+        if isinstance(destination, str):
+            python_kernel.render_event(context, level, destination, style="COLOR_ERROR")
+            return destination
+        # A global tool is loaded in every project, so it may lean only on
+        # other global tools, shadowed here or not.
+        global_dir = _paths.global_toolbox_dir()
+        if destination.directory == global_dir:
+            reachable = {path.stem for path in global_dir.glob("*.py")} if global_dir.is_dir() else set()
+        else:
+            reachable = set(discover(cwd))
+        provided = (reachable - {name}) | {"tools"}
         missing = [free for free in unbound_names(body) if free not in provided]
         if missing and context.toolbox_require_bound_names:
             message = (
@@ -708,7 +804,7 @@ def toolbox(
             python_kernel.render_event(context, level, message, style="COLOR_ERROR")
             return python_kernel.cap_for_model(message, context)
         report = "\n".join([write_revision(cwd, name, body, model=model,
-                                           note=text_or_default(note), scope=scope),
+                                           note=text_or_default(note), layer=destination),
                             *warnings])
         python_kernel.render_event(context, level, report,
                              style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
@@ -757,7 +853,7 @@ def tools() -> tuple[Tool, ...]:
                 "action": {"type": "string", "enum": list(ACTIONS)},
                 "name": {"type": "string"},
                 "note": {"type": "string"},
-                "scope": {"type": "string", "enum": ["global", "project"]},
+                "scope": {"type": "string", "enum": list(SCOPES)},
                 "revision": {"type": "integer"},
                 "source": {"type": "string"},
                 "verbosity": {"type": "string", "enum": list(python_kernel.VERBOSITY_LEVELS)},

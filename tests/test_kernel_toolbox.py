@@ -79,6 +79,18 @@ def saved_header(path: Path) -> dict:
     return json.loads(line[len(HEADER_PREFIX):])
 
 
+def save_global(cwd: Path, name: str, body: str, **options) -> str:
+    """A save to the top of the home toolbox, where `toolbox_dirs(cwd)[0]` is."""
+    return tbmod.write_revision(cwd, name, body, scope="global", **options)
+
+
+def project_toolbox(cwd: Path) -> Path:
+    """The project's own `.js/toolbox`, made: local saves now go there."""
+    directory = Path(cwd) / ".js" / "toolbox"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 def archived_revisions(record) -> list[int]:
     """The revisions of `record` kept in its directory's .history."""
     archived = (record.path.parent / ".history").glob(f"{record.name}.r*.py")
@@ -115,7 +127,7 @@ def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad
     original += "\n\ndef sample():\n    return 1\n"
     target = directory / "sample.py"
     target.write_text(original, encoding="utf-8")
-    tbmod.write_revision(cwd, "other", "def other():\n    return 2\n", model="other-model")
+    save_global(cwd, "other", "def other():\n    return 2\n", model="other-model")
 
     listing = tbmod.describe(cwd)
     assert tbmod.discover(cwd)["sample"].history == [valid]
@@ -123,7 +135,7 @@ def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad
     assert "other r1" in listing
     assert "original" in tbmod.history_of(cwd, "sample")
 
-    report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 3\n", model="next")
+    report = save_global(cwd, "sample", "def sample():\n    return 3\n", model="next")
     assert "sample r3" in report
     saved = saved_header(target)
     assert saved["history"][0] == valid
@@ -142,14 +154,14 @@ def test_non_string_history_models_do_not_break_listing_or_saving(ctx, model):
                       + "\n\ndef sample():\n    return 1\n", encoding="utf-8")
 
     assert "sample r1 [global] unknown" in tbmod.describe(cwd)
-    report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 2\n", model="next")
+    report = save_global(cwd, "sample", "def sample():\n    return 2\n", model="next")
     assert "authors: unknown -> next" in report
     assert tbmod.discover(cwd)["sample"].history[0] == history[0]
     assert "sample r2 [global] unknown -> next" in tbmod.describe(cwd)
 
 
 def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(ctx):
-    tbmod.write_revision(Path(ctx.cwd), "adder", "def adder(a, b):\n    return a + b\n",
+    save_global(Path(ctx.cwd), "adder", "def adder(a, b):\n    return a + b\n",
                          model="qwen", note="first cut", stamp=time.time())
 
     path = tbmod.toolbox_dirs(Path(ctx.cwd))[0] / "adder.py"
@@ -166,8 +178,8 @@ def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(
 
 def test_second_save_bumps_the_revision_and_archives_the_previous_body(ctx):
     cwd = Path(ctx.cwd)
-    tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return a + b\n", model="qwen")
-    report = tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return int(a) + int(b)\n",
+    save_global(cwd, "adder", "def adder(a, b):\n    return a + b\n", model="qwen")
+    report = save_global(cwd, "adder", "def adder(a, b):\n    return int(a) + int(b)\n",
                                   model="fable", note="coerce strings")
 
     directory = tbmod.toolbox_dirs(cwd)[0]
@@ -184,59 +196,60 @@ def test_second_save_bumps_the_revision_and_archives_the_previous_body(ctx):
 
 def test_recreating_deleted_tool_continues_above_archived_revisions(ctx):
     cwd = Path(ctx.cwd)
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    save_global(cwd, "adder", "def adder():\n    return 1\n")
+    save_global(cwd, "adder", "def adder():\n    return 2\n")
     directory = tbmod.toolbox_dirs(cwd)[0]
     archive = directory / ".history" / "adder.r1.py"
     original = archive.read_bytes()
     (directory / "adder.py").unlink()
 
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 3\n")
+    save_global(cwd, "adder", "def adder():\n    return 3\n")
     assert tbmod.discover(cwd)["adder"].revision == 2
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 4\n")
+    save_global(cwd, "adder", "def adder():\n    return 4\n")
     assert archive.read_bytes() == original
     assert "return 3" in (directory / ".history" / "adder.r2.py").read_text()
 
 
 def test_revision_exceeds_archived_max_even_with_lower_live_header(ctx):
     cwd = Path(ctx.cwd)
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    save_global(cwd, "adder", "def adder():\n    return 1\n")
     directory = tbmod.toolbox_dirs(cwd)[0]
     archive = directory / ".history" / "adder.r9.py"
     archive.parent.mkdir()
     archive.write_text("old revision nine")
 
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    save_global(cwd, "adder", "def adder():\n    return 2\n")
     assert tbmod.discover(cwd)["adder"].revision == 10
     assert archive.read_text() == "old revision nine"
 
 
 def test_revision_numbering_does_not_mix_global_and_project_archives(ctx):
     cwd = Path(ctx.cwd)
-    for scope in ("global", "project"):
+    project_dir = project_toolbox(cwd)
+    for scope in ("global", "local"):
         tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n", scope=scope)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
+    global_dir = tbmod.toolbox_dirs(cwd)[0]
     archive = global_dir / ".history" / "adder.r9.py"
     archive.parent.mkdir()
     archive.write_text("global revision nine")
 
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n", scope="project")
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
     assert saved_header(project_dir / "adder.py")["revision"] == 2
     assert archive.read_text() == "global revision nine"
 
 
 def test_save_never_overwrites_an_existing_archive(ctx):
     cwd = Path(ctx.cwd)
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    save_global(cwd, "adder", "def adder():\n    return 1\n")
     directory = tbmod.toolbox_dirs(cwd)[0]
     target = directory / "adder.py"
     original = target.read_bytes()
-    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    save_global(cwd, "adder", "def adder():\n    return 2\n")
     archive = directory / ".history" / "adder.r1.py"
     target.write_bytes(original.replace(b"return 1", b"return 99"))
     before = target.read_bytes()
 
-    report = tbmod.write_revision(cwd, "adder", "def adder():\n    return 3\n")
+    report = save_global(cwd, "adder", "def adder():\n    return 3\n")
     assert report.startswith("ERROR")
     assert archive.read_bytes() == original
     assert target.read_bytes() == before
@@ -244,8 +257,8 @@ def test_save_never_overwrites_an_existing_archive(ctx):
 
 def test_restore_writes_the_old_body_as_a_new_revision_so_history_only_grows(ctx):
     cwd = Path(ctx.cwd)
-    tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return a + b\n", model="qwen")
-    tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return 0\n",
+    save_global(cwd, "adder", "def adder(a, b):\n    return a + b\n", model="qwen")
+    save_global(cwd, "adder", "def adder(a, b):\n    return 0\n",
                          model="fable", note="broke it")
 
     report = tbmod.restore(cwd, "adder", 1, model="fable")
@@ -261,9 +274,9 @@ def test_restore_writes_the_old_body_as_a_new_revision_so_history_only_grows(ctx
 
 def test_history_reports_every_revision_and_what_can_be_restored(ctx):
     cwd = Path(ctx.cwd)
-    tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return a + b\n",
+    save_global(cwd, "adder", "def adder(a, b):\n    return a + b\n",
                          model="qwen", note="first cut")
-    tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return b + a\n",
+    save_global(cwd, "adder", "def adder(a, b):\n    return b + a\n",
                          model="fable", note="commutative, obviously")
 
     report = tbmod.history_of(cwd, "adder")
@@ -292,9 +305,9 @@ def test_discover_records_a_syntax_error_as_broken_and_still_indexes_the_rest(ct
 
 def test_a_project_tool_shadows_a_global_tool_of_the_same_name(ctx):
     cwd = Path(ctx.cwd)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], project_toolbox(cwd)
     for directory, body in ((global_dir, "return 'global'"), (project_dir, "return 'project'")):
-        directory.mkdir(parents=True)
+        directory.mkdir(parents=True, exist_ok=True)
         (directory / "who.py").write_text(f"def who():\n    {body}\n", encoding="utf-8")
 
     record = tbmod.discover(cwd)["who"]
@@ -363,7 +376,7 @@ def test_toolbox_save_accepts_an_explicit_source_with_no_kernel_at_all(ctx, monk
     result = tbmod.toolbox(action="save", name="adder", note="by hand",
                            source="def adder(a, b):\n    return a + b\n", context=ctx)
 
-    assert result.startswith("saved adder r1 [global]")
+    assert result.startswith("saved adder r1 [shelf]")
     assert tbmod.discover(Path(ctx.cwd))["adder"].history[0]["note"] == "by hand"
 
 
@@ -874,7 +887,7 @@ def test_a_tool_saved_from_the_kernel_loads_into_a_fresh_one_with_its_imports(ct
     ), context=ctx)
 
     saved = tbmod.toolbox(action="save", name="spread", note="mean of a list", context=ctx)
-    body = (tbmod.toolbox_dirs(cwd)[0] / "spread.py").read_text(encoding="utf-8")
+    body = (tbmod.save_layer(cwd).directory / "spread.py").read_text(encoding="utf-8")
 
     ctx.kernel_session.shutdown()
     ctx.kernel_session = None
@@ -885,7 +898,7 @@ def test_a_tool_saved_from_the_kernel_loads_into_a_fresh_one_with_its_imports(ct
 
     assert "hoisted into the file: import statistics" in saved
     assert "import statistics" in body
-    assert "TOOLBOX loaded spread r1 [global] test-model" in loaded
+    assert "TOOLBOX loaded spread r1 [shelf] test-model" in loaded
     assert "4.0" in used
 
 
@@ -900,7 +913,7 @@ def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
     ), context=ctx)
 
     tbmod.toolbox(action="save", name="revised", context=ctx)
-    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    directory = tbmod.save_layer(Path(ctx.cwd)).directory
     restored = {}
     body = (directory / "revised.py").read_text()
     assert "from pathlib import Path as FilePath" in body
@@ -1046,7 +1059,7 @@ def test_save_refuses_an_explicit_source_that_reads_an_undefined_name(ctx, monke
         "    return n > THRESHOLD\n"
     ), context=ctx)
 
-    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    directory = tbmod.save_layer(Path(ctx.cwd)).directory
     assert report.startswith("ERROR: 'over' uses THRESHOLD")
     assert not (directory / "over.py").exists()
 
@@ -1061,8 +1074,8 @@ def test_an_explicit_source_with_its_own_imports_saves_cleanly(ctx, monkeypatch)
         "    return statistics.fmean(values)\n"
     ), context=ctx)
 
-    assert report.startswith("saved mean r1 [global]")
-    assert "import statistics" in (tbmod.toolbox_dirs(Path(ctx.cwd))[0] / "mean.py").read_text()
+    assert report.startswith("saved mean r1 [shelf]")
+    assert "import statistics" in (tbmod.save_layer(Path(ctx.cwd)).directory / "mean.py").read_text()
 
 
 @needs_kernel
@@ -1117,11 +1130,11 @@ def test_the_shipped_example_loads_and_calls_cleanly_in_a_fresh_kernel(ctx):
 def test_saving_to_global_archives_the_global_body_even_when_a_project_copy_shadows_it(ctx):
     """discover() lets project shadow global; save must not trust that view."""
     cwd = Path(ctx.cwd)
-    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], tbmod.project_toolbox_dir(cwd)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)[0], project_toolbox(cwd)
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g1'\n",
                          model="qwen", scope="global")
     tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'p1'\n",
-                         model="fable", scope="project")
+                         model="fable", scope="local")
 
     report = tbmod.write_revision(cwd, "summarise", "def summarise():\n    return 'g2'\n",
                                   model="opus", scope="global")

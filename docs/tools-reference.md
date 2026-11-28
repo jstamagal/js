@@ -728,11 +728,56 @@ Parameters:
 - `name`: the tool name — a plain Python identifier matching the definition.
 - `note`: for `save`, what changed and why. This is the message the next model
   reads.
-- `scope`: `global` (`~/.js/toolbox/`) or `project`
-  (`.js/toolbox/`). Project shadows global, mirroring agent precedence.
+- `scope`: `local` or `global`, or left out. See below for where each lands.
 - `revision`: for `restore`.
 - `source`: an explicit definition, for saving without a live kernel.
 - `verbosity`: as for `kernel`.
+
+A fix goes with the tool it fixes: a save with no `scope` under a name the
+session already loads writes the next revision of that tool where it lives —
+global, shelf or in-project, the nearest when more than one holds the name.
+A new name is local unless the save says `global`, like `git config` against
+`git config --global`:
+
+```text
+save (new name)   -> the project the session is in:
+                       its own .js/toolbox, when that directory exists
+                       otherwise <home>/toolbox/<project slug>/   (its shelf)
+save (known name) -> the tool of that name this session loads, where it lives
+save scope=local  -> the project, as for a new name; over a global name it
+                     starts a local copy that shadows it here
+save scope=global -> <home>/toolbox/
+```
+
+The directory is the switch: making `<project>/.js/toolbox` moves that
+project's later saves into it; without one they go to the project's shelf in
+the home toolbox. The slug is the directory name the project's sessions are
+filed under (`paths.project_namespace`, `/` and `_` as `-`, e.g.
+`-home-me-js`), so two checkouts with the same basename get different shelves.
+A linked git worktree uses its repository's shelf, not its own
+(`paths.worktree_repository` reads the worktree's `.git` file and the
+`commondir` it leads to), so a tool saved there is seen from the main checkout
+and every other worktree and survives the worktree's removal; when that
+repository is no longer where those files say, the worktree has a shelf of its
+own. Sessions are still filed under the worktree itself.
+The nearest existing `.js/toolbox` in the project chain is the one written. A
+session whose project is the user's home directory has `<home>/toolbox/` as
+its shelf, so its local and global saves land in the same place.
+
+A session reads the global tools (the `*.py` flat at the top of
+`<home>/toolbox/`), then its own shelf, then each project `.js/toolbox` from
+the root down, nearer winning on a name; another project's shelf is never
+read. `list` labels each tool `[global]`, `[shelf]` or `[project]`. A
+`scope=local` save under a global tool's name starts a local copy that
+shadows it in this project, with its own revisions and `.history/`; the global
+file is untouched. Whatever is saved global, by `scope=global` or as the next
+revision of a global tool, may call only other global tools, since it loads
+where a local helper does not.
+
+Under isolation (`.isolate`, `--isolate`) nothing in the home is read or
+written: the global tools and shelves are not listed, the shipped example is
+not seeded, a local save goes to the nearest project `.js/toolbox` or else the
+border's `.js/toolbox`, and `scope=global` is refused with an `ERROR`.
 
 Each tool is one file with a machine-readable provenance header:
 
