@@ -60,8 +60,9 @@ def test_a_matching_profile_does_not_change_a_listed_agents_tools(tmp_path, monk
                                       "models: [{match: offline, tools: [write:eager]}]\n")
     monkeypatch.setenv("JS_TOOL_PROFILES", json.dumps([{"match": "offline", "tools": ["shell:eager"]}]))
 
-    # Unlisted, the agent's `replace` profile decides the surface.
-    assert "write" in _surface(tmp_path) and "read" not in _surface(tmp_path)
+    # Unlisted, the agent's `replace` profile decides the surface, its core entry with it.
+    unlisted = _surface(tmp_path)
+    assert {"write", "skill"} <= unlisted and "read" not in unlisted
     assert _surface(tmp_path, tools=["read:eager"]) == {"read"} | BUS
 
 
@@ -154,3 +155,44 @@ def test_a_subagent_context_inherits_the_ceiling(tmp_path):
 
     assert _child_context(parent, turn_driver.registry(), "child").tool_ceiling == frozenset({"read"})
     assert _child_context(ToolContext(cwd=tmp_path), turn_driver.registry(), "child").tool_ceiling is None
+
+
+def _subagent_offers(tmp_path, monkeypatch, **entry) -> dict[str, set[str]]:
+    """The tools a swarm agent's model calls and its `task` child's were offered."""
+    _agent_dir(tmp_path, monkeypatch, "tools: [shell:eager, write:eager, task:eager]\n")
+    room = swarm.Room(tmp_path / "bus")
+    offered: dict[str, set[str]] = {"parent": set(), "child": set()}
+
+    def stream(**kwargs):
+        texts = ["".join(p.text for p in m.parts if p.kind == "text") for m in kwargs["messages"] if m.role == "user"]
+        names = {tool.name for tool in kwargs.get("tools") or ()}
+        if "child-task" in texts[0]:
+            offered["child"] |= names
+            kwargs["on_text"]("child done")
+            return turn_driver.reply(text="child done")
+        offered["parent"] |= names
+        if len([m for m in kwargs["messages"] if m.role == "assistant"]) == 0:
+            return turn_driver.reply(("c1", "task", json.dumps({"tasks": ["child-task"], "agent_id": "voice"})))
+        room.send("steer", "*", "enough", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return turn_driver.reply(text="ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({"root": str(tmp_path / "bus"), "agents": [
+        {"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path), **entry}]}))
+    assert swarm_run.run(str(path), out=io.StringIO()) == 0
+    return offered
+
+
+def test_a_listed_agents_subagent_runs_within_its_tools(tmp_path, monkeypatch):
+    offered = _subagent_offers(tmp_path, monkeypatch, tools=["read:eager", "task:eager"])
+
+    assert offered["parent"] == {"read", "task"} | BUS
+    assert offered["child"] and offered["child"] <= {"read", "task"} | BUS
+
+
+def test_an_unlisted_agents_subagent_gets_its_own_chain(tmp_path, monkeypatch):
+    offered = _subagent_offers(tmp_path, monkeypatch)
+
+    assert {"shell", "write"} <= offered["child"]
