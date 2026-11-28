@@ -138,3 +138,37 @@ def test_live_settings_reads_config_files_at_most_once(monkeypatch):
         assert seen == [3] and len(calls) == 1
     finally:
         settings.bind_live_settings(None)
+
+
+def test_a_setting_changed_in_the_bound_store_is_seen_by_the_next_read():
+    store = {"SWARM_SPAWN_MAX": 3}
+    settings.bind_live_settings(store)
+    try:
+        assert settings.live_value("SWARM_SPAWN_MAX") == 3
+        settings.set_dotted(store, ("SWARM_SPAWN_MAX",), 5)
+        assert settings.live_value("SWARM_SPAWN_MAX") == 5
+    finally:
+        settings.bind_live_settings(None)
+
+
+def test_startup_policy_is_read_again_when_the_environment_or_directory_changes(monkeypatch, tmp_path):
+    from js import config
+
+    calls = []
+    monkeypatch.setattr(config, "run_settings", lambda **kw: calls.append(kw) or {})
+    monkeypatch.setattr(settings, "_policy_cache", None)
+    settings.bind_live_settings(None)
+    settings.live_value("SWARM_SPAWN_MAX")
+    settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 1
+    monkeypatch.setenv("JS_SWARM_SPAWN_MAX", "7")
+    settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 2
+    monkeypatch.chdir(tmp_path)
+    settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 3
+    monkeypatch.delenv("JS_SWARM_SPAWN_MAX")
+    settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 4
+    settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 4

@@ -588,9 +588,15 @@ def _startup_policy() -> dict:
     global _policy_cache
     from . import config
 
-    key = (os.getcwd(), frozenset(os.environ.items()), config._invocation)
-    if _policy_cache is None or _policy_cache[0] != key:
-        _policy_cache = (key, config.run_settings(held=True))
+    # os.environ's own bytes mapping: comparing it is one C-level dict compare,
+    # where iterating os.environ decodes every name and value on each call.
+    environ = os.environ._data  # type: ignore[attr-defined]
+    cached = _policy_cache
+    if (cached is not None and cached[0][2] is config._invocation
+            and cached[0][1] == environ and cached[0][0] == os.getcwd()):
+        return cached[1]
+    key = (os.getcwd(), dict(environ), config._invocation)
+    _policy_cache = (key, config.run_settings(held=True))
     return _policy_cache[1]
 
 
