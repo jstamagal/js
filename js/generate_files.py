@@ -197,18 +197,16 @@ def dollars(ticks):
 class Charged(ValueError):
     """A failed request whose response reports a charge."""
 
-    def __init__(self, ticks, code, message, status=None):
+    def __init__(self, ticks, where, detail):
         self.ticks = ticks
-        where = f"HTTP {status}" if status else "video job failed"
-        detail = ": ".join(str(part) for part in (code, message) if part)
         if "moderat" in detail.lower():
-            first = f"the provider's content filter rejected the result after generating it ({where} {detail})"
+            first = f"the provider's content filter rejected the result after generating it ({where}: {detail})"
         else:
             first = f"endpoint returned {where}: {detail}"
         super().__init__(f"{first}\nthe provider reported charging {dollars(ticks)} for it")
 
 
-def refusal(data, status=None):
+def refusal(data, where):
     """Charged for a failure body that reports a cost, else None."""
     ticks = cost_ticks(data)
     if ticks is None:
@@ -218,13 +216,14 @@ def refusal(data, status=None):
         code, message = error.get("code") or data.get("code"), error.get("message")
     else:
         code, message = data.get("code"), error or data.get("message")
-    return Charged(ticks, code, message, status)
+    parts = [str(part) for part in (code, message) if part]
+    return Charged(ticks, where, ": ".join(parts) if parts else json.dumps(data, ensure_ascii=False)[:2000])
 
 
 def checked(response):
     if response.is_error:
         try:
-            charged = refusal(response.json(), response.status_code)
+            charged = refusal(response.json(), f"HTTP {response.status_code}")
         except ValueError:
             charged = None
         if charged:

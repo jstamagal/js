@@ -483,3 +483,27 @@ def test_refusal_without_usage_mentions_no_charge(monkeypatch, tmp_path, capsys)
     err = capsys.readouterr().err
     assert "$" not in err
     assert "imagine:content-moderated" in err and "HTTP 400" in err
+
+
+@pytest.mark.parametrize("usage", [{"cost_in_usd_ticks": 6400000000}, None])
+def test_done_poll_withheld_by_moderation_fails_and_reports_any_charge(monkeypatch, tmp_path, capsys, usage):
+    monkeypatch.chdir(tmp_path)
+    done = {"status": "done", "video": {"respect_moderation": False}}
+    if usage:
+        done["usage"] = usage
+    grok_video(monkeypatch, lambda: httpx.Response(200, json=done))
+    assert run("--resume", "job", "-u", "https://m@api.x.ai/v1") == 1
+    err = capsys.readouterr().err
+    assert "respect_moderation" in err
+    assert ("$0.64" in err) == bool(usage)
+    assert err.count("$") == (1 if usage else 0)
+    assert not Path("out.mp4").exists()
+
+
+def test_charged_error_of_unfamiliar_shape_keeps_the_body(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    mock_http(monkeypatch, lambda req: httpx.Response(500, json={
+        "detail": "upstream-exploded", "usage": {"cost_in_usd_ticks": 6400000000}}))
+    assert run("--t2i", "-u", "http://grok-imagine-image@paint.test/v1", "-p", "owl") == 1
+    err = capsys.readouterr().err
+    assert "upstream-exploded" in err and "$0.64" in err

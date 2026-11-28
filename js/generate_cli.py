@@ -209,8 +209,11 @@ def main(argv):
         run(read_args(argv))
     except KeyboardInterrupt:
         return 130
-    except Exception as exc:
-        for line in str(exc).splitlines() or [""]:
+    except generate_files.Charged as exc:
+        for line in str(exc).splitlines():
             print(f"js generate: {line}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"js generate: {exc}", file=sys.stderr)
         return 1
     return 0

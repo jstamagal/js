@@ -88,9 +88,17 @@ def wait_video(client, url, headers, a):
         if status == "done":
             # xAI reports the job's cost on the finished poll, not on the submission.
             a.cost_ticks = cost_ticks(data)
-            return download(client, data["video"]["url"], response, headers)
+            video = data.get("video") if isinstance(data.get("video"), dict) else {}
+            if video.get("url"):
+                return download(client, video["url"], response, headers)
+            if video.get("respect_moderation") is False:
+                data = {**data, "error": "video withheld by content moderation (respect_moderation false)"}
+            charged = refusal(data, "video job done")
+            if charged:
+                raise charged
+            raise ValueError(f"video job done without a video URL: {data.get('error') or data}")
         if status not in {"pending", "queued", "in_progress", "processing", "running"}:
-            charged = refusal(data)
+            charged = refusal(data, f"video job {status}")
             if charged:
                 raise charged
             raise ValueError(f"video job {status}: {data.get('error') or data.get('message') or status}")
