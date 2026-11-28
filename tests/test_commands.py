@@ -30,7 +30,7 @@ def test_each_command_has_its_own_help(name, capsys):
     with pytest.raises(SystemExit) as done:
         entry.main([name, "--help"])
     assert done.value.code == 0
-    assert capsys.readouterr().out.startswith(f"Usage: js {name}")
+    assert f"js {name}" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("argv", [

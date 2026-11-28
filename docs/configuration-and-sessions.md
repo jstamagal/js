@@ -86,9 +86,10 @@ lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
 missing, leaves out a registered setting, or holds a line that does not apply,
 js stops at startup with one line naming the file.
 
-js never writes `~/.js/jsrc` on its own; only `/save` does, so the file holds
-only what the operator set and a default changed in `defaults/jsrc` still reaches
-the box. `js/jsrc.template` lists every setting in sections, each described
+js never writes `~/.js/jsrc` on its own; `/save` does, and `js init` in the
+home copies `defaults/jsrc` there when the home has none. A home `jsrc` that
+holds only what the operator set lets a default changed in `defaults/jsrc` reach
+the box; a copy of `defaults/jsrc` pins every setting until `js init -f`. `js/jsrc.template` lists every setting in sections, each described
 with examples, at its stock value. `/save` writes what changed in the session
 since it started (or since the last `/save`): the settings `/set` changed, the
 model `/model` or the picker chose, the `/fset` entries changed, and `on`

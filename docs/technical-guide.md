@@ -43,7 +43,8 @@ persists each completed turn.
 | `js/cli_options.py` | invocation-local prompt and tool overrides the modes share |
 | `js/bench.py` | `--bench AGENT`: an agent over its benchmark cases, one row per case |
 | `js/commit_cli.py` | `--commit`: snapshot the worktree, then run the commit agent over it |
-| `js/init_cli.py` | `js init [--full]`, `js init agent NAME`: a project `.js/` skeleton, a README/LICENSE/.gitignore, a home agent, from `defaults/scaffold/`, never overwriting |
+| `js/init_cli.py` | `js init [--full]`, `js init agent NAME`: a project `.js/` skeleton, a README/LICENSE/.gitignore, a home agent, from `defaults/scaffold/`, never overwriting; in the home, `js.init_home` |
+| `js/init_home.py` | `js init [-f\|-b\|-a]` in the home: `defaults/` whole and the layout directories laid into it; `-a`'s tarball checked byte for byte before the moved home is removed |
 | `js/rotate.py`, `js/rotate_cli.py` | old sessions and logs into `~/.js/archive` and back (`js.archive` compresses one file per original); `js rotate [AGE]`, `js rotate --restore [SESSION]`, each with `--dry-run` |
 | `js/listings.py` | the `--list-*` printers, as text or JSON |
 | `js/migrate_config.py` | `--migrate-config`: a legacy `config.toml` as a jsrc set-script |

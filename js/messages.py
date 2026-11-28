@@ -645,7 +645,7 @@ COMMANDS_HEADING = Message("COMMANDS", banner=False)
 COMMANDS_HELP = Message("Show the options of a command.", banner=False)
 COMMANDS_ROW = Message("  js {name}   {summary}", banner=False)
 COMMAND_GENERATE = Message("Generate images, video, music and speech.", banner=False)
-COMMAND_INIT = Message("Make this directory a js project; init agent NAME makes an agent.", banner=False)
+COMMAND_INIT = Message("Make this directory a js project, or lay the stock setup into the home.", banner=False)
 COMMAND_ROTATE = Message("Move old sessions and logs to ~/.js/archive; --restore puts them back.", banner=False)
 
 SHORT_HELP = Message(
@@ -845,13 +845,43 @@ OPT_COMPACT = Message("Compact an existing session id or path offline, append-on
 INIT_DESCRIPTION = Message("Make the current directory a js project: git init outside a repository, and a .js/ "
                            "with an empty jsrc and agents/, skills/, commands/ and toolbox/. Never overwrites. "
                            "js init agent NAME makes a new agent in the home instead.")
-INIT_OPT_FULL = Message("Also a README.md, an MIT LICENSE and a .gitignore, each only if missing.")
+INIT_EPILOG = Message("In the js home, in the directory holding it as .js, or with --home naming it, js init "
+                      "copies the stock setup, all of js/defaults, into the home instead, and makes every "
+                      "directory of the layout; it never runs git there. The home's copies are read instead of "
+                      "the shipped ones until js init -f refreshes them.")
+INIT_OPT_FULL = Message("For a project: also a README.md, an MIT LICENSE and a .gitignore, each only if missing.")
+INIT_OPT_FORCE = Message("For the home: stock files replace the home's files of the same name; "
+                         "files the stock setup does not have are left alone.")
+INIT_OPT_ARCHIVE = Message("For the home: what --backup does, then HOME-YYYY-MM-DD.tar.gz of the moved home "
+                           "beside it; once the tarball is checked, the moved home is removed.")
+INIT_OPT_BACKUP = Message("For the home: move it aside to HOME-YYYY-MM-DD, then make a new home from the stock "
+                          "setup. Sessions, logs, logins and everything else stay in the old one.")
 INIT_AGENT_DESCRIPTION = Message("Make a new agent NAME in the home's agents directory from the scaffold templates.")
 INIT_OPT_AGENT_NAME = Message("The agent's name; a:b makes agent b inside agent a.")
 INIT_MADE = Message("Made {made} in {directory}.")
 INIT_MADE_LEFT_ALONE = Message("Made {made} in {directory}; left alone: {kept}.")
 INIT_NOTHING_MADE = Message("Nothing to make in {directory}; already there: {kept}.")
-INIT_IN_HOME = Message("Not here: .js in this directory is the js home, {home}.")
+INIT_IN_USER_HOME = Message("Not here: {directory} is your home directory, and its .js is not the js home. "
+                            "Run js init there with --home naming the js home to set that up.")
+INIT_FULL_IN_HOME = Message("--full is for a project; in the js home, js init lays down the stock setup.")
+INIT_HOME_ONLY = Message("{flag} is for the js home; in a project, js init never replaces anything.")
+INIT_HOME_MADE = Message("Made {files} and {dirs} in {home}; left alone {kept} already there.")
+INIT_HOME_NOTHING_MADE = Message("Nothing to make in {home}; left alone {kept} already there.")
+INIT_HOME_REPLACED = Message("Replaced {path}")
+INIT_HOME_MOVED = Message("Moved {home} to {moved}.")
+INIT_HOME_ARCHIVING = Message("Writing {path}; a big home takes minutes. The new home is ready now.")
+INIT_HOME_ARCHIVED = Message("Created {path}, checked byte for byte with {hash}.")
+INIT_HOME_HASHER_FAILED = Message("b3sum failed: {error}; comparing with sha256 instead.")
+INIT_HOME_ARCHIVE_FAILED = Message("Could not write {path}, removed it: {error}. {moved} is as it was.")
+INIT_HOME_ARCHIVE_INCOMPLETE = Message("the tarball does not hold {count} of the paths, {first} first")
+INIT_HOME_ARCHIVE_EXTRA = Message("the tarball holds {member}, which the moved home does not")
+INIT_HOME_ARCHIVE_DIFFERS = Message("the tarball's {member} differs from the moved home's")
+INIT_HOME_ARCHIVE_UNREADABLE = Message("the tarball does not read back: {error}")
+INIT_HOME_REMOVE_FAILED = Message("The tarball is complete, but removing {moved} stopped: {error}")
+INIT_HOME_LEFT = Message("Left {paths} in {moved} that the tarball does not hold.")
+INIT_HOME_LIVE = Message("Not moving the home: session {session} is running.")
+INIT_HOME_DIFFER = Message("Differ from the stock setup, and js init -f replaces them: {files}")
+INIT_HOME_DIFFER_PATH = Message("  {path}", banner=False)
 INIT_GIT_FAILED = Message("git init failed: {error}")
 INIT_TEMPLATE_MISSING = Message("Scaffold template missing: {path}")
 INIT_AGENT_EXISTS = Message("Agent {agent} already exists at {path}; nothing made.")
@@ -1231,9 +1261,9 @@ ROTATE_SKIPPED = Message("Skipped {path}: {why}")
 ROTATE_SKIP_IN_USE = Message("in use", banner=False)
 ROTATE_SKIP_CHANGED = Message("written to while it was archived", banner=False)
 ROTATE_SKIP_CONFLICT = Message("its archive {archive} holds other bytes", banner=False)
-UNROTATE_WOULD = Message("{size:>10}  {path}", banner=False)
-UNROTATE_DRY_SUMMARY = Message("Would restore {files} files, {size} archived.")
-UNROTATE_SUMMARY = Message("Restored {files} files, {size} in all.")
+RESTORE_WOULD = Message("{size:>10}  {path}", banner=False)
+RESTORE_DRY_SUMMARY = Message("Would restore {files} files, {size} archived.")
+RESTORE_SUMMARY = Message("Restored {files} files, {size} in all.")
 # `js rotate`.
 ROTATE_DESCRIPTION = Message("Move sessions and logs not modified in AGE to ~/.js/archive, compressed one file "
                              "per original; with --restore, put archived files back. Rotated sessions are still "
@@ -1708,6 +1738,8 @@ TOOL_SIZE_MEGABYTES = Message("{value:.1f} MB", banner=False)
 COUNT_ONE = Message("{number} {noun}", banner=False)
 
 COUNT_MANY = Message("{number} {noun}s", banner=False)
+COUNT_DIRECTORY = Message("{number} directory", banner=False)
+COUNT_DIRECTORIES = Message("{number} directories", banner=False)
 
 TOOL_EXIT_CODE = Message("exit {exit_code}", banner=False)
 

@@ -870,6 +870,33 @@ js init --full           # the same, plus README.md, LICENSE and .gitignore
 js init agent NAME       # a new agent in the home
 ```
 
+In the js home, in the directory that holds it as `.js` (`~` for `~/.js`), or
+with `--home DIR` naming it, `js init` sets up the home instead, the way
+`/etc/skel` sets up a new user: it copies `defaults/`, all of it, to the same
+relative paths in the home and makes every directory of the layout. It never
+runs `git` there.
+
+```bash
+js init                  # copy what is missing, replace nothing: rsync -a --ignore-existing
+js init -f               # stock files replace the home's of the same name: cp -a
+js init -b               # move the home to ~/.js-YYYY-MM-DD, then a new home from defaults/
+js init -a               # -b, then ~/.js-YYYY-MM-DD.tar.gz of the moved home, and the moved home removed
+```
+
+A home file replaces the shipped file at the same relative path, so the home's
+copies are read instead of the shipped ones until `js init -f` refreshes them.
+The plain form ends by listing the home's files that differ from the stock
+ones: what `-f` would replace. `-f` names each file it replaces and deletes
+nothing; a file `defaults/` does not have is left alone, and so is a symlink at
+a stock path. `-b` is a rename: sessions, logs, logins and everything else stay
+in the moved home, and a second one the same day gets `-2`, `-3`. `-a` writes
+the tarball under a temporary name, reads it back whole and compares every
+file byte for byte with the moved home before it removes anything; if any of
+that fails the tarball is removed, the moved home is left whole and `js init`
+exits 1. `--full` is for a project and is refused in the home; `-f`, `-b` and
+`-a` are for the home and are refused in a project. A project `js init` in your
+own home directory, when its `.js` is not the js home, is refused.
+
 `js init` works like `git init`. It runs `git init` when the current directory is
 not inside a git repository, then makes `.js/` with an empty `jsrc` and the
 `agents/`, `skills/`, `commands/` and `toolbox/` directories. Each new directory

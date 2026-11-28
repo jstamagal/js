@@ -292,7 +292,7 @@ def test_a_dry_run_restore_changes_nothing(project, capsys):
     assert session.stem in capsys.readouterr().out
 
 
-def test_unrotate_puts_one_session_back_with_its_logs(project):
+def test_restore_puts_one_session_back_with_its_logs(project):
     session = _session(project, "2026-09-01T1200-ab12", "stale")
     other = _session(project, "2026-09-02T1200-ef56", "also stale")
     log = _log(f"defaultagent/{session.stem}.log")
@@ -306,7 +306,7 @@ def test_unrotate_puts_one_session_back_with_its_logs(project):
     assert archive.is_archived(other)
 
 
-def test_unrotate_puts_everything_back_and_the_tree_matches(project):
+def test_restore_puts_everything_back_and_the_tree_matches(project):
     _session(project, "2026-09-01T1200-ab12", "stale")
     _log("defaultagent/2026-09-01T1200-ab12.log")
     _log("troop/run-1.log")

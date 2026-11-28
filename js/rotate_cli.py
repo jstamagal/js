@@ -106,10 +106,10 @@ def run_restore(args: argparse.Namespace) -> int:
             found = archive.located(live)
             size = found.stat().st_size if found is not None else 0
             total += size
-            msgs.say(msgs.UNROTATE_WOULD, size=_size(size), path=live)
-        msgs.say(msgs.UNROTATE_DRY_SUMMARY, files=len(files), size=_size(total))
+            msgs.say(msgs.RESTORE_WOULD, size=_size(size), path=live)
+        msgs.say(msgs.RESTORE_DRY_SUMMARY, files=len(files), size=_size(total))
         return 0
     restored, size, failed = rotate.restore_all(files)
     _report_skipped(failed)
-    msgs.say(msgs.UNROTATE_SUMMARY, files=restored, size=_size(size))
+    msgs.say(msgs.RESTORE_SUMMARY, files=restored, size=_size(size))
     return 1 if failed else 0

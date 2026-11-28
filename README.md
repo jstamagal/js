@@ -108,7 +108,8 @@ applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped wi
 then each project `.js/jsrc` and `.js/jsrc.local` from the repository root down
 to the working directory; env vars override files and
 CLI `--extra key=value` overrides env. js never writes `~/.js/jsrc` on its
-own: it exists once you write it or run `/save`, and holds only what you set.
+own: it exists once you write it, run `/save`, or run `js init` in the home,
+which copies `defaults/` whole into it.
 `js/jsrc.template` lists every setting, described, at its stock value.
 `defaults/jsrc` sets `MODEL` to `cpa/claude-opus-5-5` and `EFFORT` to `medium`;
 `JS_MODEL` overrides it. Explicit

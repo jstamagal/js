@@ -333,7 +333,7 @@ def rotate(age: Age, fmt: str, *, floor: float = 0.0) -> Tally:
     return tally
 
 
-# --- un-rotating ---------------------------------------------------------------
+# --- restoring ------------------------------------------------------------------
 
 
 def archived_files() -> list[Path]:

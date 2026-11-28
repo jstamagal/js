@@ -10,7 +10,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from js import cli, generate_writer, logins
+from js import entry, generate_writer, logins
 
 
 def encoded(fmt="PNG"):
@@ -41,7 +41,7 @@ def mock_dns(monkeypatch, hosts):
 
 
 def run(*args):
-    return cli.main(["generate", *args])
+    return entry.main(["generate", *args])
 
 
 def test_env_saved_login_and_explicit_writer_routes(monkeypatch, tmp_path, capsys):
