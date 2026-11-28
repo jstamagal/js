@@ -184,10 +184,24 @@ def run(a):
         req = generate_space.prepare(a, fmt) if a.space else generate_request.prepare(a, route, fmt)
     with httpx.Client(timeout=httpx.Timeout(600, connect=15),
                       event_hooks={"response": [generate_files.record_peer]}) as client:
-        results = (generate_space.execute(client, req, a) if a.space else
-                   execute(client, req, a, route))
-        if not a.submit_only:
-            generate_files.save(outputs, results, fmt, a)
+        a.cost_ticks = None
+        try:
+            results = (generate_space.execute(client, req, a) if a.space else
+                       execute(client, req, a, route))
+            if not a.submit_only:
+                generate_files.save(outputs, results, fmt, a)
+        except generate_files.Charged:
+            raise
+        except BaseException:
+            report_cost(a)
+            raise
+        report_cost(a)
+
+
+def report_cost(a):
+    """Print the cost the provider reported for this run, if it reported one."""
+    if a.cost_ticks is not None:
+        print(f"cost {generate_files.dollars(a.cost_ticks)}", file=sys.stderr, flush=True)
 
 
 def main(argv):
@@ -196,6 +210,7 @@ def main(argv):
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"js generate: {exc}", file=sys.stderr)
+        for line in str(exc).splitlines() or [""]:
+            print(f"js generate: {line}", file=sys.stderr)
         return 1
     return 0

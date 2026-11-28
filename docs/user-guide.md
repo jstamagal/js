@@ -779,6 +779,12 @@ already there. Use `-o -` for a single artifact on stdout, and
 `--dry-run` prints the request, writer route and destinations without submitting
 a job. Repeat `--param-json KEY=JSON` for additional native fields.
 
+When the provider reports what a request cost (xAI's `usage.cost_in_usd_ticks`
+on images and on the finished video poll), js prints `cost $0.64` on stderr
+after the output path. A refusal that carries a cost, such as xAI's
+`imagine:content-moderated`, prints the provider's code and message and the
+amount it reported charging, and exits non-zero. js never estimates a cost.
+
 `-m provider/model` selects a saved login and its model. `-u` selects the
 media server directly. A bare `-u http://localhost:8888/v1` takes its model
 from `-m` or the operation's setting. The six settings are `IMAGE_MODEL`,

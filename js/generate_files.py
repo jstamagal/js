@@ -12,6 +12,7 @@ import struct
 import sys
 import tempfile
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import getproxies
@@ -181,8 +182,53 @@ def pretty(value):
     return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode()
 
 
+def cost_ticks(data):
+    """The cost a response reports in `usage.cost_in_usd_ticks` (xAI; 10**10 ticks to the dollar), else None."""
+    usage = data.get("usage") if isinstance(data, dict) else None
+    ticks = usage.get("cost_in_usd_ticks") if isinstance(usage, dict) else None
+    return ticks if type(ticks) is int and ticks >= 0 else None
+
+
+def dollars(ticks):
+    whole, _, frac = format(Decimal(ticks).scaleb(-10).normalize(), "f").partition(".")
+    return f"${whole}.{frac.ljust(2, '0')}"
+
+
+class Charged(ValueError):
+    """A failed request whose response reports a charge."""
+
+    def __init__(self, ticks, code, message, status=None):
+        self.ticks = ticks
+        where = f"HTTP {status}" if status else "video job failed"
+        detail = ": ".join(str(part) for part in (code, message) if part)
+        if "moderat" in detail.lower():
+            first = f"the provider's content filter rejected the result after generating it ({where} {detail})"
+        else:
+            first = f"endpoint returned {where}: {detail}"
+        super().__init__(f"{first}\nthe provider reported charging {dollars(ticks)} for it")
+
+
+def refusal(data, status=None):
+    """Charged for a failure body that reports a cost, else None."""
+    ticks = cost_ticks(data)
+    if ticks is None:
+        return None
+    error = data.get("error")
+    if isinstance(error, dict):
+        code, message = error.get("code") or data.get("code"), error.get("message")
+    else:
+        code, message = data.get("code"), error or data.get("message")
+    return Charged(ticks, code, message, status)
+
+
 def checked(response):
     if response.is_error:
+        try:
+            charged = refusal(response.json(), response.status_code)
+        except ValueError:
+            charged = None
+        if charged:
+            raise charged
         raise ValueError(f"endpoint returned HTTP {response.status_code}: {response.text[:2000]}")
     response.raise_for_status()
     return response

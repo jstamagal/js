@@ -7,7 +7,7 @@ import sys
 import time
 from urllib.parse import quote
 
-from .generate_files import Asset, InlineImage, checked, download, pretty
+from .generate_files import Asset, InlineImage, checked, cost_ticks, download, pretty, refusal
 
 
 def wire_value(value, client):
@@ -29,7 +29,7 @@ def execute(client, req, a, route):
         headers[req.api_key_header] = (("Bearer " if req.api_key_header == "Authorization" else "") + route.api_key)
     headers.update(route.headers)
     if a.resume:
-        return [wait_video(client, req.url, headers)]
+        return [wait_video(client, req.url, headers, a)]
     if req.method == "GET":
         response = client.get(req.url, headers=headers)
     elif req.files:
@@ -49,6 +49,7 @@ def execute(client, req, a, route):
     if a.kind == "image":
         results = []
         data = response.json()
+        a.cost_ticks = cost_ticks(data)
         if req.url.endswith(":generateContent"):
             for candidate in data.get("candidates", []):
                 for part in candidate.get("content", {}).get("parts", []):
@@ -73,19 +74,24 @@ def execute(client, req, a, route):
             print(job, flush=True)
             return []
         print(f"request_id={job}", file=sys.stderr, flush=True)
-        return [wait_video(client, req.url.rsplit("/", 1)[0] + "/" + quote(job, safe=""), headers)]
+        return [wait_video(client, req.url.rsplit("/", 1)[0] + "/" + quote(job, safe=""), headers, a)]
     if response.headers.get("content-type", "").split(";")[0] in {"application/json", "text/html"}:
         raise ValueError(f"expected audio bytes, received {response.text[:500]}")
     return [response.content]
 
 
-def wait_video(client, url, headers):
+def wait_video(client, url, headers, a):
     while True:
         response = checked(client.get(url, headers=headers))
         data = response.json()
         status = data.get("status")
         if status == "done":
+            # xAI reports the job's cost on the finished poll, not on the submission.
+            a.cost_ticks = cost_ticks(data)
             return download(client, data["video"]["url"], response, headers)
         if status not in {"pending", "queued", "in_progress", "processing", "running"}:
+            charged = refusal(data)
+            if charged:
+                raise charged
             raise ValueError(f"video job {status}: {data.get('error') or data.get('message') or status}")
         time.sleep(5)

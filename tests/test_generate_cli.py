@@ -393,3 +393,93 @@ def test_writer_is_sent_the_input_pictures_when_its_model_takes_images(monkeypat
     mock_http(monkeypatch, lambda req: httpx.Response(200, json={"data": [{"b64_json": image}]}))
     assert run("--i2i", "-u", "http://m@paint.test/v1", "--image", "a.png", "--ref", "b.png", "-p", "go",
                "--enhance-url", "http://per-run@writer.test/v1") == 0
+
+
+MODERATED = {"code": "imagine:content-moderated", "error": "Generated video rejected by content moderation.",
+             "usage": {"cost_in_usd_ticks": 6400000000}}
+
+
+def grok_video(monkeypatch, poll):
+    mock_dns(monkeypatch, {"api.x.ai": "192.0.0.9"})
+
+    def handler(req):
+        if req.method == "POST":
+            return httpx.Response(200, json={"request_id": "job"})
+        if req.url.path == "/v1/videos/job":
+            return poll()
+        return httpx.Response(200, content=video_bytes())
+
+    mock_http(monkeypatch, handler)
+
+
+@pytest.mark.parametrize("usage", [{"cost_in_usd_ticks": 6400000000}, None])
+def test_video_cost_reported_on_final_poll_is_printed(monkeypatch, tmp_path, capsysbinary, usage):
+    monkeypatch.chdir(tmp_path)
+    done = {"status": "done", "video": {"url": "https://api.x.ai/clip.mp4"}}
+    if usage:
+        done["usage"] = usage
+    grok_video(monkeypatch, lambda: httpx.Response(200, json=done))
+    assert run("--t2v", "-u", "https://grok-imagine-video@api.x.ai/v1", "-p", "snow", "-o", "-") == 0
+    out = capsysbinary.readouterr()
+    assert out.out == video_bytes()
+    assert (b"$0.64" in out.err) == bool(usage)
+    assert b"$" not in out.err.replace(b"$0.64", b"")
+
+
+def test_image_cost_is_printed_in_dollars(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    image = base64.b64encode(encoded()).decode()
+    mock_http(monkeypatch, lambda req: httpx.Response(200, json={
+        "data": [{"b64_json": image}], "usage": {"cost_in_usd_ticks": 37756000}}))
+    assert run("--t2i", "-u", "http://grok-imagine-image@paint.test/v1", "-p", "owl") == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == "out.png"
+    assert "$0.0037756" in out.err
+
+
+def test_cost_reported_before_a_failed_download_is_still_printed(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    grok_video(monkeypatch, lambda: httpx.Response(200, json={
+        "status": "done", "video": {"url": "https://api.x.ai/clip.mp4"}, "usage": {"cost_in_usd_ticks": 10**10}}))
+    monkeypatch.setattr("js.generate_files.check_video", lambda data: (_ for _ in ()).throw(ValueError("bad")))
+    assert run("--resume", "job", "-u", "https://m@api.x.ai/v1") == 1
+    assert "$1.00" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("stage", ["submit", "poll"])
+def test_moderated_refusal_reports_charge_and_fails(monkeypatch, tmp_path, capsys, stage):
+    monkeypatch.chdir(tmp_path)
+    mock_dns(monkeypatch, {"api.x.ai": "192.0.0.9"})
+
+    def handler(req):
+        if req.method == "POST" and stage == "poll":
+            return httpx.Response(200, json={"request_id": "job"})
+        return httpx.Response(400, json=MODERATED)
+
+    mock_http(monkeypatch, handler)
+    assert run("--t2v", "-u", "https://grok-imagine-video@api.x.ai/v1", "-p", "snow") == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "$0.64" in out.err and "imagine:content-moderated" in out.err
+    assert out.err.count("$0.64") == 1
+    assert not Path("out.mp4").exists()
+
+
+def test_failed_video_job_with_cost_reports_charge(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    grok_video(monkeypatch, lambda: httpx.Response(200, json={
+        "status": "failed", "error": {"code": "invalid_argument", "message": "content blocked by moderation"},
+        "usage": {"cost_in_usd_ticks": 6400000000}}))
+    assert run("--resume", "job", "-u", "https://m@api.x.ai/v1") == 1
+    err = capsys.readouterr().err
+    assert "$0.64" in err and "invalid_argument" in err
+
+
+def test_refusal_without_usage_mentions_no_charge(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    body = {key: value for key, value in MODERATED.items() if key != "usage"}
+    mock_http(monkeypatch, lambda req: httpx.Response(400, json=body))
+    assert run("--t2v", "-u", "http://grok-imagine-video@render.test/v1", "-p", "snow") == 1
+    err = capsys.readouterr().err
+    assert "$" not in err
+    assert "imagine:content-moderated" in err and "HTTP 400" in err
