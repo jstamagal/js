@@ -304,6 +304,9 @@ def _main(argv: list[str] | None = None) -> int:
         from . import generate_cli
         dotenv.load()
         return generate_cli.main(dispatch_argv[1:])
+    if dispatch_argv[:1] == ["cleanup"]:
+        from . import cleanup_cli
+        return cleanup_cli.main(dispatch_argv[1:])
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **`js cleanup` keeps agent workspaces on a clock, by plain rules, for a daily cron line.** Workspaces come from `CLEANUP_DIRS` (default `~/.js/work`; `DIR/*` is each directory in DIR).
+  - A piece of work unmodified for `CLEANUP_ARCHIVE_AGE_MAX` (30 days) moves to `~/.js/archive/<area>/` with its junk removed: text is kept, binaries go, regenerable trees go, and a build directory first gives up its `CMakeCache.txt`, compiler identification, build info, compile commands, test log, agent text and finished binaries. At `CLEANUP_GZIP_AGE_MAX` (60 days) each file is gzipped; at `CLEANUP_TAR_AGE_MAX` (90 days) the piece is one tar.
+  - A linked worktree is retired with `git worktree remove` once its repository has its work, after a patch of what it lacks is written. Branches stay.
+  - The archive's `INDEX.md` lists each piece's stage and files; the workspace's `INDEX.md` gets a live section; every deletion and move goes to one `~/.js/archive/cleanup.log`.
+  - No model is called for any of that. The stock `cleanup` agent then runs, kept in the workspace with the archive area, only to describe newly archived work and settle checkouts the rules left. `--dry-run` and `--no-model` skip it.
 - `remove` no longer snapshots a path over `TRASH_BYTES_MAX` before deleting it permanently. The snapshot held the whole tree in memory for the session (662 MiB peak for a 600 MiB directory); such a removal now cannot be undone, as its description says.
 
 - **Subagents run alongside the main agent, which watches, stops and talks to them.** Modelled on Claude Code's background agents and Codex CLI's multi-agent tools; `docs/subagents.md` has the comparison.

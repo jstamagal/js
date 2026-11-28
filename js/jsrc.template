@@ -1221,6 +1221,14 @@
 # Seconds an entry in ~/.js/tmp may go unmodified before startup removes it.
 #set TMP_AGE_MAX 86400
 
+# Workspaces `js cleanup` cleans; "DIR/*" is each directory in DIR. Empty: the home's work directory.
+#set CLEANUP_DIRS ["~/.js/work", "~/inbox/agents/*"]
+
+# Seconds unmodified before `js cleanup` archives a piece of work, gzips it, and tars it.
+#set CLEANUP_ARCHIVE_AGE_MAX 2592000
+#set CLEANUP_GZIP_AGE_MAX 5184000
+#set CLEANUP_TAR_AGE_MAX 7776000
+
 # API key saved for a local server that needs none.
 #set LOCAL_API_KEY_PLACEHOLDER x
 

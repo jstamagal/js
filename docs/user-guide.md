@@ -925,6 +925,85 @@ The commit agent prompt tells the model to inspect the target repo, group
 changes into logical commits, avoid junk, write missing README/CHANGELOG only
 when needed, and not push.
 
+## Cleanup
+
+`js cleanup` keeps agent workspaces on a clock. The rules are plain code and call
+no model; the stock `cleanup` agent runs afterwards only when something needs
+reading. It is meant for a daily cron line:
+
+```bash
+js cleanup                     # every workspace in CLEANUP_DIRS, else ~/.js/work
+js cleanup ~/inbox/agents/claude
+js cleanup --dry-run           # say what would happen, change nothing, no model
+js cleanup --no-model          # the rules only
+0 4 * * *  js cleanup          # crontab
+```
+
+`set CLEANUP_DIRS ["~/.js/work", "~/inbox/agents/*"]` names the workspaces; `DIR/*`
+is each directory in DIR, so each harness directory of `~/inbox/agents` is a
+workspace of its own. Each directory at the top of a workspace is one piece of
+work, and its age is the time since its newest file was modified (or, while it
+is live, arrived: a tree copied in with old times counts from the copy):
+
+| age | stage | example |
+|-----|-------|---------|
+| under `CLEANUP_ARCHIVE_AGE_MAX` (30 days) | live, untouched | `~/.js/work/fable-opt/` |
+| 30 days | archived: moved out of the workspace, junk removed | `~/.js/archive/work/fable-opt/` |
+| `CLEANUP_GZIP_AGE_MAX` (60 days) | each file gzipped in place | `~/.js/archive/work/fable-opt/fa_v2.hip.gz` |
+| `CLEANUP_TAR_AGE_MAX` (90 days) | one tar, for good | `~/.js/archive/work/fable-opt.tar` |
+
+The archive area is outside the workspace, so old work stays out of agents'
+context: `~/.js/archive/work/` for the home's work directory, beside the session
+archive, and `~/.js/archive/<path with dashes>/` for any other workspace.
+
+What archiving removes and keeps:
+
+- Text is kept, binary is junk. Text means no NUL byte in the first 8 KiB, git's
+  rule. Binaries go whatever they are (objects, libraries, programs, renders,
+  images, dumps, downloads, data arrays), except `perf.data`, which is left and
+  listed.
+- `node_modules`, `__pycache__`, virtualenvs, `.triton-cache`, `.cache`, `cache`
+  and `target/` beside a `Cargo.toml` go whole.
+- A build directory (it holds `CMakeCache.txt`, `CMakeFiles/`, `build.ninja`,
+  `config.status` or `meson-info/`) first gives up `CMakeCache.txt`, CMake's
+  compiler identification, generated build-info files, `compile_commands.json`,
+  ctest's `LastTest.log`, text an agent left in it, and its finished programs
+  and shared libraries for the host (not GPU code objects), to `build-kept/` in
+  the piece. The rest of it goes, text or not. A directory that also holds
+  `CMakeLists.txt`, `configure`, `meson.build` or `.git` is a source tree built
+  in place, not a build directory.
+- A linked git worktree whose repository is elsewhere is compared with that
+  repository. What the repository lacks (commits on no other branch,
+  uncommitted changes, untracked text) is written to `<name>-worktree.patch` in
+  the piece, then the worktree is retired with `git worktree remove`. Branches are
+  never deleted. A clone, a worktree with submodules, or one the rules cannot
+  compare keeps its piece live, its build and dependency directories still
+  removed; the agent is asked about it once, and again only when it changes.
+- Files the workspace's own git repository tracks never move or go.
+- Loose files at the top of a workspace go to `loose-<date>/` pieces by the day
+  they were last modified, binaries removed.
+
+The archive area holds `INDEX.md`, written from what is there, never compressed,
+saying for each piece its stage, where it is, what was removed and kept, and its
+files one by one, so that an agent finds a result inside a tar without opening
+it. The workspace's own `INDEX.md` gets a section, between `<!-- cleanup index -->`
+and `<!-- /cleanup index -->`, listing what is live and where older work went;
+the rest of that file is left as written. Every deletion and move of every run is
+one line of `~/.js/archive/cleanup.log`: date, what happened, the path, where it
+went, the rule.
+
+A run with nothing due changes nothing and calls no model; a dry run over 8 GB in
+four workspaces takes about a second. An interrupted run leaves each piece whole
+in one stage or the other, and the next run finishes or undoes the change.
+
+The agent runs when an archived piece has no description yet, or a checkout was
+left. It runs as `js -C WORKSPACE -a cleanup`, kept in the workspace, with the
+archive area and the log shown read-write, the repositories of left checkouts
+read-only and their `.git/worktrees` read-write, and nothing else of the home. It
+writes `descriptions/<piece>.md` in the archive area, which the index takes in.
+When it cannot run, the rules' work stands and the descriptions wait for the next
+run. `js -a cleanup` is the same agent as a conversation.
+
 ## Wiki Agents
 
 Installed `wiki-*` prompt-directory agents own wiki workflows. Friendly wrapper:

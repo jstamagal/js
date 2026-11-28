@@ -610,6 +610,27 @@ EXEC_FAILED = Message("exec: {command} did not start: {error}")
 # --- js --help ----------------------------------------------------------------
 
 GENERATE_DESCRIPTION = Message("Generate media on a saved login, HTTP endpoint or Hugging Face Space.")
+
+# `js cleanup`.
+CLEANUP_DESCRIPTION = Message(
+    "Clean agent workspaces on a clock: work unmodified for CLEANUP_ARCHIVE_AGE_MAX moves to the "
+    "archive with its junk gone, is gzipped at CLEANUP_GZIP_AGE_MAX and tarred at CLEANUP_TAR_AGE_MAX. "
+    "The cleanup agent then describes what was archived.")
+CLEANUP_OPT_DIR = Message("A workspace to clean. Default: the CLEANUP_DIRS setting, else the home's work directory.")
+CLEANUP_OPT_DRY_RUN = Message("Say what each workspace's run would do, and change nothing. No model is called.")
+CLEANUP_OPT_NO_MODEL = Message("Apply the rules only; the cleanup agent does not run.")
+CLEANUP_OPT_MODEL = Message("Model for the cleanup agent.")
+CLEANUP_OPT_REASONING = Message("Reasoning level for the cleanup agent.")
+CLEANUP_NOT_A_DIRECTORY = Message("js cleanup: {directory} is not a directory.")
+CLEANUP_WORKSPACE = Message("{workspace} -> {archive}{mode}")
+CLEANUP_TOTALS = Message(
+    "  freed {freed}: {removed} removed, {moved} moved; {archived} archived, {gzipped} gzipped, "
+    "{tarred} tarred; {patches} patches written")
+CLEANUP_LEFT = Message("  left for you: {path}: {reason}")
+CLEANUP_FAILED = Message("  failed: {path}: {error}")
+CLEANUP_AGENT_FAILED = Message(
+    "  the cleanup agent did not finish (exit {code}); {pieces} descriptions and {checkouts} checkouts "
+    "are left for the next run")
 GENERATE_MODEL = Message("media provider/model (default JS_<KIND>_MODEL)")
 GENERATE_URL = Message("media endpoint, e.g. http://model@localhost:8888/v1")
 GENERATE_SPACE = Message("Hugging Face Gradio Space, owner/name")

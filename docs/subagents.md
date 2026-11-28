@@ -167,9 +167,12 @@ What exists today:
 - prompt-directory agents under stock `defaults/agents/`, global
   `~/.js/agents/` and project `.js/agents/`.
 - generated direct tools for prompt directories.
-- bundled prompt dirs: `commit`, `defaultagent`, `slim`.
+- bundled prompt dirs in `defaults/agents/`: `cleanup`, `commit`,
+  `defaultagent`, `slim`, and the media prompt writers used by `js generate`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
   `js --commit` wrapper.
+- `js cleanup` runs its rules as code, then the `cleanup` agent only to describe
+  archived work and settle the checkouts the rules left.
 
 ## Launch, Watch, Stop, Talk
 

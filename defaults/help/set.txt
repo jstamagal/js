@@ -918,6 +918,23 @@ TMP_AGE_MAX
     Seconds an entry in ~/.js/tmp may go unmodified before startup removes
     it.
 
+CLEANUP_DIRS
+    The workspaces `js cleanup` cleans when it names none: a JSON list,
+    absolute or starting with ~. "DIR/*" names each directory in DIR. An
+    empty list is the home's work directory.
+
+CLEANUP_ARCHIVE_AGE_MAX
+    Seconds a piece of work may go unmodified before `js cleanup` moves it
+    to the archive with its junk removed. 30 days.
+
+CLEANUP_GZIP_AGE_MAX
+    Seconds unmodified before `js cleanup` gzips each file of an archived
+    piece of work. 60 days.
+
+CLEANUP_TAR_AGE_MAX
+    Seconds unmodified before `js cleanup` tars an archived piece of work
+    into one file. 90 days.
+
 LOCAL_API_KEY_PLACEHOLDER
     API key saved for a local server that needs none.
 
