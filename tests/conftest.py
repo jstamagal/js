@@ -14,13 +14,6 @@ import pytest
 from js import jail, logins, model_metadata, paths
 
 
-def pytest_xdist_auto_num_workers(config):
-    """`-n logical` on a quarter of the cores, so a suite run leaves the
-    machine usable. JS_TEST_WORKERS names another count."""
-    named = os.environ.get("JS_TEST_WORKERS")
-    return int(named) if named else max(2, (os.cpu_count() or 2) // 4)
-
-
 @pytest.fixture(autouse=True)
 def isolated_user_profile(monkeypatch, tmp_path):
     # `cli.main` fills unset names from a .env into os.environ for the rest
