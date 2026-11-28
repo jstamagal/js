@@ -1187,6 +1187,19 @@
 # on: a session's text file is rewritten when its journal changes.
 #set SESSION_TEXT_AUTO_REFRESH on
 
+# What a bare `js --rotate` moves to ~/.js/archive: 30d or >30d is files not
+# modified in 30 days or more, <7d files modified within the last 7 days.
+# Units: h, d, w.
+#set ROTATE_AGE 30d
+
+# `js --rotate` leaves every file modified more recently than this, in any
+# AGE; 0 for none.
+#set ROTATE_AGE_MIN 1h
+
+# How `js --rotate` compresses each file it archives: xz, the best ratio, or gz,
+# faster and larger.
+#set ROTATE_FORMAT xz
+
 
 ################################################################################
 #  STARTUP AND FILES

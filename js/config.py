@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import (
+    archive as _archive,
     fset as _fset,
     login_defaults as _login_defaults,
     mcp_config,
@@ -260,12 +261,20 @@ def _existing_tail_match(root: Path, relative_path: Path, resolved_root: Path, f
     parts = relative_path.parts
     for start in range(first, len(parts)):
         candidate = root.joinpath(*parts[start:])
-        if not candidate.is_file():
+        if not _archive.exists(candidate):
             continue
-        if not candidate.resolve(strict=True).is_relative_to(resolved_root):
+        if not _resolved(candidate).is_relative_to(resolved_root):
             continue
         return candidate
     return None
+
+
+def _resolved(session_file: Path) -> Path:
+    """`session_file` with symlinks resolved; a rotated one by its live
+    directory, which still exists or is made again on restore."""
+    if session_file.is_file():
+        return session_file.resolve(strict=True)
+    return session_file.parent.resolve(strict=False) / session_file.name
 
 
 def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False,
@@ -276,7 +285,18 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     directory the run started in. An existing session is looked up in the
     project's folder first, then in ``start``'s own folder, then in every
     folder (`js.session_store.find`); a name that more than one other folder
-    holds is refused. A new session is only ever created in `sessions_dir`."""
+    holds is refused. A new session is only ever created in `sessions_dir`.
+    A rotated session (`js --rotate`) is found like a live one and restored
+    to its live path before it is returned."""
+    session_file = locate_session_file(sessions_dir, session, create=create, start=start)
+    _session_store.restore_rotated(session_file)
+    return session_file
+
+
+def locate_session_file(sessions_dir: Path, session: str, *, create: bool = False,
+                        start: Path | None = None) -> Path:
+    """`resolve_session_file` without the restore: a rotated session's live
+    path, its bytes still in the archive."""
     raw_path = Path(session).expanduser()
     root = _paths.sessions_root()
     resolved_root = root.resolve(strict=False)
@@ -285,9 +305,9 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     # An existing absolute path to any session is accepted as it is. New
     # sessions, however, can only be named with relative paths.
     if raw_path.is_absolute():
-        if raw_path.suffix != ".jsonl" or not raw_path.is_file():
+        if raw_path.suffix != ".jsonl" or not _archive.exists(raw_path):
             raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL.format(session=session))
-        resolved_path = raw_path.resolve(strict=True)
+        resolved_path = _resolved(raw_path)
         if not resolved_path.is_relative_to(resolved_root):
             raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE.format(root=root, session=session))
         return raw_path
@@ -298,8 +318,8 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     if not resolved_path.is_relative_to(resolved_sessions_dir):
         raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
 
-    if concrete_path.exists():
-        if not concrete_path.is_file():
+    if concrete_path.exists() or _archive.exists(concrete_path):
+        if not _archive.exists(concrete_path):
             raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE.format(session=session))
         return concrete_path
 

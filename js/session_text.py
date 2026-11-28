@@ -41,7 +41,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import memory, session_index, session_store, settings
+from . import archive, memory, session_index, session_store, settings
 from .text_bytes import well_formed
 
 USER = "you"
@@ -450,7 +450,7 @@ class _Transcript:
 def parse(session_file: Path, *, style: TranscriptStyle | None = None) -> _Transcript:
     """The whole of `session_file`, parsed from the start."""
     transcript = _Transcript(style=style if style is not None else TranscriptStyle())
-    with open(session_file, encoding="utf-8", errors="replace") as stream:
+    with archive.open_read(session_file) as stream:
         for line in stream:
             _feed_line(transcript, line)
     return transcript
@@ -508,6 +508,11 @@ def _write(path: Path, text: str) -> None:
             pass
 
 
+def refresh_lock_path(session_file: Path) -> Path:
+    """The lock `refresh` holds while it rebuilds `session_file`'s `.txt`."""
+    return Path(f"{session_file}.refresh.lock")
+
+
 def refresh(session_file: Path) -> None:
     """Bring the `.txt` beside `session_file` up to date with it.
 
@@ -522,7 +527,7 @@ def refresh(session_file: Path) -> None:
     key = session_store.file_key(str(session_file))
     with _lock:
         try:
-            guard = open(f"{session_file}.refresh.lock", "a+b")  # noqa: SIM115 - held through publication
+            guard = open(refresh_lock_path(session_file), "a+b")  # noqa: SIM115 - held through publication
         except OSError:
             return
         with guard:

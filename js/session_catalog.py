@@ -26,7 +26,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import messages as msgs, paths, providers, session_store, session_text, usage as usage_mod
+from . import (
+    archive,
+    messages as msgs,
+    paths,
+    providers,
+    session_store,
+    session_text,
+    usage as usage_mod,
+)
 from .cli_options import current, invocation
 
 if TYPE_CHECKING:
@@ -62,6 +70,11 @@ def _sidecar_paths(session_file: Path) -> tuple[Path, Path]:
     session_file = Path(session_file)
     stem = f".{session_file.name}.liveness"
     return session_file.parent / f"{stem}.json", session_file.parent / f"{stem}.lock"
+
+
+def liveness_paths(session_file: Path) -> tuple[Path, Path]:
+    """The liveness state file and its lock beside `session_file`."""
+    return _sidecar_paths(session_file)
 
 
 def _process_status(pid: int) -> tuple[str, str] | None:
@@ -283,10 +296,9 @@ def record_model_switch(session_file: Path, *, stamp: dict[str, Any], previous: 
 
 def _records(path: Path):
     try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+        with archive.open_read(path, shared_lock=True) as stream:
             lines = stream.readlines()
-    except OSError:
+    except (OSError, EOFError):
         return
     for line in lines:
         try:
@@ -372,8 +384,7 @@ def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
     user_turns = 0
     metadata = None
     try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+        with archive.open_read(path, shared_lock=True) as stream:
             for line in stream:
                 try:
                     record = json.loads(line)
@@ -391,7 +402,7 @@ def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
                     user_turns += 1
                 elif record.get("kind") == _METADATA_KIND:
                     metadata = record
-    except OSError:
+    except (OSError, EOFError):
         pass
     return user_turns, metadata
 
@@ -406,9 +417,7 @@ def last_session_model(session_file: Path) -> str | None:
 
 
 def _session_files(root: Path):
-    for path in sorted(root.rglob(f"*{session_store.SUFFIX}")):
-        if path.is_file() and not path.name.startswith("."):
-            yield path
+    yield from archive.files_under(root, f"*{session_store.SUFFIX}")
 
 
 def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
@@ -419,7 +428,7 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
         return records
     for path in _session_files(root):
         try:
-            stat = path.stat()
+            stat = archive.stat(path)
         except OSError:
             continue
         user_turns, metadata = _session_details(path)
@@ -437,6 +446,7 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
                 "size": stat.st_size,
                 "user_turns": user_turns,
                 "in_flight": session_in_flight(path) is True,
+                "archived": archive.is_archived(path),
                 "cwd": metadata.get("cwd") if metadata else None,
                 "caller_key": metadata.get("caller_key") if metadata else None,
                 "job_id": metadata.get("job_id") if metadata else None,

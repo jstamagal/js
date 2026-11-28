@@ -127,6 +127,7 @@ def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str, *
     if resolved.suffix != ".jsonl" or not resolved.is_relative_to(sessions_dir.resolve(strict=False)):
         raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session_id}")
     path.parent.mkdir(parents=True, exist_ok=True)
+    session_store.restore_rotated(path)
     if not path.exists():
         path.write_text("", encoding="utf-8")
     (session_store.write_latest if write_latest is None else write_latest)(agent_dir, path)

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import paths, session_text
+from . import archive, paths, session_store, session_text
 
 _SCHEMA = 2  # Rebuild summaries written before model_switch stamps were parsed.
 _MARK_OPEN = "\x01"
@@ -280,7 +280,7 @@ def forget(session_file: Path) -> None:
 def _index_file(session_file: Path, info: os.stat_result) -> dict[str, Any] | None:
     try:
         transcript = session_text.parse(session_file)
-    except OSError:
+    except (OSError, EOFError):
         return None
     summary = session_text._well_formed(transcript.summary())
     store(session_file, summary, session_text._well_formed(transcript.search_lines()),
@@ -289,10 +289,7 @@ def _index_file(session_file: Path, info: os.stat_result) -> dict[str, Any] | No
 
 
 def _session_files(root: Path) -> list[Path]:
-    try:
-        return [path for path in root.rglob("*.jsonl") if not path.name.startswith(".")]
-    except OSError:
-        return []
+    return archive.files_under(root, f"*{session_store.SUFFIX}")
 
 
 def catalog(root: Path | None = None) -> list[dict[str, Any]]:
@@ -343,7 +340,7 @@ def _catalog(root: Path | None) -> list[dict[str, Any]]:
         found: list[dict[str, Any]] = []
         for session_file in _session_files(root):
             try:
-                info = session_file.stat()
+                info = archive.stat(session_file)
             except OSError:
                 continue
             key = _file_key(session_file)

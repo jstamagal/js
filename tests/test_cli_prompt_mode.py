@@ -1409,8 +1409,8 @@ def test_list_table_and_json_cover_same_nested_records_without_config(monkeypatc
         ("agent", "caller/nested"),
     }
     assert next(item for item in records if item["name"] == "legacy")["user_turns"] == 1
-    expected_fields = {"agent", "name", "folder", "path", "mtime", "size", "user_turns", "in_flight", "cwd",
-                       "caller_key", "job_id", "model", "mode", "title"}
+    expected_fields = {"agent", "name", "folder", "path", "mtime", "size", "user_turns", "in_flight", "archived",
+                       "cwd", "caller_key", "job_id", "model", "mode", "title"}
     assert all(set(item) == expected_fields for item in records)
 
 

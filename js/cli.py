@@ -661,6 +661,21 @@ def _prepare_run(args: argparse.Namespace, setup: Setup) -> Setup | int:
     return replace(setup, agent=cli_agent)
 
 
+def _run_rotation(args: argparse.Namespace) -> int:
+    """`--rotate`, `--unrotate`, each with or without `--dry-run`."""
+    if args.rotate is None and args.unrotate is None:
+        msgs.warn(msgs.DRY_RUN_NEEDS_ROTATE)
+        return 2
+    if any((args.prompt is not None, args.session is not None, args.session_key is not None,
+            args.agent is not None, args.commit, args.compact is not None, args.bench is not None,
+            args.target is not None, args.last, args.list_sessions)):
+        msgs.warn(msgs.ROTATE_EXCLUSIVE)
+        return 2
+    from . import rotate
+
+    return rotate.run_rotate(args) if args.rotate is not None else rotate.run_unrotate(args)
+
+
 def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     """The mode picker: setup, then each mode in turn, the first named on the
     command line running, then a -p run or the REPL."""
@@ -673,6 +688,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return verify.run_verify(args)
     if args.list_sessions:
         return listings.run_list_sessions(args)
+    if args.rotate is not None or args.unrotate is not None or args.dry_run:
+        return _run_rotation(args)
     if (code := _settle_session(args, setup)) is not None:
         return code
     if args.login is not None:

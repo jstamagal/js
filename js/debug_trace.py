@@ -15,7 +15,7 @@ from typing import Any
 import ai
 from ai.models.core import params as ai_params
 
-from . import output, paths as _paths, settings, transcript
+from . import archive, output, paths as _paths, settings, transcript
 from .config import Config
 
 
@@ -135,6 +135,8 @@ def open_debug_trace_sink(paths: list[Path]) -> DebugTraceSink | None:
     for p in paths:
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
+            # A rotated log is put back first, so the append continues it.
+            archive.restore(p)
             files.append(open(p, "a", encoding="utf-8", errors="backslashreplace"))  # noqa: SIM115 — sink owns the lifetime
             opened.append(p)
         except OSError:

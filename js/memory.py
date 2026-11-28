@@ -50,6 +50,11 @@ class _Snapshot(list):
         return _Snapshot(self, Path(self.path), self.revision)
 
 
+def save_lock_path(path: Path) -> Path:
+    """The lock `_save_lock` takes for the session in `path`."""
+    return Path(f"{_file_key(path)}.save.lock")
+
+
 @contextlib.contextmanager
 def _save_lock(path: Path):
     """Serialize history-changing transactions across processes."""
@@ -57,7 +62,7 @@ def _save_lock(path: Path):
         yield
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(f"{_file_key(path)}.save.lock", "a+b") as guard:
+    with open(save_lock_path(path), "a+b") as guard:
         fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
         yield
 
