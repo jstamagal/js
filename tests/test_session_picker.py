@@ -146,6 +146,18 @@ def test_a_hidden_kinds_change_is_seen_by_the_next_refresh():
     assert _listed(picker) == ["normal", "quick"]
 
 
+def test_a_quick_limit_changed_with_the_picker_open_is_seen_by_the_next_draw():
+    from js import settings
+
+    store = {"SESSION_QUICK_TURNS_MAX": 1}
+    settings.bind_live_settings(store)
+    picker = _picker([_session("s", turns=2, tool_calls=0, final_len=40)])
+    picker.press("a")
+    assert Q.QUICK not in _body_lines(picker)[0]
+    settings.set_dotted(store, ("SESSION_QUICK_TURNS_MAX",), 3)
+    assert Q.QUICK in _body_lines(picker)[0]
+
+
 def test_moving_the_cursor_redraws_each_row_as_a_fresh_picker_draws_it():
     sessions = [
         _session("here", started=_ts(2026, 9, 29, 9, 0)),

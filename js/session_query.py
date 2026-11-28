@@ -161,8 +161,8 @@ class Session:
 
 @dataclass(frozen=True)
 class KindRules:
-    """The settings `kind` and `visible` read, read once for a pass over the
-    list rather than once per session."""
+    """The settings `kind` and `visible` read, as one value a pass over the
+    list reads once."""
 
     script_modes: Any
     quick_turns_max: int

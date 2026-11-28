@@ -588,8 +588,7 @@ def _startup_policy() -> dict:
     global _policy_cache
     from . import config
 
-    # os.environ's own bytes mapping: comparing it is one C-level dict compare,
-    # where iterating os.environ decodes every name and value on each call.
+    # os.environ's bytes mapping, compared as one dict.
     environ = os.environ._data  # type: ignore[attr-defined]
     cached = _policy_cache
     if (cached is not None and cached[0][2] is config._invocation
